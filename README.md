@@ -1,20 +1,145 @@
-# HalfRemembered MCP
+# HalfRemembered MCP 🎵
 
-This is the Master Control Program (MCP) for the HalfRemembered project, a collaborative human-AI music ensemble.
+**Event Duality: Where intentions become sounds.**
 
-## What is this?
+An MCP server for collaborative human-AI music ensemble. This is the Master Control Program for the HalfRemembered project - building music the way we build software.
 
-The HalfRemembered MCP is a command-line interface and toolkit designed for AI agents like me, Gemini. It is our shared workbench for building and orchestrating a distributed system of language and music models that can perform together as a musical group.
+## Current Status: Plan 00 - Event Duality Hello World ✅
+
+We've proven the core concept: **Intentions become sounds through type-rich transformations.**
+
+```rust
+enum Event {
+    Abstract(Intention),  // What you want: "play C softly"
+    Concrete(Sound),      // What you get: pitch:60, velocity:40
+}
+```
+
+## Running the Server
+
+```bash
+cargo run
+```
+
+The server starts on **http://127.0.0.1:8080** with SSE transport (multi-client ready).
+
+### SSE Endpoints
+
+- **GET** `http://127.0.0.1:8080/sse` - Connect and receive your session ID via event stream
+- **POST** `http://127.0.0.1:8080/message?sessionId=<id>` - Send MCP messages
+
+## Testing with MCP Inspector
+
+### Using npx (Recommended)
+
+```bash
+npx @modelcontextprotocol/inspector
+```
+
+Then connect to: `http://127.0.0.1:8080`
+
+### Manual HTTP Test
+
+1. Connect to SSE stream:
+```bash
+curl -N http://127.0.0.1:8080/sse
+```
+
+You'll receive events including your session ID.
+
+2. Send a tool call:
+```bash
+curl -X POST "http://127.0.0.1:8080/message?sessionId=YOUR_SESSION_ID" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "play",
+      "arguments": {
+        "what": "C",
+        "how": "softly"
+      }
+    }
+  }'
+```
+
+Expected response:
+```json
+{
+  "pitch": 60,
+  "velocity": 40
+}
+```
+
+## Available Tools
+
+### `play`
+
+Transform an intention into sound.
+
+**Parameters:**
+- `what` (string): The note to play (C, D, E, F, G, A, B)
+- `how` (string): How to play it (softly, normally, boldly, questioning)
+
+**Returns:**
+- `pitch` (u8): MIDI note number
+- `velocity` (u8): MIDI velocity
+
+## Examples
+
+### Soft C Major
+```json
+{"what": "C", "how": "softly"}
+```
+→ `{"pitch": 60, "velocity": 40}`
+
+### Bold G
+```json
+{"what": "G", "how": "boldly"}
+```
+→ `{"pitch": 67, "velocity": 90}`
+
+### Questioning E
+```json
+{"what": "E", "how": "questioning"}
+```
+→ `{"pitch": 64, "velocity": 50}`
+
+## Architecture Highlights
+
+- **SSE Transport**: Multi-client HTTP transport ready for ensemble collaboration
+- **Type-Rich Domain**: `Intention` and `Sound` are first-class types, not primitives
+- **Realization Pattern**: Clear transformation from abstract → concrete
+- **MCP Compliant**: Full JSON-RPC protocol with schema generation
+
+## Logs
+
+Watch the server logs to see realizations happen:
+```
+🎵 softly C → pitch:60, vel:40
+🎵 boldly G → pitch:67, vel:90
+```
 
 ## The Vision
 
-We are building music the way we build software. This tool allows us to compose, refactor, and "perform" music in collaboration with a human operator. The goal is to create a real-time music generation system that is fast, weird, and expressive, powered by a local ensemble of open-source AI models.
+Building a real-time music generation system that is fast, weird, and expressive, powered by a distributed ensemble of language and music models. This MCP server is the foundation for:
 
-This MCP is my primary interface for interacting with that ensemble. I will use it to:
+- Multi-agent musical dialogue
+- Conversation trees for improvisation
+- Ensemble coordination across models
+- Real-time performance systems
 
--   Explore and manage the available models.
--   Orchestrate the flow of data between them.
--   Build the logic for our musical performances.
--   Assist in the creation of new and interesting sounds.
+## What's Next
 
-This project is an experiment in human-AI creative collaboration. The code, the music, and the process are all part of the performance.
+- **Plan 01**: Expand musical domain model (scales, rhythms, dynamics)
+- **Plan 02**: Add conversation trees for musical dialogue
+- **Plan 03**: Multi-agent ensemble coordination
+- **Plan 04**: Browser UI for visual interaction
+
+---
+
+**Status**: ✅ Dancing
+**Contributors**: Amy Tobey, Claude, Gemini
+**Vibe**: 🎵 Let's jam
