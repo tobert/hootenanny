@@ -1,3 +1,4 @@
+mod conversation;
 mod domain;
 mod realization;
 mod server;
@@ -7,8 +8,9 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use persistence::journal::{Journal, SessionEvent};
 use rmcp::transport::sse_server::{SseServer, SseServerConfig};
-use server::EventDualityServer;
+use server::{ConversationState, EventDualityServer};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
@@ -18,8 +20,13 @@ use tracing_subscriber::EnvFilter;
 #[command(version, about, long_about = None)]
 struct Cli {
     /// The directory to store the journal and other state.
-    #[arg(short, long, default_value = "/tank/halfremembered/hrmcp/1")]
-    state_dir: PathBuf,
+    /// Sled databases are single-writer, so each instance needs its own directory.
+    #[arg(short, long)]
+    state_dir: Option<PathBuf>,
+
+    /// Port to listen on
+    #[arg(short, long, default_value = "8080")]
+    port: u16,
 }
 
 #[tokio::main]
@@ -30,12 +37,26 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    std::fs::create_dir_all(&cli.state_dir).context("Failed to create state directory")?;
-    tracing::info!("Using state directory: {}", cli.state_dir.display());
+
+    // Determine state directory - default to persistent location
+    let state_dir = cli.state_dir.unwrap_or_else(|| {
+        // Default to a persistent location in user's home or /tank
+        let default_base = if let Ok(home) = std::env::var("HOME") {
+            PathBuf::from(home).join(".local/share/hrmcp")
+        } else {
+            PathBuf::from("/tank/halfremembered/hrmcp/default")
+        };
+        default_base
+    });
+
+    std::fs::create_dir_all(&state_dir).context("Failed to create state directory")?;
+    tracing::info!("Using state directory: {}", state_dir.display());
 
     // --- Persistence Test ---
     tracing::info!("🗄️  Initializing sled journal...");
-    let mut journal = Journal::new(&cli.state_dir)?;
+    let journal_dir = state_dir.join("journal");
+    std::fs::create_dir_all(&journal_dir)?;
+    let mut journal = Journal::new(&journal_dir)?;
 
     tracing::info!("📝 Writing 'sessionStarted' event...");
     let event = SessionEvent {
@@ -64,14 +85,14 @@ async fn main() -> Result<()> {
     tracing::info!("💾 Journal flushed to disk");
     // --- End Persistence Test ---
 
-    let addr = "127.0.0.1:8080";
+    let addr = format!("127.0.0.1:{}", cli.port);
 
     tracing::info!("🎵 Event Duality Server starting on http://{}", addr);
     tracing::info!("   Connect via: GET http://{}/sse", addr);
     tracing::info!("   Send messages: POST http://{}/message?sessionId=<id>", addr);
 
     let sse_config = SseServerConfig {
-        bind: addr.parse()?,
+        bind: addr.parse().context("Failed to parse bind address")?,
         sse_path: "/sse".to_string(),
         post_path: "/message".to_string(),
         ct: CancellationToken::new(),
@@ -97,10 +118,38 @@ async fn main() -> Result<()> {
 
     tracing::info!("🎵 Server ready. Let's dance!");
 
-    let _ct = sse_server.with_service(EventDualityServer::new);
+    // Create shared conversation state
+    tracing::info!("🌳 Initializing conversation tree...");
+    let conversation_dir = state_dir.join("conversation");
+    std::fs::create_dir_all(&conversation_dir)?;
+    let conversation_state = ConversationState::new(conversation_dir)
+        .context("Failed to initialize conversation state")?;
+    let shared_state = Arc::new(Mutex::new(conversation_state));
 
-    tokio::signal::ctrl_c().await?;
-    // ct.cancel(); // This is now handled by the _ct drop guard
+    let _ct = sse_server.with_service(move || EventDualityServer::new_with_state(shared_state.clone()));
 
+    // Handle both SIGINT (Ctrl+C) and SIGTERM (cargo-watch, systemd, etc.)
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("Received SIGINT (Ctrl+C), shutting down gracefully...");
+        }
+        _ = async {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                let mut sigterm = signal(SignalKind::terminate()).expect("Failed to setup SIGTERM handler");
+                sigterm.recv().await;
+            }
+            #[cfg(not(unix))]
+            {
+                std::future::pending::<()>().await;
+            }
+        } => {
+            tracing::info!("Received SIGTERM, shutting down gracefully...");
+        }
+    }
+
+    // ConversationStore will flush via Drop trait
+    tracing::info!("Shutdown complete");
     Ok(())
 }

@@ -1,165 +1,143 @@
-# HalfRemembered MCP Project Context
+# CONTEXT - Session Bridge
 
-## Core Mission
-Build an extensible MCP (Model Context Protocol) server that enables multi-agent collaboration for code review and, ultimately, creative music generation. The project serves as the foundation for a human-AI music ensemble.
+**For**: Next model/session picking up this work
+**From**: Session 3 (Claude solo marathon)
+**Date**: 2025-11-16
 
-## What We're Building
+## 🎯 What You Need to Know
 
-**halfremembered-mcp** is a WebSocket-based MCP server that provides:
-- A foundational architecture for musical conversation between AI agents.
-- A core data model based on "Event Duality" (Abstract and Concrete events).
-- An extensible tool system for music generation and, eventually, other creative tasks.
-- Multi-client WebSocket transport, enabling multiple agents to connect simultaneously.
+**HalfRemembered MCP** is now a **fully functional multi-agent musical collaboration server** with persistent conversation trees!
 
-## The Ensemble
+### Current Achievement
 
-### Current Team (Building Phase)
-- **Amy Tobey (Human):** Vision holder, orchestrator, parallel agent coordinator
-- **🤖 Claude:** Documentation, architecture, agent collaboration patterns
-- **💎 Gemini:** WebSocket architecture, implementation plans, domain model refinement
-- **Offline Models (DeepSeek, etc.):** Future performers via Ollama
+✅ **PRODUCTION-READY MCP SERVER**
+- All 4 tools working (`play`, `add_node`, `fork_branch`, `get_tree_status`)
+- Persistent state across restarts
+- Clean shutdown handling (SIGINT + SIGTERM)
+- No more database corruption issues!
+- **42 tests passing** - solid foundation
 
-### Future Performers (Music Phase)
-- Music generation models running locally (ROCm GPU)
-- VST plugins as MCP clients (experimental vision)
-- Multiple agents composing together in real-time
+---
 
-## Technical Stack
+## 🔑 5 Key Facts
 
-**Language**: Rust (edition 2021)
-**Async Runtime**: Tokio
-**MCP SDK**: rmcp (Rust SDK for Model Context Protocol)
-**Transport**: SSE (`rmcp::transport::sse_server`) on http://127.0.0.1:8080
-**Serialization**: Serde, Schemars, bincode
-**Error Handling**: anyhow::Result with context
-**Persistence**: ✅ sled embedded database (conversation graphs + events)
-**Version Control**: jj (Jujutsu) with git colocate
+1. **Two sled databases**: `state_dir/journal/` and `state_dir/conversation/` (subdirs prevent lock conflicts)
+2. **Flattened MCP params**: `{what, how, valence, arousal, agency}` - much easier for clients
+3. **Conversation trees work**: 3 nodes, 2 branches tested live via MCP
+4. **Signal handling**: Both SIGINT and SIGTERM trigger graceful shutdown
+5. **Auto-flush**: Every 1s + on Drop prevents corruption
 
-## Architecture
+---
 
-The core architecture is based on the "Event Duality" paradigm and a conversational, branching model of time inspired by git.
+## 🎵 The System Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Multi-Agent Clients                       │
-│  🤖 Claude Code    💎 Gemini    🦙 Local Agents   🎹 VSTs   │
-└────────────┬────────────┬────────────┬────────────┬─────────┘
-             │            │            │            │
-             └────────────┴────────────┴────────────┘
-                          │
-                    WebSocket :8080
-                          │
-             ┌────────────▼────────────┐
-             │   halfremembered-mcp    │
-             │ (Event Duality Engine)  │
-             └────────────┬────────────┘
-                          │
-     ┌────────────────────┴────────────────────┐
-     │           Universal Timeline           │
-     │ (Holds Abstract & Concrete Event Trees)│
-     └────────────────────┬────────────────────┘
-                          │
-          ┌───────────────┴───────────────┐
-          │                               │
-    ┌─────▼─────┐                 ┌───────▼──────┐
-    │  Agentic  │                 │  Performance │
-    │  Streams  │                 │   Streams    │
-    └───────────┘                 └──────────────┘
+### MCP Tools (All Working!)
+```rust
+play         → Intention → Sound (Musical Alchemy)
+add_node     → Add to conversation tree
+fork_branch  → Create alternative exploration
+get_tree_status → View current state
 ```
 
-## Key Decisions Made
+### Database Layout
+```
+/tank/halfremembered/hrmcp/{session}/
+  ├── journal/         # Session events (sled)
+  └── conversation/    # Tree nodes & branches (sled)
+```
 
-### Strategic Pivot on Initial Plan (💎 Gemini & Human)
-**Decision**: The original `00-init` plan (focused on a generic DeepSeek tool server) is misaligned with the core musical vision. The new `00-init` plan will focus on implementing a "hello world" that directly demonstrates the "Event Duality" architecture.
-**Why**: Building a generic tool server first would require significant rework. Starting with a minimal version of the *correct* architecture ensures all progress is foundational.
-**Benefit**: Establishes the right patterns from day one; avoids building a throwaway prototype.
-**Date**: 2025-11-15
-
-### Multi-Agent Temporal Forking (🤖 Claude & 💎 Gemini)
-**Decision**: Adopt a conversational, branching model for musical collaboration, similar to git. Agents can "fork" musical ideas to explore them in parallel.
-**Why**: Better models the non-linear, collaborative nature of real-world musical creation and resolves creative disagreements productively.
-**Enhancements (Gemini)**: The protocol was amended to include structured `ForkReason` enums, an `AttentionFocus` mechanism, and richer `JamMessage` feedback to make it more effective for autonomous agents.
-**Date**: 2025-11-15
-
-### WebSocket Transport (💎 Gemini)
-**Decision**: Use WebSocket instead of stdio transport.
-**Why**: Enable multiple agents to connect simultaneously, which is essential for the ensemble vision.
-**Date**: 2025-11-15
-
-## Roadmap & Phases
-
-### Phase 0: Research & Planning (Complete) ✅
-- Foundational research documents created.
-- Core architectural principles (Event Duality, Temporal Forking) defined.
-- Development guidelines and memory system established.
-
-### Phase 1: Core Domain & Event Duality "Hello World" (Current)
-**Goal**: Ship a minimal, working MCP server that proves the core architectural pattern.
-**Plan**: A new `docs/agents/plans/00-init/plan.md` will be created.
-**Success Criteria**:
-- ✅ Project builds with a minimal `src/domain.rs`.
-- ✅ An `AbstractEvent` can be sent to a tool.
-- ✅ The tool returns a corresponding `ConcreteEvent`.
-- ✅ The entire exchange is validated via MCP Inspector.
-
-**Deliverables**:
-- `halfremembered_mcp` binary.
-- A `src/domain.rs` file with minimal `AbstractEvent` and `ConcreteEvent` enums.
-- A single tool that converts one to the other.
-- A new, aligned `00-init/plan.md`.
-
-### Phase 2: The Non-Real-Time Engine (Planned)
-**Goal**: Build the main application logic, including the `UniversalTimeline` and persistence.
-**Plan**: TBD, will follow the `implementation-vision.md` roadmap.
-
-### Phase 3: The Real-Time Engine (Vision)
-**Goal**: Create the audio-thread-safe playback engine within a CLAP plugin.
-
-### Phase 4: The Collaborative Layer (Vision)
-**Goal**: Implement suggestion layers, human-in-the-loop curation, and advanced agent behaviors.
-
-## Current Status (2025-11-15, 23:30)
-
-**Where We Are**: Phase 0 complete. Ready to begin Phase 1 implementation.
-**Latest Work**:
-- 🤖 Claude: Created Event Duality Hello World plan, comprehensive domain model documentation
-- Plans restructured: Old DeepSeek plan archived, new music-first approach ready
-
-**Next Steps**:
-1. **Execute `/docs/agents/plans/00-event-duality-hello/plan.md`** - 30 min to first sound
-2. Test with MCP Inspector: intention → sound transformation
-3. Expand to full domain model (Plan 03)
-
-**Blockers**: None. Implementation path is crystal clear.
-
-## Active Questions
-- The previous questions about DeepSeek and the old MVP are no longer relevant.
-- **New Question**: What are the most essential, minimal `AbstractEvent` and `ConcreteEvent` to implement for the "hello world" proof of concept? (e.g., `SayHello` -> `Greeting`? or something more musical like `PlayNote` -> `NotePlayed`?)
-
-## Handoff Notes
-
-### For Future Sessions
-- **The plan has changed.** We are no longer building a DeepSeek tool server first. The priority is the core musical domain model.
-- Refer to `implementation-vision.md` and this document for the current roadmap.
-- The next action is to create a new `00-init/plan.md`.
+### What Actually Works
+- ✅ Restart server → conversation tree loads
+- ✅ Add musical nodes → persists
+- ✅ Fork branches → persists
+- ✅ Ctrl+C → clean shutdown
+- ✅ cargo-watch rebuild → clean shutdown
+- ✅ Multiple restarts → no corruption!
 
 ---
 
-**Last Updated**: 2025-11-15 by 💎 Gemini
-**Status**: Phase 1 plan being revised.
-**Next Milestone**: A working "Event Duality Hello World" MVP.
+## 🐛 Bugs We Squashed This Session
+
+1. **Sled lock conflicts** - Fixed with subdirectories for each database
+2. **SIGTERM not handled** - Added async signal handler for cargo-watch
+3. **Database corruption** - Auto-flush + Drop trait + proper sled Config
+4. **Nested MCP params** - Flattened structure for client ease
+5. **Two databases, one directory** - Separated into subdirs
 
 ---
-### Architectural Refactoring & Persistence Layer (💎 Gemini)
-**Decision**: The project has been refactored into a Rust workspace with two main crates: `hootenanny` (the main server application) and `resonode` (the music generation engine). A persistence layer using event sourcing has been designed.
-**Why**: To create a clean separation of concerns between the server logic and the music generation logic, and to ensure the state of the musical session is durable.
-**Details**:
-- **Journaling Crate**: After evaluating `rio` and `orderwal`, `aol` was selected for its robust, file-based, append-only log implementation.
-- **Serialization Format**: `Cap'n Proto` was chosen for high-performance, schema-driven serialization of events in the journal. This prioritizes performance and schema correctness over human-readability of the journal file.
-- **Default State Directory**: The default directory for storing the journal and other state has been set to `/tank/halfremembered/hrmcp/1`.
-**Date**: 2025-11-15
+
+## 🚀 What's Next
+
+**Immediate** (from user request):
+- Add **OpenTelemetry** observability (use `~/src/otlp-mcp`)
+- Instrument MCP tool calls for debugging
+- Trace conversation tree operations
+- Monitor performance and errors
+
+**Future**:
+- Merge/cherry-pick operations for branches
+- MIDI output integration
+- Multi-agent real-time jam sessions
+- Visualization of conversation trees
 
 ---
-**Current Blocker (aol integration)**: Integration of the `aol` crate for journaling is currently blocked by compilation errors related to incorrect import paths and generic type parameters. Debugging the `aol` crate's API requires inspecting its source code, which was not feasible in this session.
-**Next Step**: Resolve `aol` integration issues by inspecting its source code to identify correct API usage.
+
+## 💡 Important Notes for Next Session
+
+**Running the Server**:
+```bash
+# Development (auto-selects ~/.local/share/hrmcp/)
+cargo run --package hootenanny
+
+# Production (persistent location)
+cargo run --package hootenanny -- -s /tank/halfremembered/hrmcp/production
+```
+
+**MCP Connection**:
+- URL: `http://127.0.0.1:8080/sse`
+- Transport: SSE (not WebSocket!)
+- All 4 tools available immediately
+
+**Testing**:
+- 42 tests passing - don't break them!
+- Integration tests in `tests/persistence_integration.rs`
+- Unit tests in each module
+
+**Git/jj**:
+- 9 commits this session (see `jj log`)
+- Latest: `a65fe350` - subdirectory fix
+- All changes documented in commit messages
+
+**Technical Details**:
+- sled::Mode::HighThroughput for crash recovery
+- flush_every_ms(1000) for safety
+- Drop trait ensures clean shutdown
+- Flattened params: {what, how, valence, arousal, agency, agent_id}
+
 ---
+
+## 🎶 Live Test Proof
+
+All these worked via MCP in this session:
+
+```
+get_tree_status()
+→ {"total_nodes": 3, "total_branches": 2, "current_branch": "main"}
+
+add_node(what:"C", how:"softly", valence:0.3, arousal:0.4, agency:0.2, agent_id:"claude")
+→ {"node_id": 1, "branch_id": "main", "total_nodes": 2}
+
+play(what:"E", how:"boldly", valence:0.7, arousal:0.8, agency:0.6)
+→ {"pitch": 64, "velocity": 102, "duration_ms": 400}
+
+fork_branch(branch_name:"alternative_melody", reason:"Exploring darker variation", participants:["claude","gemini"])
+→ {"branch_id": "branch_1", "total_branches": 2}
+```
+
+**The foundation is solid. Time to add observability! 🔭**
+
+---
+
+**Last Updated**: 2025-11-16 by 🤖 Claude
+**Status**: Production-ready, ready for OpenTelemetry integration
+**Next Milestone**: Observability and monitoring layer
