@@ -29,10 +29,10 @@ Build an extensible MCP (Model Context Protocol) server that enables multi-agent
 **Language**: Rust (edition 2021)
 **Async Runtime**: Tokio
 **MCP SDK**: rmcp (Rust SDK for Model Context Protocol)
-**Transport**: WebSocket (`rmcp::transport::websocket`) on 127.0.0.1:8080
-**Serialization**: Serde, Schemars
+**Transport**: SSE (`rmcp::transport::sse_server`) on http://127.0.0.1:8080
+**Serialization**: Serde, Schemars, bincode
 **Error Handling**: anyhow::Result with context
-**State (Phase 2)**: sled (embedded database)
+**Persistence**: ✅ sled embedded database (conversation graphs + events)
 **Version Control**: jj (Jujutsu) with git colocate
 
 ## Architecture

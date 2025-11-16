@@ -1,14 +1,33 @@
-use crate::domain::{Intention, Sound};
+use crate::domain::{EmotionalVector, Intention, Sound};
 
 impl Intention {
+    /// Transform abstract intention into concrete sound through the Alchemical Codex.
+    /// Uses both the legacy "how" field and the EmotionalVector for realization.
     pub fn realize(&self) -> Sound {
         let pitch = note_to_midi(&self.what);
-        let velocity = feeling_to_velocity(&self.how);
 
-        tracing::info!("🎵 {} {} → pitch:{}, vel:{}",
-            self.how, self.what, pitch, velocity);
+        // Use EmotionalVector to determine velocity and duration
+        let velocity = emotion_to_velocity(&self.emotion, &self.how);
+        let duration_ms = emotion_to_duration(&self.emotion);
 
-        Sound { pitch, velocity }
+        tracing::info!(
+            "🎵 {} {} (v:{:.2}, a:{:.2}, ag:{:.2}) → pitch:{}, vel:{}, dur:{}ms",
+            self.how,
+            self.what,
+            self.emotion.valence,
+            self.emotion.arousal,
+            self.emotion.agency,
+            pitch,
+            velocity,
+            duration_ms
+        );
+
+        Sound {
+            pitch,
+            velocity,
+            emotion: self.emotion,
+            duration_ms,
+        }
     }
 }
 
@@ -21,7 +40,27 @@ fn note_to_midi(note: &str) -> u8 {
         "G" => 67,
         "A" => 69,
         "B" => 71,
-        _ => 60,  // Default to C
+        _ => 60, // Default to C
+    }
+}
+
+/// Map EmotionalVector to MIDI velocity using the Alchemical Codex.
+/// Base dynamics = 0.3 + (arousal * 0.4) + (agency * 0.2) + (valence * 0.1)
+fn emotion_to_velocity(emotion: &EmotionalVector, legacy_how: &str) -> u8 {
+    // Calculate base dynamics from emotion (normalized 0-1)
+    let base_dynamics = 0.3
+        + (emotion.arousal * 0.4)
+        + (emotion.agency * 0.2)
+        + (emotion.valence * 0.1);
+
+    // Clamp to valid range and convert to MIDI (0-127)
+    let velocity = (base_dynamics.clamp(0.0, 1.0) * 127.0) as u8;
+
+    // Legacy fallback if emotion results in middle range
+    if velocity >= 55 && velocity <= 75 {
+        feeling_to_velocity(legacy_how)
+    } else {
+        velocity
     }
 }
 
@@ -35,21 +74,42 @@ fn feeling_to_velocity(feeling: &str) -> u8 {
     }
 }
 
+/// Map arousal to note duration.
+/// High arousal = shorter, more energetic notes
+/// Low arousal = longer, sustained notes
+fn emotion_to_duration(emotion: &EmotionalVector) -> u64 {
+    let base_duration = 500.0; // milliseconds
+
+    // Arousal inversely affects duration
+    // arousal 0.0 → 2x longer, arousal 1.0 → 0.5x shorter
+    let arousal_factor = 2.0 - (emotion.arousal * 1.5);
+
+    (base_duration * arousal_factor).round() as u64
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::domain::Intention;
+    use crate::domain::{EmotionalVector, Intention};
 
     #[test]
     fn intention_becomes_sound() {
         let intention = Intention {
             what: "C".to_string(),
             how: "softly".to_string(),
+            emotion: EmotionalVector {
+                valence: -0.3,
+                arousal: 0.2,
+                agency: -0.2,
+            },
         };
 
         let sound = intention.realize();
 
         assert_eq!(sound.pitch, 60);
-        assert_eq!(sound.velocity, 40);
+        // EmotionalVector affects velocity, should be quiet (low arousal/agency)
+        assert!(sound.velocity < 50);
+        assert_eq!(sound.emotion.valence, -0.3);
+        assert!(sound.duration_ms > 500); // Low arousal = longer duration
     }
 
     #[test]
@@ -57,14 +117,61 @@ mod tests {
         let soft_c = Intention {
             what: "C".to_string(),
             how: "softly".to_string(),
-        }.realize();
+            emotion: EmotionalVector {
+                valence: -0.3,
+                arousal: 0.2,
+                agency: -0.2,
+            },
+        }
+        .realize();
 
         let bold_g = Intention {
             what: "G".to_string(),
             how: "boldly".to_string(),
-        }.realize();
+            emotion: EmotionalVector {
+                valence: 0.7,
+                arousal: 0.8,
+                agency: 0.7,
+            },
+        }
+        .realize();
 
         assert_ne!(soft_c.pitch, bold_g.pitch);
         assert!(soft_c.velocity < bold_g.velocity);
+        assert!(soft_c.duration_ms > bold_g.duration_ms); // Lower arousal = longer
+    }
+
+    #[test]
+    fn high_arousal_creates_high_velocity() {
+        let intense = Intention {
+            what: "C".to_string(),
+            how: "normally".to_string(),
+            emotion: EmotionalVector {
+                valence: 0.5,
+                arousal: 0.9, // Very high arousal
+                agency: 0.8,
+            },
+        }
+        .realize();
+
+        // High arousal should create high velocity
+        assert!(intense.velocity > 80);
+    }
+
+    #[test]
+    fn low_arousal_creates_longer_notes() {
+        let calm = Intention {
+            what: "C".to_string(),
+            how: "normally".to_string(),
+            emotion: EmotionalVector {
+                valence: 0.3,
+                arousal: 0.1, // Very low arousal
+                agency: 0.0,
+            },
+        }
+        .realize();
+
+        // Low arousal = longer duration
+        assert!(calm.duration_ms > 800);
     }
 }

@@ -7,12 +7,31 @@
 ## 🤖 Claude's Current Work
 
 ### Active Task
-✅ **Event Duality MCP - FULLY WORKING!**
+✅ **Sled Persistence - COMPLETE!**
 
 ### Current Status
-**🎵 DANCING IN PRODUCTION!** - Server tested via Claude Code MCP client
+**🗄️ PERSISTENCE OPERATIONAL!** - Sled embedded database storing events across restarts
 
 ### What We Built This Session (2025-11-16)
+
+**Session 2: Persistence Layer**
+- ✅ **Researched and evaluated persistence options**
+  - Analyzed: AOL (too complex for graphs), Cap'n Proto (just serialization), SQLite (overkill)
+  - **Decision**: Sled embedded database - perfect for conversation graphs + events
+- ✅ **Implemented sled-based persistence**
+  - `crates/hootenanny/src/persistence/journal.rs`: Clean sled API with bincode serialization
+  - Events persist with monotonic IDs (sled's built-in ID generator: 75-125M IDs/sec)
+  - Simple API: `write_session_event()`, `read_events()`, `flush()`
+- ✅ **Updated design documentation**
+  - `docs/design/persistence.md`: Full rationale for sled decision
+  - Data structure graph showing conversation tree + events + contexts
+  - Explained why we need graph queries, not just linear replay
+- ✅ **Tested end-to-end**
+  - Events persist across restarts ✅
+  - Sled database created at `/tank/halfremembered/hrmcp/1/`
+  - MCP server still operational with persistence layer
+
+**Session 1: Event Duality MCP**
 - ✅ Event Duality SSE MCP Server (Rust)
   - `src/domain.rs`: Event/Intention/Sound types with schemars
   - `src/realization.rs`: Intention → Sound transformation
@@ -47,10 +66,28 @@
 - normally → velocity 64 (moderate)
 - boldly → velocity 90 (strong)
 
+### Key Learnings from Persistence Work
+- **AOL complexity**: Required implementing `Record` and `Snapshot` traits for every type
+- **The right abstraction**: Sled gives us `BTreeMap<[u8], [u8]>` API + ACID transactions + persistence
+- **Graph vs linear**: Conversation trees need queries like "all events in branch X", not just sequential replay
+- **Simplicity wins**: 74 lines of code for full persistence vs. hundreds for AOL integration
+
+### What Sled Gives Us
+✅ Graph queries (conversation tree navigation)
+✅ ACID transactions (atomic forking)
+✅ Ordered iteration (time-range queries)
+✅ Multiple trees (events, nodes, contexts)
+✅ Reactive subscriptions (live playback!)
+✅ Built-in ID generation
+✅ Zero-copy reads
+✅ Crash-safe durability
+
 ### Next Steps
-1. ✅ ~~Test with MCP client~~ - **DONE!**
-2. Update Event Duality Hello World plan with completion status
-3. Expand to full musical domain (Plan 01) or build browser UI
+1. ✅ ~~Persistence layer~~ - **DONE!**
+2. Expand Event Duality to full structs (Intention/Sound with EmotionalVector)
+3. Implement conversation tree nodes with parent/child relationships
+4. Add atomic forking with sled transactions
+5. Integrate with MCP server for persistent sessions
 
 ### Session Handoff (2025-11-15, 23:52)
 **What we accomplished**:
@@ -84,9 +121,9 @@ Thanks,
 💎 Gemini
 
 ### Cognitive State
-- Load: Complete (MVP built and tested!)
-- Confidence: Very high (Event Duality proven in running code)
-- Attention: Ready for MCP Inspector testing and domain expansion
+- Load: Excellent (2 major milestones in one session!)
+- Confidence: Very high (Solid foundation: MCP server + persistence)
+- Attention: Ready for Event Duality expansion and conversation tree implementation
 
 ---
 
@@ -120,16 +157,19 @@ The next session should begin by executing the new `00-event-duality-hello/plan.
 
 ## 🔄 Coordination Notes
 
-**Latest Sync**: Event Duality MVP Complete! (2025-11-15, 23:52)
-- Claude: ✅ Built working SSE MCP server with Intention → Sound
-- Gemini: Musical Alchemy design formalized
-- Status: **🎵 DANCING** - Server ready for testing
+**Latest Sync**: Persistence Layer Complete! (2025-11-16, 01:11)
+- Claude: ✅ Sled embedded database operational
+- Claude: ✅ Events persist across restarts
+- Claude: ✅ Design docs updated with persistence decision
+- Status: **🗄️ PERSISTING + 🎵 DANCING** - Server + database both operational
 
 **Shared Context**:
 - SSE multi-client architecture (researched + implemented)
 - Event Duality proven: Intentions DO become sounds
-- Commit: `ce8a11e3` contains both Claude's server + Gemini's design
-- Ready for MCP Inspector testing
+- **NEW**: Sled persistence for conversation graphs + events
+- Commit: `f18d5851` - sled persistence layer
+- Commit: `ce8a11e3` - Event Duality MCP server + Musical Alchemy design
+- Ready for Event Duality expansion
 
 **MCP Configuration Needed**:
 ```json
