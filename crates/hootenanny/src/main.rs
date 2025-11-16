@@ -1,6 +1,7 @@
 mod domain;
 mod realization;
 mod server;
+pub mod persistence;
 
 use anyhow::Result;
 use rmcp::transport::sse_server::{SseServer, SseServerConfig};

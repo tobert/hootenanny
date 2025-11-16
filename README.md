@@ -17,11 +17,42 @@ enum Event {
 
 ## Running the Server
 
+### Basic Run
+
 ```bash
 cargo run
 ```
 
 The server starts on **http://127.0.0.1:8080** with SSE transport (multi-client ready).
+
+### Auto-Restart on Code Changes
+
+For development, use `cargo-watch` to automatically rebuild and restart when you modify code:
+
+```bash
+# Install cargo-watch (one time)
+cargo install cargo-watch
+
+# Run with auto-restart
+cargo watch -x run
+```
+
+Now any changes to `.rs` files will trigger an automatic rebuild and restart! 🔄
+
+### Integration with MCP Clients
+
+The server is ready to use with any MCP client. For **Claude Code**:
+
+1. Start the server (with or without auto-restart)
+2. In Claude Code, run `/mcp` to reconnect
+3. The `play` tool will be available to use!
+
+```bash
+# Terminal 1: Run the server
+cargo watch -x run
+
+# Terminal 2: Use Claude Code with /mcp
+```
 
 ### SSE Endpoints
 

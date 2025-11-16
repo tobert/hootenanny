@@ -1,7 +1,7 @@
 # Plan 00: Event Duality Hello World
 
-**Status**: Ready to build
-**Timeline**: 1 day
+**Status**: ✅ **COMPLETE!** (2025-11-16)
+**Timeline**: 1 day (completed in 2 sessions)
 **Purpose**: Prove the core concept
 
 ## The Simplest Truth
@@ -65,29 +65,29 @@ src/
 
 ## The Dance
 
-1. **Define the duality** (30 min)
+1. ✅ **Define the duality** (30 min) - `src/domain.rs`
    ```rust
    pub enum Event { Abstract(Intention), Concrete(Sound) }
    ```
 
-2. **Create realization** (30 min)
+2. ✅ **Create realization** (30 min) - `src/realization.rs`
    ```rust
    impl Intention {
        pub fn realize(&self) -> Sound { ... }
    }
    ```
 
-3. **Wrap in MCP** (1 hour)
+3. ✅ **Wrap in MCP** (1 hour) - `src/server.rs`
    ```rust
-   #[mcp_tool]
-   async fn play(intention: Intention) -> Sound {
-       intention.realize()
-   }
+   #[tool(description = "Transform an intention into sound")]
+   fn play(&self, intention: Intention) -> Result<CallToolResult, McpError>
    ```
 
-4. **Test with Inspector** (30 min)
-   - Send: `{"intention": {"what": "C", "how": "softly"}}`
-   - Receive: `{"sound": {"pitch": 60, "velocity": 40}}`
+4. ✅ **Test with MCP Client** (30 min + debugging)
+   - Sent: `{"what": "C", "how": "softly"}`
+   - Received: `{"pitch": 60, "velocity": 40}` ✅
+   - **Fix needed**: Changed return type from `Json<Value>` to `CallToolResult`
+   - **Result**: MCP capabilities working, tool exposed successfully!
 
 ## Dependencies
 
@@ -99,16 +99,27 @@ serde = { version = "1", features = ["derive"] }
 anyhow = "1"
 ```
 
-## The Moment
+## The Moment ✨
 
-When MCP Inspector shows:
+**IT HAPPENED!** (2025-11-16, 00:07 UTC)
+
+Claude Code MCP client successfully called the `play` tool:
 
 ```json
-Request:  {"intention": {"what": "C", "how": "softly"}}
-Response: {"sound": {"pitch": 60, "velocity": 40}}
+Request:  {"what": "C", "how": "softly"}
+Response: {"pitch": 60, "velocity": 40}
 ```
 
-We know the architecture works. Everything else builds on this.
+**The architecture works.** Everything else builds on this.
+
+### Live Test Results
+
+| Intention | Sound | Notes |
+|-----------|-------|-------|
+| C, softly | pitch: 60, velocity: 40 | Middle C, quiet |
+| E, boldly | pitch: 64, velocity: 90 | Major third, strong |
+| G, questioning | pitch: 67, velocity: 50 | Perfect fifth, tentative |
+| A, normally | pitch: 69, velocity: 64 | Major sixth, moderate |
 
 ## Next
 

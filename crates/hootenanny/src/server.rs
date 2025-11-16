@@ -1,11 +1,11 @@
 use crate::domain::Intention;
 use rmcp::{
-    ServerHandler,
+    ErrorData as McpError, ServerHandler,
     handler::server::{
         router::tool::ToolRouter,
-        wrapper::{Json, Parameters},
+        wrapper::Parameters,
     },
-    model::{ServerCapabilities, ServerInfo},
+    model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
 };
 
@@ -23,13 +23,15 @@ impl EventDualityServer {
     }
 
     #[tool(description = "Transform an intention into sound - the core magic of event duality")]
-    fn play(&self, Parameters(intention): Parameters<Intention>) -> Json<serde_json::Value> {
+    fn play(&self, Parameters(intention): Parameters<Intention>) -> Result<CallToolResult, McpError> {
         let sound = intention.realize();
 
-        Json(serde_json::json!({
+        let result = serde_json::json!({
             "pitch": sound.pitch,
             "velocity": sound.velocity,
-        }))
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(result.to_string())]))
     }
 }
 
