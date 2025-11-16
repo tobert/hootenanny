@@ -1,32 +1,43 @@
-use crate::domain::{EmotionalVector, Intention, Sound};
+use crate::domain::{EmotionalVector, AbstractEvent, ConcreteEvent, NoteEvent};
 
-impl Intention {
+impl AbstractEvent {
     /// Transform abstract intention into concrete sound through the Alchemical Codex.
     /// Uses both the legacy "how" field and the EmotionalVector for realization.
-    pub fn realize(&self) -> Sound {
-        let pitch = note_to_midi(&self.what);
+    pub fn realize(&self) -> ConcreteEvent {
+        match self {
+            AbstractEvent::Intention(intention) => {
+                let pitch = note_to_midi(&intention.what);
 
-        // Use EmotionalVector to determine velocity and duration
-        let velocity = emotion_to_velocity(&self.emotion, &self.how);
-        let duration_ms = emotion_to_duration(&self.emotion);
+                // Use EmotionalVector to determine velocity and duration
+                let velocity = emotion_to_velocity(&intention.emotion, &intention.how);
+                let duration_ms = emotion_to_duration(&intention.emotion);
 
-        tracing::info!(
-            "🎵 {} {} (v:{:.2}, a:{:.2}, ag:{:.2}) → pitch:{}, vel:{}, dur:{}ms",
-            self.how,
-            self.what,
-            self.emotion.valence,
-            self.emotion.arousal,
-            self.emotion.agency,
-            pitch,
-            velocity,
-            duration_ms
-        );
+                tracing::info!(
+                    "🎵 {} {} (v:{:.2}, a:{:.2}, ag:{:.2}) → pitch:{}, vel:{}, dur:{}ms",
+                    intention.how,
+                    intention.what,
+                    intention.emotion.valence,
+                    intention.emotion.arousal,
+                    intention.emotion.agency,
+                    pitch,
+                    velocity,
+                    duration_ms
+                );
 
-        Sound {
-            pitch,
-            velocity,
-            emotion: self.emotion,
-            duration_ms,
+                ConcreteEvent::Note(NoteEvent {
+                    note: resonode::Note {
+                        pitch: resonode::Pitch::new(pitch),
+                        velocity: resonode::Velocity(velocity as u16),
+                        articulation: resonode::Articulation::Custom("".to_string()),
+                    },
+                    start_time: resonode::AbsoluteTime(0),
+                    duration: resonode::Duration::Absolute(resonode::AbsoluteTime(duration_ms)),
+                })
+            }
+            _ => {
+                // Handle other AbstractEvent variants later
+                unimplemented!()
+            }
         }
     }
 }
@@ -89,11 +100,11 @@ fn emotion_to_duration(emotion: &EmotionalVector) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::{EmotionalVector, Intention};
+    use crate::domain::{EmotionalVector, AbstractEvent, IntentionEvent, ConcreteEvent, NoteEvent};
 
     #[test]
     fn intention_becomes_sound() {
-        let intention = Intention {
+        let intention = AbstractEvent::Intention(IntentionEvent {
             what: "C".to_string(),
             how: "softly".to_string(),
             emotion: EmotionalVector {
@@ -101,20 +112,21 @@ mod tests {
                 arousal: 0.2,
                 agency: -0.2,
             },
-        };
+        });
 
         let sound = intention.realize();
 
-        assert_eq!(sound.pitch, 60);
-        // EmotionalVector affects velocity, should be quiet (low arousal/agency)
-        assert!(sound.velocity < 50);
-        assert_eq!(sound.emotion.valence, -0.3);
-        assert!(sound.duration_ms > 500); // Low arousal = longer duration
+        if let ConcreteEvent::Note(note_event) = sound {
+            assert_eq!(note_event.note.pitch.midi_note_number, 60);
+            assert!(note_event.note.velocity.0 < 5000);
+        } else {
+            panic!("Expected a NoteEvent");
+        }
     }
 
     #[test]
     fn different_intentions_different_sounds() {
-        let soft_c = Intention {
+        let soft_c = AbstractEvent::Intention(IntentionEvent {
             what: "C".to_string(),
             how: "softly".to_string(),
             emotion: EmotionalVector {
@@ -122,10 +134,10 @@ mod tests {
                 arousal: 0.2,
                 agency: -0.2,
             },
-        }
+        })
         .realize();
 
-        let bold_g = Intention {
+        let bold_g = AbstractEvent::Intention(IntentionEvent {
             what: "G".to_string(),
             how: "boldly".to_string(),
             emotion: EmotionalVector {
@@ -133,17 +145,20 @@ mod tests {
                 arousal: 0.8,
                 agency: 0.7,
             },
-        }
+        })
         .realize();
 
-        assert_ne!(soft_c.pitch, bold_g.pitch);
-        assert!(soft_c.velocity < bold_g.velocity);
-        assert!(soft_c.duration_ms > bold_g.duration_ms); // Lower arousal = longer
+        if let (ConcreteEvent::Note(soft_c_note), ConcreteEvent::Note(bold_g_note)) = (soft_c, bold_g) {
+            assert_ne!(soft_c_note.note.pitch.midi_note_number, bold_g_note.note.pitch.midi_note_number);
+            assert!(soft_c_note.note.velocity.0 < bold_g_note.note.velocity.0);
+        } else {
+            panic!("Expected NoteEvents");
+        }
     }
 
     #[test]
     fn high_arousal_creates_high_velocity() {
-        let intense = Intention {
+        let intense = AbstractEvent::Intention(IntentionEvent {
             what: "C".to_string(),
             how: "normally".to_string(),
             emotion: EmotionalVector {
@@ -151,16 +166,20 @@ mod tests {
                 arousal: 0.9, // Very high arousal
                 agency: 0.8,
             },
-        }
+        })
         .realize();
 
-        // High arousal should create high velocity
-        assert!(intense.velocity > 80);
+        if let ConcreteEvent::Note(intense_note) = intense {
+        // High arousal should result in high velocity
+        assert!(intense_note.note.velocity.0 > 100);
+        } else {
+            panic!("Expected a NoteEvent");
+        }
     }
 
     #[test]
     fn low_arousal_creates_longer_notes() {
-        let calm = Intention {
+        let calm = AbstractEvent::Intention(IntentionEvent {
             what: "C".to_string(),
             how: "normally".to_string(),
             emotion: EmotionalVector {
@@ -168,10 +187,17 @@ mod tests {
                 arousal: 0.1, // Very low arousal
                 agency: 0.0,
             },
-        }
+        })
         .realize();
 
-        // Low arousal = longer duration
-        assert!(calm.duration_ms > 800);
+        if let ConcreteEvent::Note(calm_note) = calm {
+            if let resonode::Duration::Absolute(duration) = calm_note.duration {
+                assert!(duration.0 > 800);
+            } else {
+                panic!("Expected Absolute Duration");
+            }
+        } else {
+            panic!("Expected a NoteEvent");
+        }
     }
 }

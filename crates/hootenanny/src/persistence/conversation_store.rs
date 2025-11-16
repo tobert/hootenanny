@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 
 // Import from sibling module via crate root
@@ -16,14 +17,17 @@ use crate::conversation::{
 #[derive(Debug)]
 pub struct ConversationStore {
     db: sled::Db,
+    conversations: sled::Tree,
     nodes: sled::Tree,
     branches: sled::Tree,
+    events: sled::Tree,
     metadata: sled::Tree,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TreeMetadata {
-    main_branch: BranchId,
+    root: NodeId,
+    current_heads: HashMap<BranchId, NodeId>,
     next_node_id: NodeId,
 }
 
@@ -40,20 +44,28 @@ impl ConversationStore {
             .mode(sled::Mode::HighThroughput);
 
         let db = config.open().context("Failed to open sled database")?;
+        let conversations = db
+            .open_tree("conversations")
+            .context("Failed to open conversations tree")?;
         let nodes = db
             .open_tree("conversation_nodes")
             .context("Failed to open nodes tree")?;
         let branches = db
             .open_tree("conversation_branches")
             .context("Failed to open branches tree")?;
+        let events = db
+            .open_tree("events")
+            .context("Failed to open events tree")?;
         let metadata = db
             .open_tree("conversation_metadata")
             .context("Failed to open metadata tree")?;
 
         Ok(Self {
             db,
+            conversations,
             nodes,
             branches,
+            events,
             metadata,
         })
     }
@@ -62,7 +74,8 @@ impl ConversationStore {
     pub fn store_tree(&mut self, tree: &ConversationTree) -> Result<()> {
         // Store metadata
         let metadata = TreeMetadata {
-            main_branch: tree.main_branch.clone(),
+            root: tree.root,
+            current_heads: tree.current_heads.clone(),
             next_node_id: tree.next_node_id,
         };
         let metadata_bytes = bincode::serialize(&metadata)?;
@@ -119,7 +132,8 @@ impl ConversationStore {
         Ok(Some(ConversationTree {
             nodes,
             branches,
-            main_branch: metadata.main_branch,
+            root: metadata.root,
+            current_heads: metadata.current_heads,
             next_node_id: metadata.next_node_id,
         }))
     }
@@ -191,7 +205,8 @@ impl ConversationStore {
             .clone();
 
         let metadata = TreeMetadata {
-            main_branch: tree.main_branch.clone(),
+            root: tree.root,
+            current_heads: tree.current_heads.clone(),
             next_node_id: tree.next_node_id,
         };
 
@@ -213,6 +228,18 @@ impl ConversationStore {
         self.db.flush().context("Failed to flush database")?;
         Ok(())
     }
+
+    pub fn save_checkpoint(&mut self, _branch: &ConversationBranch) -> Result<()> {
+        unimplemented!()
+    }
+
+    pub fn list_conversations(&self) -> Result<Vec<String>> {
+        unimplemented!()
+    }
+
+    pub fn export_as_midi(&self, _branch: &ConversationBranch) -> Result<Vec<u8>> {
+        unimplemented!()
+    }
 }
 
 impl Drop for ConversationStore {
@@ -228,15 +255,15 @@ impl Drop for ConversationStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{EmotionalVector, Event, Intention};
+    use crate::domain::{AbstractEvent, EmotionalVector, Event, IntentionEvent};
     use tempfile::TempDir;
 
     fn create_test_tree() -> ConversationTree {
-        let root_event = Event::Abstract(Intention {
+        let root_event = Event::Abstract(AbstractEvent::Intention(IntentionEvent {
             what: "C".to_string(),
             how: "softly".to_string(),
             emotion: EmotionalVector::neutral(),
-        });
+        }));
 
         ConversationTree::new(
             root_event,
@@ -257,8 +284,9 @@ mod tests {
 
         assert_eq!(loaded.nodes.len(), tree.nodes.len());
         assert_eq!(loaded.branches.len(), tree.branches.len());
-        assert_eq!(loaded.main_branch, tree.main_branch);
+        assert_eq!(loaded.root, tree.root);
         assert_eq!(loaded.next_node_id, tree.next_node_id);
+        assert_eq!(loaded.current_heads, tree.current_heads);
 
         Ok(())
     }
@@ -295,11 +323,13 @@ mod tests {
         let node = ConversationNode {
             id: 42,
             parent: Some(0),
-            event: Event::Abstract(Intention {
+            children: vec![],
+            branch_id: "main".to_string(),
+            event: Event::Abstract(AbstractEvent::Intention(IntentionEvent {
                 what: "E".to_string(),
                 how: "boldly".to_string(),
                 emotion: EmotionalVector::neutral(),
-            }),
+            })),
             author: "test_agent".to_string(),
             timestamp: 1000,
             emotion: EmotionalVector::neutral(),

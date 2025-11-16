@@ -7,3 +7,4 @@ pub mod domain;
 pub mod persistence;
 pub mod realization;
 pub mod server;
+pub mod telemetry;

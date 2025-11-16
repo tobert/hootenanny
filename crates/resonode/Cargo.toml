@@ -4,3 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1.0.82"
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", features = ["schemars"] }
+serde = { version = "1.0.197", features = ["derive"] }

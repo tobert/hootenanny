@@ -2,10 +2,20 @@ use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
 /// The fundamental duality: Abstract intentions and Concrete sounds.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum Event {
-    Abstract(Intention),
-    Concrete(Sound),
+    Abstract(AbstractEvent),
+    Concrete(ConcreteEvent),
+}
+
+impl Event {
+    pub fn is_concrete(&self) -> bool {
+        matches!(self, Event::Concrete(_))
+    }
+
+    pub fn is_abstract(&self) -> bool {
+        matches!(self, Event::Abstract(_))
+    }
 }
 
 /// The three-dimensional compass of the soul.
@@ -54,33 +64,99 @@ impl EmotionalVector {
 /// An abstract musical intention carrying emotional weight.
 /// The "what we want to express" before it becomes sound.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct Intention {
-    #[schemars(description = "The note to play (C, D, E, F, G, A, B)")]
-    pub what: String,
+pub enum AbstractEvent {
+    Prompt(PromptEvent),
+    Constraint(ConstraintEvent),
+    Orchestration(OrchestrationEvent),
+    Intention(IntentionEvent),
+}
 
-    #[schemars(description = "How to play it (softly, normally, boldly, questioning)")]
-    pub how: String,
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct TimeRange {
+    pub start: AbsoluteTime,
+    pub end: AbsoluteTime,
+}
 
-    #[schemars(description = "The emotional vector shaping this intention")]
+impl AbstractEvent {
+    pub fn to_concrete(&self) -> ConcreteEvent {
+        self.realize()
+    }
+
+    pub fn applies_to(&self, _time_range: &TimeRange) -> bool {
+        // Placeholder implementation
+        true
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PromptEvent {
+    pub prompt: String,
     pub emotion: EmotionalVector,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ConstraintEvent {
+    pub constraint: String, // e.g., "stay in C minor"
+    pub emotion: EmotionalVector,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct OrchestrationEvent {
+    pub command: String, // e.g., "agent2, play a bassline"
+    pub emotion: EmotionalVector,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct IntentionEvent {
+    pub what: String,
+    pub how: String,
+    pub emotion: EmotionalVector,
+}
+
+
+pub mod context;
+pub mod messages;
+
+use resonode::*;
 
 /// A concrete sound event in the physical world.
 /// The "what actually happens" after intention becomes reality.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct Sound {
-    #[schemars(description = "MIDI note number (0-127)")]
-    pub pitch: u8,
-
-    #[schemars(description = "MIDI velocity (0-127)")]
-    pub velocity: u8,
-
-    #[schemars(description = "The emotional vector that birthed this sound")]
-    pub emotion: EmotionalVector,
-
-    #[schemars(description = "Duration in milliseconds")]
-    pub duration_ms: u64,
+pub enum ConcreteEvent {
+    Note(NoteEvent),
+    Chord(ChordEvent),
+    Control(ControlEvent),
+    Pattern(PatternInstance),
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct NoteEvent {
+    pub note: Note,
+    pub start_time: AbsoluteTime,
+    pub duration: Duration,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ChordEvent {
+    pub chord: Chord,
+    pub start_time: AbsoluteTime,
+    pub duration: Duration,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ControlEvent {
+    pub parameter: String,
+    pub value: f32,
+    pub time: AbsoluteTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PatternInstance {
+    pub pattern_id: String,
+    pub start_time: AbsoluteTime,
+    pub events: Vec<ConcreteEvent>,
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -94,23 +170,26 @@ mod tests {
             agency: -0.2,   // Yielding
         };
 
-        let intention = Intention {
+        let intention = AbstractEvent::Intention(IntentionEvent {
             what: "C".to_string(),
             how: "softly".to_string(),
             emotion,
-        };
-
-        let abstract_event = Event::Abstract(intention);
-        let concrete_event = Event::Concrete(Sound {
-            pitch: 60,
-            velocity: 40,
-            emotion,
-            duration_ms: 500,
         });
 
+        let abstract_event = Event::Abstract(intention);
+        let concrete_event = Event::Concrete(ConcreteEvent::Note(NoteEvent {
+            note: resonode::Note {
+                pitch: resonode::Pitch::new(60),
+                velocity: resonode::Velocity(40),
+                articulation: resonode::Articulation::Custom("".to_string()),
+            },
+            start_time: resonode::AbsoluteTime(0),
+            duration: resonode::Duration::Absolute(resonode::AbsoluteTime(500)),
+        }));
+
         // They coexist
-        assert!(matches!(abstract_event, Event::Abstract(_)));
-        assert!(matches!(concrete_event, Event::Concrete(_)));
+        assert!(abstract_event.is_abstract());
+        assert!(concrete_event.is_concrete());
     }
 
     #[test]

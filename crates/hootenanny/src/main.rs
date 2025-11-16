@@ -2,6 +2,7 @@ mod conversation;
 mod domain;
 mod realization;
 mod server;
+mod telemetry;
 pub mod persistence;
 
 use anyhow::{Context, Result};
@@ -27,16 +28,19 @@ struct Cli {
     /// Port to listen on
     #[arg(short, long, default_value = "8080")]
     port: u16,
+
+    /// OTLP gRPC endpoint for OpenTelemetry (e.g., "127.0.0.1:35991")
+    #[arg(long, default_value = "127.0.0.1:35991")]
+    otlp_endpoint: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
-        .with_writer(std::io::stderr)
-        .init();
-
     let cli = Cli::parse();
+
+    // Initialize OpenTelemetry with OTLP exporter
+    telemetry::init(&cli.otlp_endpoint)
+        .context("Failed to initialize OpenTelemetry")?;
 
     // Determine state directory - default to persistent location
     let state_dir = cli.state_dir.unwrap_or_else(|| {
@@ -151,5 +155,9 @@ async fn main() -> Result<()> {
 
     // ConversationStore will flush via Drop trait
     tracing::info!("Shutdown complete");
+
+    // Shutdown OpenTelemetry and flush remaining spans
+    telemetry::shutdown()?;
+
     Ok(())
 }

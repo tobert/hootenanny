@@ -14,11 +14,22 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# OpenTelemetry for observability
+opentelemetry = { version = "0.28", features = ["trace", "metrics", "logs"] }
+opentelemetry_sdk = { version = "0.28", features = ["rt-tokio", "trace", "metrics", "logs"] }
+opentelemetry-otlp = { version = "0.28", features = ["grpc-tonic", "trace", "metrics", "logs"] }
+tracing-opentelemetry = "0.29"
+opentelemetry-appender-tracing = "0.28"
+
 # Add path dependency to our new crate
 resonode = { path = "../resonode" }
 sled = "0.34"
 bincode = "1.3"
 clap = { version = "4.5.51", features = ["derive"] }
+
+[[example]]
+name = "two_agent_jam"
+path = "examples/two_agent_jam.rs"
 
 [dev-dependencies]
 tempfile = "3.8"

@@ -4,6 +4,7 @@
 //! Each node represents a musical utterance in the ongoing dialogue.
 
 use crate::domain::{EmotionalVector, Event};
+use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -25,8 +26,14 @@ pub struct ConversationNode {
     /// Parent node (None for root)
     pub parent: Option<NodeId>,
 
+    /// Child nodes
+    pub children: Vec<NodeId>,
+
     /// The musical event at this node (Abstract or Concrete)
     pub event: Event,
+
+    /// The branch this node belongs to
+    pub branch_id: BranchId,
 
     /// Which agent created this node
     pub author: AgentId,
@@ -56,6 +63,9 @@ pub struct ConversationBranch {
     /// Where this branch diverged from
     pub base: NodeId,
 
+    /// The state of the branch
+    pub state: BranchState,
+
     /// Why this branch was created
     pub fork_reason: ForkReason,
 
@@ -66,8 +76,19 @@ pub struct ConversationBranch {
     pub created_at: u64,
 }
 
+/// The state of a branch.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum BranchState {
+    /// The branch is active and can be added to.
+    Active,
+    /// The branch has been merged into another branch.
+    Merged { into: BranchId },
+    /// The branch has been abandoned.
+    Pruned,
+}
+
 /// Reasons for creating a new branch.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum ForkReason {
     /// Exploring an alternative musical idea
     ExploreAlternative {
@@ -108,8 +129,11 @@ pub struct ConversationTree {
     /// All branches, indexed by ID
     pub branches: HashMap<BranchId, ConversationBranch>,
 
-    /// The main/default branch
-    pub main_branch: BranchId,
+    /// The root node of the tree
+    pub root: NodeId,
+
+    /// The heads of the active branches
+    pub current_heads: HashMap<BranchId, NodeId>,
 
     /// Next available node ID
     pub next_node_id: NodeId,
@@ -121,7 +145,9 @@ impl ConversationTree {
         let root_node = ConversationNode {
             id: 0,
             parent: None,
+            children: Vec::new(),
             event: root_event,
+            branch_id: "main".to_string(),
             author: author.clone(),
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -136,6 +162,7 @@ impl ConversationTree {
             name: "main".to_string(),
             head: 0,
             base: 0,
+            state: BranchState::Active,
             fork_reason: ForkReason::UserRequest {
                 description: "Initial branch".to_string(),
             },
@@ -149,10 +176,14 @@ impl ConversationTree {
         let mut branches = HashMap::new();
         branches.insert("main".to_string(), main_branch);
 
+        let mut current_heads = HashMap::new();
+        current_heads.insert("main".to_string(), 0);
+
         Self {
             nodes,
             branches,
-            main_branch: "main".to_string(),
+            root: 0,
+            current_heads,
             next_node_id: 1,
         }
     }
@@ -168,8 +199,12 @@ impl ConversationTree {
     ) -> Result<NodeId, String> {
         let branch = self
             .branches
-            .get(branch_id)
+            .get_mut(branch_id)
             .ok_or_else(|| format!("Branch {} not found", branch_id))?;
+
+        if branch.state != BranchState::Active {
+            return Err(format!("Branch {} is not active", branch_id));
+        }
 
         let parent_id = branch.head;
         let node_id = self.next_node_id;
@@ -178,7 +213,9 @@ impl ConversationTree {
         let node = ConversationNode {
             id: node_id,
             parent: Some(parent_id),
+            children: Vec::new(),
             event,
+            branch_id: branch_id.clone(),
             author,
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -190,10 +227,14 @@ impl ConversationTree {
 
         self.nodes.insert(node_id, node);
 
-        // Update branch head
-        if let Some(branch) = self.branches.get_mut(branch_id) {
-            branch.head = node_id;
+        // Update parent's children
+        if let Some(parent_node) = self.nodes.get_mut(&parent_id) {
+            parent_node.children.push(node_id);
         }
+
+        // Update branch head
+        branch.head = node_id;
+        self.current_heads.insert(branch_id.clone(), node_id);
 
         Ok(node_id)
     }
@@ -217,6 +258,7 @@ impl ConversationTree {
             name: branch_name,
             head: from_node,
             base: from_node,
+            state: BranchState::Active,
             fork_reason: reason,
             participants,
             created_at: std::time::SystemTime::now()
@@ -226,6 +268,7 @@ impl ConversationTree {
         };
 
         self.branches.insert(branch_id.clone(), branch);
+        self.current_heads.insert(branch_id.clone(), from_node);
 
         Ok(branch_id)
     }
@@ -260,42 +303,39 @@ impl ConversationTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::Intention;
+    use crate::domain::{AbstractEvent, IntentionEvent};
 
-    #[test]
-    fn create_conversation_tree() {
-        let root_event = Event::Abstract(Intention {
+    fn create_test_tree() -> ConversationTree {
+        let root_event = Event::Abstract(AbstractEvent::Intention(IntentionEvent {
             what: "C".to_string(),
             how: "softly".to_string(),
             emotion: EmotionalVector::neutral(),
-        });
+        }));
 
-        let tree = ConversationTree::new(
+        ConversationTree::new(
             root_event,
             "agent_1".to_string(),
             EmotionalVector::neutral(),
-        );
+        )
+    }
+
+    #[test]
+    fn create_conversation_tree() {
+        let tree = create_test_tree();
 
         assert_eq!(tree.nodes.len(), 1);
         assert_eq!(tree.branches.len(), 1);
+        assert_eq!(tree.root, 0);
         assert!(tree.nodes.contains_key(&0));
+        assert!(tree.branches.contains_key("main"));
+        assert_eq!(tree.current_heads.get("main"), Some(&0));
     }
 
     #[test]
     fn add_node_to_branch() {
-        let root_event = Event::Abstract(Intention {
-            what: "C".to_string(),
-            how: "softly".to_string(),
-            emotion: EmotionalVector::neutral(),
-        });
+        let mut tree = create_test_tree();
 
-        let mut tree = ConversationTree::new(
-            root_event,
-            "agent_1".to_string(),
-            EmotionalVector::neutral(),
-        );
-
-        let second_event = Event::Abstract(Intention {
+        let second_event = Event::Abstract(AbstractEvent::Intention(IntentionEvent {
             what: "E".to_string(),
             how: "boldly".to_string(),
             emotion: EmotionalVector {
@@ -303,7 +343,7 @@ mod tests {
                 arousal: 0.8,
                 agency: 0.6,
             },
-        });
+        }));
 
         let node_id = tree
             .add_node(
@@ -317,22 +357,17 @@ mod tests {
 
         assert_eq!(node_id, 1);
         assert_eq!(tree.nodes.len(), 2);
-        assert_eq!(tree.nodes.get(&1).unwrap().parent, Some(0));
+        let new_node = tree.nodes.get(&1).unwrap();
+        assert_eq!(new_node.parent, Some(0));
+        assert_eq!(new_node.branch_id, "main");
+        assert_eq!(tree.branches.get("main").unwrap().head, 1);
+        assert_eq!(tree.current_heads.get("main"), Some(&1));
+        assert_eq!(tree.nodes.get(&0).unwrap().children, vec![1]);
     }
 
     #[test]
     fn fork_creates_new_branch() {
-        let root_event = Event::Abstract(Intention {
-            what: "C".to_string(),
-            how: "softly".to_string(),
-            emotion: EmotionalVector::neutral(),
-        });
-
-        let mut tree = ConversationTree::new(
-            root_event,
-            "agent_1".to_string(),
-            EmotionalVector::neutral(),
-        );
+        let mut tree = create_test_tree();
 
         let branch_id = tree
             .fork_branch(
@@ -347,34 +382,26 @@ mod tests {
 
         assert_eq!(tree.branches.len(), 2);
         assert!(tree.branches.contains_key(&branch_id));
+        assert!(tree.current_heads.contains_key(&branch_id));
 
         let branch = tree.branches.get(&branch_id).unwrap();
         assert_eq!(branch.base, 0);
         assert_eq!(branch.head, 0);
+        assert_eq!(branch.state, BranchState::Active);
     }
 
     #[test]
     fn get_path_to_node() {
-        let root_event = Event::Abstract(Intention {
-            what: "C".to_string(),
-            how: "softly".to_string(),
-            emotion: EmotionalVector::neutral(),
-        });
-
-        let mut tree = ConversationTree::new(
-            root_event,
-            "agent_1".to_string(),
-            EmotionalVector::neutral(),
-        );
+        let mut tree = create_test_tree();
 
         // Add a chain: 0 -> 1 -> 2
         tree.add_node(
             &"main".to_string(),
-            Event::Abstract(Intention {
+            Event::Abstract(AbstractEvent::Intention(IntentionEvent {
                 what: "E".to_string(),
                 how: "normally".to_string(),
                 emotion: EmotionalVector::neutral(),
-            }),
+            })),
             "agent_1".to_string(),
             EmotionalVector::neutral(),
             None,
@@ -383,11 +410,11 @@ mod tests {
 
         tree.add_node(
             &"main".to_string(),
-            Event::Abstract(Intention {
+            Event::Abstract(AbstractEvent::Intention(IntentionEvent {
                 what: "G".to_string(),
                 how: "boldly".to_string(),
                 emotion: EmotionalVector::neutral(),
-            }),
+            })),
             "agent_1".to_string(),
             EmotionalVector::neutral(),
             None,
@@ -400,26 +427,16 @@ mod tests {
 
     #[test]
     fn get_children_of_node() {
-        let root_event = Event::Abstract(Intention {
-            what: "C".to_string(),
-            how: "softly".to_string(),
-            emotion: EmotionalVector::neutral(),
-        });
-
-        let mut tree = ConversationTree::new(
-            root_event,
-            "agent_1".to_string(),
-            EmotionalVector::neutral(),
-        );
+        let mut tree = create_test_tree();
 
         // Create two children of root
         tree.add_node(
             &"main".to_string(),
-            Event::Abstract(Intention {
+            Event::Abstract(AbstractEvent::Intention(IntentionEvent {
                 what: "E".to_string(),
                 how: "normally".to_string(),
                 emotion: EmotionalVector::neutral(),
-            }),
+            })),
             "agent_1".to_string(),
             EmotionalVector::neutral(),
             None,
@@ -440,11 +457,11 @@ mod tests {
 
         tree.add_node(
             &branch_id,
-            Event::Abstract(Intention {
+            Event::Abstract(AbstractEvent::Intention(IntentionEvent {
                 what: "G".to_string(),
                 how: "boldly".to_string(),
                 emotion: EmotionalVector::neutral(),
-            }),
+            })),
             "agent_2".to_string(),
             EmotionalVector::neutral(),
             None,
@@ -454,6 +471,25 @@ mod tests {
         let children = tree.get_children(0);
         assert_eq!(children.len(), 2);
         assert!(children.contains(&1));
-        assert!(children.contains(&2));
+
+        let branch_children = tree.get_children(0);
+        assert_eq!(branch_children.len(), 2);
+    }
+
+    #[test]
+    fn test_forking() {
+        let mut tree = create_test_tree();
+        let branch_id = tree.fork_branch(
+            0,
+            "test_branch".to_string(),
+            ForkReason::UserRequest {
+                description: "test".to_string(),
+            },
+            vec!["test_agent".to_string()],
+        ).unwrap();
+
+        assert_eq!(tree.branches.len(), 2);
+        assert_eq!(tree.branches.get(&branch_id).unwrap().name, "test_branch");
+        assert_eq!(tree.current_heads.get(&branch_id), Some(&0));
     }
 }
