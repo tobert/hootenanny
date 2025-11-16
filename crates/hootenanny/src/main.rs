@@ -95,6 +95,14 @@ async fn main() -> Result<()> {
     tracing::info!("   Connect via: GET http://{}/sse", addr);
     tracing::info!("   Send messages: POST http://{}/message?sessionId=<id>", addr);
 
+    // Create shared conversation state FIRST
+    tracing::info!("🌳 Initializing conversation tree...");
+    let conversation_dir = state_dir.join("conversation");
+    std::fs::create_dir_all(&conversation_dir)?;
+    let conversation_state = ConversationState::new(conversation_dir)
+        .context("Failed to initialize conversation state")?;
+    let shared_state = Arc::new(Mutex::new(conversation_state));
+
     let sse_config = SseServerConfig {
         bind: addr.parse().context("Failed to parse bind address")?,
         sse_path: "/sse".to_string(),
@@ -105,9 +113,16 @@ async fn main() -> Result<()> {
 
     let (sse_server, router) = SseServer::new(sse_config);
 
-    let listener = tokio::net::TcpListener::bind(sse_server.config.bind).await?;
+    // Save bind address before sse_server is moved
+    let bind_addr = sse_server.config.bind;
 
-    let ct = sse_server.config.ct.child_token();
+    // Register the service BEFORE starting the server
+    tracing::info!("Setting up SSE server with EventDualityServer service.");
+    let ct = sse_server.with_service(move || EventDualityServer::new_with_state(shared_state.clone()));
+
+    let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+
+    tracing::info!("Router created: {:?}", router);
 
     let server = axum::serve(listener, router).with_graceful_shutdown(async move {
         ct.cancelled().await;
@@ -121,16 +136,6 @@ async fn main() -> Result<()> {
     });
 
     tracing::info!("🎵 Server ready. Let's dance!");
-
-    // Create shared conversation state
-    tracing::info!("🌳 Initializing conversation tree...");
-    let conversation_dir = state_dir.join("conversation");
-    std::fs::create_dir_all(&conversation_dir)?;
-    let conversation_state = ConversationState::new(conversation_dir)
-        .context("Failed to initialize conversation state")?;
-    let shared_state = Arc::new(Mutex::new(conversation_state));
-
-    let _ct = sse_server.with_service(move || EventDualityServer::new_with_state(shared_state.clone()));
 
     // Handle both SIGINT (Ctrl+C) and SIGTERM (cargo-watch, systemd, etc.)
     tokio::select! {

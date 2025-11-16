@@ -1,10 +1,10 @@
 # Plan 02: CLI Client `hrmcp` (Phase 1.5)
 
-**Status**: Planned - Execute immediately after Plan 00
+**Status**: ✅ **COMPLETE** (Implemented as `hrcli` with SSE transport)
 **Dependencies**: Requires Plan 00 (MVP) functional - server running and responding
 **Timeline**: 2-3 hours after Plan 00 completes
 **Priority**: High - Build before Plan 01 (Lua tools) for testing
-**Binary Name**: `hrmcp`
+**Binary Name**: `hrcli` (implemented) / `hrmcp` (planned)
 
 ## Overview
 
@@ -139,14 +139,14 @@ $ hrmcp call nonexistent "arg"
 
 ## Success Criteria
 
-- [ ] CLI connects to MCP server WebSocket (ephemeral connection)
-- [ ] `hrmcp list-tools` shows available tools with emoji
-- [ ] `hrmcp call review_code <code>` returns review from DeepSeek
-- [ ] `hrmcp call <tool> -` reads from stdin for piping
-- [ ] Beautiful output (colors, emoji, box-drawing)
-- [ ] Graceful error handling with actionable messages
-- [ ] `hrmcp --help` explains usage
-- [ ] Each invocation is stateless (connect → execute → exit)
+- [x] CLI connects to MCP server ~~WebSocket~~ SSE (ephemeral connection) ✅
+- [x] `hrcli list-tools` shows available tools with emoji ✅
+- [ ] `hrcli call review_code <code>` returns review from DeepSeek (review_code tool not implemented yet)
+- [x] `hrcli call <tool> -` reads from stdin for piping ✅
+- [x] Beautiful output (colors, emoji, box-drawing) ✅
+- [x] Graceful error handling with actionable messages ✅
+- [x] `hrcli --help` explains usage ✅
+- [x] Each invocation is stateless (connect → execute → exit) ✅
 
 ## Implementation Approach
 
@@ -245,6 +245,53 @@ $ hrmcp call review_code "fn main() {}"
 4. **Architecture**: ✅ Stateless-only (no REPL, simpler and more scriptable)
 5. **State transfer**: ✅ Build MCP tools for that if needed later
 
+## Implementation Notes (Session 8)
+
+### What Was Built ✅
+
+The CLI was successfully implemented as `hrcli` (in `crates/hrcli/`) with the following:
+
+1. **Transport Change**: Uses SSE (Server-Sent Events) instead of WebSocket
+   - SSE transport from `rmcp` library
+   - Fixed MCP handshake issue: must send `notifications/initialized` after init
+
+2. **Working Features**:
+   - ✅ `hrcli list-tools` - Lists all 10 musical tools with beautiful emoji output
+   - ✅ `hrcli call <tool> <json>` - Calls any tool with JSON arguments
+   - ✅ `hrcli call <tool> -` - Reads JSON from stdin for piping
+   - ✅ Beautiful colored output with emoji and box-drawing characters
+   - ✅ Stateless operation - connects, executes, exits
+
+3. **Musical Tools Available** (from Plan 3):
+   - `play` - Transform intentions into sound
+   - `add_node` - Add musical events to conversation tree
+   - `fork_branch` - Create alternative explorations
+   - `merge_branches` - Combine branches
+   - `get_tree_status` - View current state
+   - And 5 more...
+
+4. **Key Fix**: Session 8 solved the `tools/list` failure - it was a protocol issue where the client wasn't sending the required `notifications/initialized` message after the initial handshake.
+
+### Differences from Original Plan
+
+- **Binary name**: `hrcli` instead of `hrmcp`
+- **Transport**: SSE instead of WebSocket
+- **Tools**: Musical tools instead of code review tools (DeepSeek integration not done)
+- **Package**: Separate crate (`crates/hrcli/`) instead of combined binary
+
+### Example Usage
+
+```bash
+# List available tools
+$ cargo run -p hrcli -- list-tools
+
+# Call a musical tool
+$ cargo run -p hrcli -- call play '{"what": "C", "how": "softly", "valence": 0.5, "arousal": 0.3, "agency": 0.2, "agent_id": "claude"}'
+
+# Pipe JSON from stdin
+$ echo '{"what": "D", "how": "boldly", ...}' | cargo run -p hrcli -- call play -
+```
+
 ---
 
 **Contributors**:
@@ -252,4 +299,4 @@ $ hrmcp call review_code "fn main() {}"
 - 🤖 Claude <claude@anthropic.com>
 - 💎 Gemini <gemini@google.com>
 **Date**: 2025-11-15
-**Status**: Ready to implement after Plan 00
+**Status**: ✅ **COMPLETE** (2025-11-17)

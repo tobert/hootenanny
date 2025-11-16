@@ -1,1 +1,10 @@
 /target
+
+# Debug logs and test output
+server.log
+server_debug.log
+server_trace.log
+run.log
+sse_output.txt
+sse_full_output.txt
+*.log

@@ -454,30 +454,12 @@ impl EventDualityServer {
 
 #[tool_handler]
 impl ServerHandler for EventDualityServer {
+    // The macro generates list_tools and call_tool methods
+    // Let's add a custom method to verify the handler is working
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "Event Duality MCP Server - Musical Alchemy & Temporal Forking\n\n\
-                A conversational music generation server supporting multi-agent collaboration.\n\n\
-                🎵 MUSICAL ALCHEMY\n\
-                'play' - Transform intentions into sounds via EmotionalVector\n\
-                  - what: Note (C, D, E, F, G, A, B)\n\
-                  - how: Feeling (softly, normally, boldly, questioning)\n\
-                  - emotion: {valence, arousal, agency}\n\n\
-                🌳 CONVERSATION TREE\n\
-                'add_node' - Add your musical contribution to the tree\n\
-                  - intention: Your musical intention\n\
-                  - agent_id: Your identifier\n\
-                  - branch_id: Optional branch (defaults to current)\n\
-                  - description: Optional note about your contribution\n\n\
-                'fork_branch' - Explore alternative musical directions\n\
-                  - branch_name: Name for new branch\n\
-                  - from_node: Optional fork point (defaults to current head)\n\
-                  - reason_description: Why fork?\n\
-                  - participants: Agent IDs in this exploration\n\n\
-                'get_tree_status' - View conversation state\n\n\
-                All changes persist across sessions!"
-                    .into(),
+                "Event Duality MCP Server - Musical ensemble collaboration".into()
             ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
