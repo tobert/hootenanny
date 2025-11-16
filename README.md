@@ -77,6 +77,30 @@ cargo watch -x 'run -p hootenanny'
 # Terminal 2: Use Claude Code with /mcp
 ```
 
+### Connecting with a Client
+
+You can connect to the MCP server using various clients.
+
+#### Claude CLI
+
+To connect to the server using the Claude CLI, run the following command:
+
+```bash
+claude mcp add --transport sse hootenanny http://127.0.0.1:8080/sse
+```
+
+This will add the `hootenanny` server to your Claude CLI configuration. You can then use the `play` tool and other tools provided by the server.
+
+#### Gemini CLI
+
+To connect to the server using the Gemini CLI, run the following command:
+
+```bash
+gemini mcp add hootenanny http://127.0.0.1:8080/sse
+```
+
+This will add the `hootenanny` server to your Gemini CLI configuration. You can then use the `play` tool and other tools provided by the server.
+
 ### SSE Endpoints
 
 - **GET** `http://127.0.0.1:8080/sse` - Connect and receive your session ID via event stream

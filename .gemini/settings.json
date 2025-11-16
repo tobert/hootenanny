@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "otlp-mcp": {
+      "command": "/home/atobey/src/otlp-mcp/otlp-mcp",
+      "args": [
+        "serve"
+      ]
+    },
+    "hrmcp": {
+      "url": "http://127.0.0.1:8080",
+      "trust": true
+    }
+  }
+}
