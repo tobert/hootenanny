@@ -71,18 +71,35 @@ The project is a Rust workspace with two primary crates located in the `crates/`
 
 ## State Management & Persistence
 
-The system uses an **Event Sourcing** strategy to ensure that the state of the musical jam session is durable and can be recovered. This is managed by the `hootenanny` crate.
+The system uses an **Event Sourcing** strategy powered by **AOL** and **Cap'n Proto** to ensure that the state of the musical jam session is durable, fast, and compact. This is managed by the `hootenanny` crate.
 
-1.  **The Journal**: Every change to the state is captured as an `Event` and appended to an immutable log file (e.g., `/path/to/state/journal.jsonl`). This provides a complete, auditable history of the session.
+### Technology Stack
 
-2.  **Snapshots**: To ensure fast startup times, the system periodically creates a full snapshot of the current state and saves it to a file (e.g., `/path/to/state/snapshots/timestamp.json`).
+- **[AOL (Append-Only Log)](https://docs.rs/aol/)**: Simple, efficient event journal (no need to build our own)
+- **[Cap'n Proto](https://capnproto.org/)**: Zero-copy serialization for speed and compactness
+- **Focus**: Build music systems, not databases
 
-3.  **Startup Process**:
-    - On launch, `hootenanny` loads the most recent snapshot.
-    - It then replays any events from the journal that occurred after the snapshot was created.
-    - This brings the system to its exact last-known state, ready to continue the session.
+See **[Persistence Architecture](design/persistence.md)** for detailed rationale.
 
-This approach provides high clarity and debuggability, as the entire history of the session is preserved in a human-readable format.
+### How It Works
+
+1.  **The Journal** (AOL): Every change to the state is captured as an `Event` and appended to AOL's immutable log. This provides a complete, durable history of the session.
+
+2.  **Serialization** (Cap'n Proto): Events are serialized using Cap'n Proto's zero-copy format, enabling:
+    - **Fast writes**: Minimal overhead when models generate copious musical data
+    - **Instant reads**: Zero-copy deserialization for playback
+    - **Compact storage**: Efficient encoding of musical events and conversation trees
+
+3.  **Snapshots**: Periodic snapshots of the current state for fast startup.
+
+4.  **Startup Process**:
+    - On launch, `hootenanny` loads the most recent snapshot
+    - It then replays any events from AOL that occurred after the snapshot
+    - This brings the system to its exact last-known state, ready to continue
+
+### Why This Matters
+
+Models will generate **copious musical data** during jam sessions. Cap'n Proto's zero-copy semantics and AOL's efficient append-only log mean we can handle thousands of events per session without performance degradation.
 
 ## Key Design Decisions
 
@@ -96,14 +113,19 @@ This approach provides high clarity and debuggability, as the entire history of 
 - **Clear API**: Forces a well-defined interface between the two crates, aligning with the "Compiler as Creative Partner" philosophy.
 - **Reusability**: `resonode` could be used by other applications in the future.
 
-### 2. Event Sourcing for Persistence
+### 2. AOL + Cap'n Proto for Persistence
 
-**Decision**: Use a journal of events with periodic snapshots to manage state.
+**Decision**: Use AOL (Append-Only Log) for event sourcing and Cap'n Proto for serialization.
 
 **Rationale**:
-- **Durability**: The state of the jam is never lost on restart.
-- **Clarity & Debuggability**: The journal provides a complete, human-readable history of how the system reached its current state.
-- **Spendy on IO is OK**: Aligns with the principle of prioritizing code clarity over raw IO performance.
+- **Don't Build Our Own**: AOL is simple, efficient infrastructure - focus on music, not databases
+- **Performance**: Cap'n Proto's zero-copy semantics handle copious model-generated data
+- **Durability**: The state of the jam is never lost on restart
+- **Efficiency**: Compact encoding and instant deserialization for replay
+- **Simplicity**: Lightweight append-only log without unnecessary complexity
+- **Focus on Goals**: Build musical collaboration systems, not persistence infrastructure
+
+See **[docs/design/persistence.md](design/persistence.md)** for detailed analysis.
 
 ### 3. SSE Transport (vs WebSocket)
 
@@ -136,13 +158,17 @@ cargo build --release
 ## References
 
 - **Alchemical Codex**: `docs/design/01-musical-alchemy.md`
+- **Persistence Architecture**: `docs/design/persistence.md` ⭐ NEW
 - **MCP Specification**: https://modelcontextprotocol.io
 - **rmcp SDK**: https://github.com/modelcontextprotocol/rust-sdk
+- **AOL Documentation**: https://docs.rs/aol/
+- **Cap'n Proto**: https://capnproto.org/
 - **Development Guidelines**: `docs/BOTS.md`
 - **Project Context**: `docs/agents/CONTEXT.md`
 - **Implementation Plans**: `docs/agents/plans/`
 
 ---
 
-**Last Updated**: 2025-11-15 by 💎 Gemini
-**Architecture Status**: Refactored to a workspace. Persistence layer design is in place.
+**Last Updated**: 2025-11-16
+**Contributors**: 💎 Gemini (workspace refactor), 🤖 Claude (persistence docs)
+**Architecture Status**: Workspace established. AOL + Cap'n Proto for persistence. Event Duality MCP server working.

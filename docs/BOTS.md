@@ -1,6 +1,7 @@
 # BOTS.md - Coding Agent Context for HalfRemembered MCP
 
-HalfRemembered MCP is an experiment to create some MCPs to help you and I collaborate on making music as an ensemble.
+HalfRemembered MCP is an ensemble performance space for large language model agents, music models, and humans to create
+music interactively.
 
 ## 📜 Project Philosophy
 
@@ -53,27 +54,6 @@ jj describe         # Update as you learn
 # 3. PERSIST: Save your state
 jj git push -c @    # Make it permanent
 ```
-
-### Writing Safe, Multi-line Descriptions
-
-**IMPORTANT:** When writing a multi-line description, the shell can misinterpret parts of your message as commands, leading to errors. To prevent this, always use a `heredoc` (`<<'EOF'`). This ensures your entire message is passed as a single, literal string.
-
-**Correct, Safe Syntax:**
-```bash
-jj describe -m "$(cat <<'EOF'
-<type>: <what>
-
-Why: ...
-Approach: ...
-Learned: ...
-Next: ...
-
-<Attribution>
-EOF
-)"
-```
-
-This is the standard we will use for all multi-line commit messages.
 
 ### The Universal Description Template
 

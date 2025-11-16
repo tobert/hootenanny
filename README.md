@@ -4,7 +4,24 @@
 
 An MCP server for collaborative human-AI music ensemble. This is the Master Control Program for the HalfRemembered project - building music the way we build software.
 
+## Quick Start
+
+```bash
+# Run the MCP server (hootenanny crate)
+cargo run -p hootenanny
+
+# In another terminal, test with curl
+curl -N http://127.0.0.1:8080/sse
+```
+
+Then connect via your MCP client and try:
+```json
+{"what": "C", "how": "softly"}  → {"pitch": 60, "velocity": 40}
+```
+
 ## Current Status: Plan 00 - Event Duality Hello World ✅
+
+**COMPLETE!** Successfully tested end-to-end with Claude Code MCP client (2025-11-16).
 
 We've proven the core concept: **Intentions become sounds through type-rich transformations.**
 
@@ -15,12 +32,18 @@ enum Event {
 }
 ```
 
+**Test Results:**
+- ✅ C, softly → pitch: 60, velocity: 40 (quiet)
+- ✅ E, boldly → pitch: 64, velocity: 90 (strong)
+- ✅ G, questioning → pitch: 67, velocity: 50 (tentative)
+- ✅ A, normally → pitch: 69, velocity: 64 (moderate)
+
 ## Running the Server
 
 ### Basic Run
 
 ```bash
-cargo run
+cargo run -p hootenanny
 ```
 
 The server starts on **http://127.0.0.1:8080** with SSE transport (multi-client ready).
@@ -34,10 +57,10 @@ For development, use `cargo-watch` to automatically rebuild and restart when you
 cargo install cargo-watch
 
 # Run with auto-restart
-cargo watch -x run
+cargo watch -x 'run -p hootenanny'
 ```
 
-Now any changes to `.rs` files will trigger an automatic rebuild and restart! 🔄
+Now any changes to `.rs` files in either `hootenanny` or `resonode` will trigger an automatic rebuild and restart! 🔄
 
 ### Integration with MCP Clients
 
@@ -48,8 +71,8 @@ The server is ready to use with any MCP client. For **Claude Code**:
 3. The `play` tool will be available to use!
 
 ```bash
-# Terminal 1: Run the server
-cargo watch -x run
+# Terminal 1: Run the server with auto-restart
+cargo watch -x 'run -p hootenanny'
 
 # Terminal 2: Use Claude Code with /mcp
 ```
@@ -164,9 +187,19 @@ Building a real-time music generation system that is fast, weird, and expressive
 
 ## What's Next
 
-- **Plan 01**: Expand musical domain model (scales, rhythms, dynamics)
-- **Plan 02**: Add conversation trees for musical dialogue
-- **Plan 03**: Multi-agent ensemble coordination
+**Architecture Evolution: Two-Crate Design**
+
+We're splitting the system into focused crates:
+
+- **`resonode`** 🎵 - Musical domain (Event Duality, sounds, realization, scales, rhythms)
+- **`hootenanny`** 🎭 - Conversation system (multi-agent collaboration, temporal forking, dialogue trees)
+
+This separation keeps musical logic independent from conversation mechanics.
+
+**Upcoming Plans:**
+- **Plan 01**: Expand resonode musical domain model
+- **Plan 02**: Build hootenanny conversation trees
+- **Plan 03**: Multi-agent ensemble coordination (Gemini is working on this!)
 - **Plan 04**: Browser UI for visual interaction
 
 ---

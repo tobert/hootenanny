@@ -1,9 +1,25 @@
 # Plan 03: Musical Domain Model
 
-**Status**: Ready to implement
-**Dependencies**: Plan 00 (core MCP server) should be functional
+**Status**: 🔄 **IN PROGRESS** (Gemini working on this)
+**Dependencies**: ✅ Plan 00 complete, workspace structure established
 **Timeline**: 1-2 weeks
 **Priority**: Critical - this is the heart of our system
+
+## Architecture Update (2025-11-16)
+
+The project has been refactored into a workspace with two crates:
+- **`resonode`** - Pure music engine (EmotionalVector, MusicalPhrase, transformations)
+- **`hootenanny`** - MCP server + conversation system (persistence, server, MCP handlers)
+
+This separation keeps musical logic clean and reusable.
+
+### Persistence Architecture
+
+**Why Rio + Cap'n Proto:**
+- **Rio**: Modern, fast journal/event sourcing library - no need to build our own
+- **Cap'n Proto**: Zero-copy serialization keeps things fast and compact
+- **Goal**: Let models generate copious musical data without performance bottlenecks
+- **Focus**: Building music systems, not reinventing persistence infrastructure
 
 ## Overview
 
@@ -92,33 +108,42 @@ pub struct MusicalContext {
 - Demonstrate parallel exploration
 - Document the API
 
-## Files to Create
+## Files to Create/Extend
 
+### In `resonode` crate (pure music engine):
 ```
-src/
-├── domain/
-│   ├── mod.rs
-│   ├── events.rs         # Event, Concrete, Abstract
-│   ├── conversation.rs   # Tree, Node, Branch
-│   ├── context.rs        # MusicalContext
-│   ├── messages.rs       # JamMessage types
-│   └── music.rs          # Note, Chord, Key, Scale
+crates/resonode/src/
+├── lib.rs                # ✅ EmotionalVector, MusicalPhrase (started)
+├── harmony.rs            # Chord, Harmony, voice leading
+├── rhythm.rs             # Rhythm, timing, swing
+├── melody.rs             # Melodic contours, intervals
+├── timbre.rs             # Timbral qualities
+├── dynamics.rs           # Volume, expression
+└── transformations.rs    # EmotionalVector → musical params
+```
+
+### In `hootenanny` crate (server + conversation):
+```
+crates/hootenanny/src/
+├── main.rs               # ✅ MCP server (working)
+├── domain.rs             # ✅ Event duality (basic)
+├── server.rs             # ✅ MCP handlers
+├── persistence/          # ✅ Event sourcing (placeholder)
 ├── conversation/
 │   ├── mod.rs
-│   ├── tree.rs           # Tree operations
-│   ├── forking.rs        # Fork/merge logic
-│   └── routing.rs        # Message routing
-└── mcp_extensions/
-    ├── mod.rs
-    └── musical.rs        # Musical MCP methods
+│   ├── tree.rs           # ConversationTree structure
+│   ├── forking.rs        # Fork/merge operations
+│   └── messages.rs       # JamMessage routing
+└── realization.rs        # ✅ Intention → Sound (basic)
 ```
 
 ## Integration Points
 
-### With Plan 00 (MCP Server)
-- Extends the base MCP server with musical methods
-- Uses WebSocket transport for real-time communication
-- Leverages existing error handling and logging
+### With Plan 00 (MCP Server) ✅
+- ✅ Base MCP server working in `hootenanny`
+- ✅ SSE transport for real-time, multi-client communication
+- ✅ Error handling and logging infrastructure ready
+- Plan 03 extends with conversation tree operations
 
 ### With Plan 02 (CLI)
 - CLI gains musical commands:
@@ -164,17 +189,34 @@ if conversation.evaluate(harmony_branch) > 0.7 {
 }
 ```
 
-## Dependencies to Add
+## Dependencies
 
+### Already Added ✅
 ```toml
-# Musical types
+# Persistence
+rio = "0.9.4"           # Event sourcing journal
+capnp = "0.23.0"        # Zero-copy serialization
+capnpc = "0.23.2"       # Cap'n Proto compiler (build-time)
+
+# MCP & Server
+rmcp = { git = "...", features = ["server", "transport-sse-server", "macros"] }
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+
+# Basics
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+```
+
+### To Add for Musical Features
+```toml
+# Musical types (for resonode)
 midi-types = "0.1"  # MIDI 2.0 support
 
-# Tree operations
-petgraph = "0.6"    # Graph algorithms
-
-# Serialization
-bincode = "1.3"     # Fast binary serialization
+# Tree operations (for hootenanny conversation trees)
+petgraph = "0.6"    # Graph algorithms for conversation branching
 ```
 
 ## Next Steps (Plan 04)

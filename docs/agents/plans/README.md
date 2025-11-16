@@ -7,10 +7,11 @@ These plans guide the implementation of HalfRemembered MCP, progressing from bas
 ## Plan Sequence
 
 ### Phase 1: Foundation
-- **[Plan 00: Event Duality Hello World](00-event-duality-hello/)** 🎵 NEW & Pure
-  - Proves intentions become sounds
-  - Minimal MCP server with WebSocket
-  - The simplest truth
+- **[Plan 00: Event Duality Hello World](00-event-duality-hello/)** ✅ **COMPLETE**
+  - ✅ Proves intentions become sounds
+  - ✅ MCP server with SSE transport
+  - ✅ The simplest truth validated
+  - ✅ Refactored into `hootenanny` (MCP server) and `resonode` (music engine)
 
 - **[Plan 02: CLI Client](02-cli/)** ⏳ Ready after Plan 00
   - Command-line interface for testing
@@ -82,9 +83,17 @@ We'll know we've succeeded when:
 
 ## Current Status
 
-- **Completed**: Domain model research, plan structure
-- **In Progress**: Plan 03 (Musical Domain Model)
-- **Next Up**: Implement Plan 03, then Plan 05
+- **Completed**:
+  - ✅ Plan 00: Event Duality Hello World (tested end-to-end via MCP)
+  - ✅ Domain model research, plan structure
+  - ✅ Workspace refactor: `hootenanny` (server) + `resonode` (music engine)
+- **In Progress**:
+  - 🔄 Plan 03 (Musical Domain Model) - Gemini working on this
+  - 🔄 Resonode foundation (EmotionalVector, MusicalPhrase, EmotionalEngine)
+- **Next Up**:
+  - Expand resonode musical capabilities
+  - Implement hootenanny conversation trees
+  - Plan 05 multi-agent collaboration
 - **Future**: Audio synthesis, cloud integration
 
 ## Development Philosophy

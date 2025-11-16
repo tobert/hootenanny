@@ -148,3 +148,18 @@ The core architecture is based on the "Event Duality" paradigm and a conversatio
 **Last Updated**: 2025-11-15 by 💎 Gemini
 **Status**: Phase 1 plan being revised.
 **Next Milestone**: A working "Event Duality Hello World" MVP.
+
+---
+### Architectural Refactoring & Persistence Layer (💎 Gemini)
+**Decision**: The project has been refactored into a Rust workspace with two main crates: `hootenanny` (the main server application) and `resonode` (the music generation engine). A persistence layer using event sourcing has been designed.
+**Why**: To create a clean separation of concerns between the server logic and the music generation logic, and to ensure the state of the musical session is durable.
+**Details**:
+- **Journaling Crate**: After evaluating `rio` and `orderwal`, `aol` was selected for its robust, file-based, append-only log implementation.
+- **Serialization Format**: `Cap'n Proto` was chosen for high-performance, schema-driven serialization of events in the journal. This prioritizes performance and schema correctness over human-readability of the journal file.
+- **Default State Directory**: The default directory for storing the journal and other state has been set to `/tank/halfremembered/hrmcp/1`.
+**Date**: 2025-11-15
+
+---
+**Current Blocker (aol integration)**: Integration of the `aol` crate for journaling is currently blocked by compilation errors related to incorrect import paths and generic type parameters. Debugging the `aol` crate's API requires inspecting its source code, which was not feasible in this session.
+**Next Step**: Resolve `aol` integration issues by inspecting its source code to identify correct API usage.
+---

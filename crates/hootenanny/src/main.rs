@@ -3,12 +3,24 @@ mod realization;
 mod server;
 pub mod persistence;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use clap::Parser;
+use persistence::journal::{Journal, SessionEvent};
 use rmcp::transport::sse_server::{SseServer, SseServerConfig};
 use server::EventDualityServer;
-use std::time::Duration;
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
+
+/// The Hootenanny MCP Server
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    /// The directory to store the journal and other state.
+    #[arg(short, long, default_value = "/tank/halfremembered/hrmcp/1")]
+    state_dir: PathBuf,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -16,6 +28,41 @@ async fn main() -> Result<()> {
         .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
         .with_writer(std::io::stderr)
         .init();
+
+    let cli = Cli::parse();
+    std::fs::create_dir_all(&cli.state_dir).context("Failed to create state directory")?;
+    tracing::info!("Using state directory: {}", cli.state_dir.display());
+
+    // --- Persistence Test ---
+    tracing::info!("🗄️  Initializing sled journal...");
+    let mut journal = Journal::new(&cli.state_dir)?;
+
+    tracing::info!("📝 Writing 'sessionStarted' event...");
+    let event = SessionEvent {
+        timestamp: SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)?
+            .as_nanos() as u64,
+        event_type: "sessionStarted".to_string(),
+    };
+    let event_id = journal.write_session_event(&event)?;
+    tracing::info!("   ✅ Event written with ID: {}", event_id);
+
+    tracing::info!("📖 Reading all events from journal...");
+    let events = journal.read_events()?;
+    tracing::info!("   Found {} event(s) in the journal.", events.len());
+
+    for (i, event) in events.iter().enumerate() {
+        tracing::info!(
+            "   Event {}: timestamp={} type={}",
+            i,
+            event.timestamp,
+            event.event_type
+        );
+    }
+
+    journal.flush()?;
+    tracing::info!("💾 Journal flushed to disk");
+    // --- End Persistence Test ---
 
     let addr = "127.0.0.1:8080";
 
@@ -50,10 +97,10 @@ async fn main() -> Result<()> {
 
     tracing::info!("🎵 Server ready. Let's dance!");
 
-    let ct = sse_server.with_service(EventDualityServer::new);
+    let _ct = sse_server.with_service(EventDualityServer::new);
 
     tokio::signal::ctrl_c().await?;
-    ct.cancel();
+    // ct.cancel(); // This is now handled by the _ct drop guard
 
     Ok(())
 }

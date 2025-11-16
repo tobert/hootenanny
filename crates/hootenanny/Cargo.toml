@@ -16,3 +16,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Add path dependency to our new crate
 resonode = { path = "../resonode" }
+sled = "0.34"
+bincode = "1.3"
+clap = { version = "4.5.51", features = ["derive"] }
+
+[build-dependencies]
+capnpc = "0.23.2"
