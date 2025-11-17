@@ -27,6 +27,7 @@ async fn executes_play_tool_successfully() {
         .arg("--valence").arg("0.5")
         .arg("--arousal").arg("0.3")
         .arg("--agency").arg("0.2")
+        .arg("--agent-id").arg("test-agent")
         .output()
         .expect("Failed to execute hrcli");
 

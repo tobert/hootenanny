@@ -15,6 +15,8 @@ pub struct ToolInfo {
     pub description: String,
     #[serde(default)]
     pub parameters: String,
+    #[serde(default, rename = "inputSchema")]
+    pub input_schema: Option<Value>,
 }
 
 pub struct McpClient {
@@ -61,36 +63,30 @@ impl McpClient {
             ));
         }
 
-        eprintln!("[MCP] SSE connection successful, reading stream for session ID...");
+        eprintln!("[MCP] SSE connection successful, starting listener...");
 
-        let mut stream = response.bytes_stream();
+        let stream = response.bytes_stream();
 
-        // First, get the session ID from the initial "endpoint" event
-        let session_id_future = async {
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk.context("Failed to read SSE chunk")?;
-                let text = String::from_utf8_lossy(&chunk);
-                if let Some(session_id) = extract_session_id(&text) {
-                    self.session_id = Some(session_id.clone());
-                    return Ok::<String, anyhow::Error>(session_id);
-                }
-            }
-            Err(anyhow!("SSE stream ended without providing session ID"))
-        };
-
-        let session_id = timeout(Duration::from_secs(5), session_id_future)
-            .await
-            .context("Timeout waiting for session ID from SSE stream")??;
-
-        eprintln!("[MCP] Got session ID: {}", session_id);
+        // Create channel for listener to send back session ID
+        let (session_tx, session_rx) = oneshot::channel();
 
         // Spawn the background task to listen for SSE messages
+        // The listener will extract the session ID and send it back
         let responses = self.responses.clone();
         tokio::spawn(async move {
             eprintln!("[MCP] SSE listener task started");
-            listen_for_responses(stream, responses).await;
+            listen_for_responses(stream, responses, session_tx).await;
             eprintln!("[MCP] SSE listener task ended");
         });
+
+        // Wait for session ID from the listener
+        let session_id = timeout(Duration::from_secs(5), session_rx)
+            .await
+            .context("Timeout waiting for session ID from SSE stream")?
+            .context("Failed to receive session ID from listener")?;
+
+        eprintln!("[MCP] Got session ID: {}", session_id);
+        self.session_id = Some(session_id);
 
         eprintln!("[MCP] Starting MCP initialization handshake...");
 
@@ -193,6 +189,7 @@ impl McpClient {
                 name,
                 description,
                 parameters,
+                input_schema: tool.get("inputSchema").cloned(),
             });
         }
 
@@ -326,9 +323,11 @@ fn extract_session_id(text: &str) -> Option<String> {
 async fn listen_for_responses(
     mut stream: impl futures::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
     responses: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
+    session_sender: oneshot::Sender<String>,
 ) {
     let mut current_event_type: Option<String> = None;
     let mut chunk_count = 0;
+    let mut session_sender = Some(session_sender);
 
     while let Some(chunk_result) = stream.next().await {
         match chunk_result {
@@ -353,27 +352,43 @@ async fn listen_for_responses(
                     if line.starts_with("data:") {
                         let data = line[5..].trim();
 
+                        // Extract session ID from endpoint event if we haven't sent it yet
+                        if let Some(sender) = session_sender.take() {
+                            if let Some(session_id) = extract_session_id(&text) {
+                                eprintln!("[MCP-LISTENER] Extracted session ID: {}", session_id);
+                                let _ = sender.send(session_id);
+                                continue;
+                            } else {
+                                // Put it back if we didn't find the session ID yet
+                                session_sender = Some(sender);
+                            }
+                        }
+
                         // Only try to parse JSON for "message" events
                         if current_event_type.as_deref() == Some("message") {
                             match serde_json::from_str::<Value>(data) {
                                 Ok(value) => {
-
+                                    eprintln!("[MCP-LISTENER] Parsed message: {:?}", value);
                                     if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
                                         let mut resp_map = responses.lock().await;
                                         if let Some(sender) = resp_map.remove(&id) {
+                                            eprintln!("[MCP-LISTENER] Dispatching response for id: {}", id);
                                             let _ = sender.send(value);
+                                        } else {
+                                            eprintln!("[MCP-LISTENER] No waiting receiver for id: {}", id);
                                         }
                                     }
                                 }
-                                Err(_) => {
-                                    // Ignore parse errors silently
+                                Err(e) => {
+                                    eprintln!("[MCP-LISTENER] Failed to parse JSON: {}", e);
                                 }
                             }
                         }
                     }
                 }
             }
-            Err(_) => {
+            Err(e) => {
+                eprintln!("[MCP-LISTENER] Stream error: {}", e);
                 break; // SSE stream closed or error
             }
         }

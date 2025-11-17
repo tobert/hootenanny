@@ -194,8 +194,13 @@ impl DiscoveryClient {
     }
 
     fn parse_input_schema(&self, tool: &crate::mcp_client::ToolInfo) -> Option<Value> {
-        // Try to reconstruct schema from parameter string
-        // This is a fallback for basic MCP servers
+        // Use the real inputSchema from MCP if available
+        if let Some(schema) = &tool.input_schema {
+            return Some(schema.clone());
+        }
+
+        // Fallback: Try to reconstruct schema from parameter string
+        // This is for basic MCP servers without proper schemas
         if !tool.parameters.is_empty() {
             let params: Vec<&str> = tool.parameters.split(", ").collect();
             let mut properties = serde_json::Map::new();

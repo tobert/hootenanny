@@ -27,31 +27,83 @@ pub struct TestMcpServer {
 }
 
 impl TestMcpServer {
-    /// Wait for the server to be ready by polling the SSE endpoint
-    async fn wait_for_server_ready(port: u16) -> Result<()> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(1))
-            .build()?;
-        let url = format!("http://127.0.0.1:{}/sse", port);
+    /// Wait for the MCP service to be ready by performing an actual MCP handshake
+    async fn wait_for_mcp_ready(port: u16) -> Result<()> {
+        use futures::StreamExt;
+        use serde_json::json;
 
         let start = std::time::Instant::now();
         let max_wait = Duration::from_secs(10);
 
         loop {
-            match client.get(&url).send().await {
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(2))
+                .build()?;
+
+            // Try to connect to SSE endpoint and get session ID
+            let sse_url = format!("http://127.0.0.1:{}/sse", port);
+            let sse_result = client.get(&sse_url).send().await;
+
+            match sse_result {
                 Ok(response) if response.status().is_success() => {
-                    return Ok(());
-                }
-                _ => {
-                    if start.elapsed() > max_wait {
-                        return Err(anyhow!(
-                            "Server did not become ready within {:?}",
-                            max_wait
-                        ));
+                    // Read the SSE stream to extract session ID
+                    let mut stream = response.bytes_stream();
+                    if let Some(Ok(chunk)) = stream.next().await {
+                        let text = String::from_utf8_lossy(&chunk);
+
+                        // Look for session ID in the endpoint event
+                        for line in text.lines() {
+                            if line.starts_with("data: /message?sessionId=") {
+                                let session_id = &line[25..];
+
+                                // Try to send a test initialize request
+                                let message_url = format!(
+                                    "http://127.0.0.1:{}/message?sessionId={}",
+                                    port, session_id
+                                );
+
+                                let init_request = json!({
+                                    "jsonrpc": "2.0",
+                                    "id": 1,
+                                    "method": "initialize",
+                                    "params": {
+                                        "protocolVersion": "2025-06-18",
+                                        "capabilities": {},
+                                        "clientInfo": {
+                                            "name": "test-client",
+                                            "version": "0.1.0"
+                                        }
+                                    }
+                                });
+
+                                let post_result = client
+                                    .post(&message_url)
+                                    .header("Content-Type", "application/json")
+                                    .body(init_request.to_string())
+                                    .send()
+                                    .await;
+
+                                if let Ok(resp) = post_result {
+                                    if resp.status() == reqwest::StatusCode::ACCEPTED {
+                                        // Server accepted the message, it's ready!
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                        }
                     }
-                    tokio::time::sleep(Duration::from_millis(50)).await;
                 }
+                _ => {}
             }
+
+            if start.elapsed() > max_wait {
+                return Err(anyhow!(
+                    "MCP service did not become ready within {:?}",
+                    max_wait
+                ));
+            }
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 
@@ -103,23 +155,32 @@ impl TestMcpServer {
 
         let bind_str = format!("127.0.0.1:{}", actual_port);
 
-        // Register the service
-        let ct = sse_server.with_service(move || {
-            EventDualityServer::new_with_state(shared_state.clone())
-        });
+        // Create channel to signal when MCP service is ready
+        use tokio::sync::oneshot;
+        let (ready_tx, ready_rx) = oneshot::channel();
 
         // Run server in a dedicated thread with its own runtime
         // This is critical for subprocess connections to work!
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
+                // Register the service INSIDE the server thread's runtime
+                // This ensures the service handler is registered in the correct runtime context
+                let ct = sse_server.with_service(move || {
+                    EventDualityServer::new_with_state(shared_state.clone())
+                });
+
                 let listener = match tokio::net::TcpListener::bind(&bind_str).await {
                     Ok(l) => l,
                     Err(e) => {
                         eprintln!("Failed to bind test server: {}", e);
+                        let _ = ready_tx.send(Err(anyhow!("Failed to bind: {}", e)));
                         return;
                     }
                 };
+
+                // Signal that server is bound and service is registered
+                let _ = ready_tx.send(Ok(()));
 
                 let server = axum::serve(listener, router).with_graceful_shutdown(async move {
                     ct.cancelled().await;
@@ -131,8 +192,13 @@ impl TestMcpServer {
             });
         });
 
-        // Wait for server to be ready by polling the SSE endpoint
-        Self::wait_for_server_ready(actual_port).await?;
+        // Wait for server to signal readiness
+        ready_rx
+            .await
+            .context("Server thread dropped before signaling ready")??;
+
+        // Wait for MCP service to be fully functional with handshake test
+        Self::wait_for_mcp_ready(actual_port).await?;
 
         let url = format!("http://127.0.0.1:{}", actual_port);
 

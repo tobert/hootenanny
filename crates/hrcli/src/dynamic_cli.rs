@@ -1,7 +1,7 @@
 // A truly dynamic CLI system that doesn't fight the framework
 use anyhow::{Result, Context};
 use std::collections::HashMap;
-use crate::discovery::schema::{DynamicToolSchema, ParameterHandler};
+use crate::discovery::schema::{DynamicToolSchema, ParameterHandler, ParameterInfo};
 
 /// Dynamic command-line parser that works with runtime-discovered schemas
 pub struct DynamicCli {
@@ -149,7 +149,7 @@ impl DynamicCli {
                 .find(|p| to_kebab_case(&p.name) == arg_name || p.name == arg_name);
 
             if let Some(param_info) = param {
-                let value = self.parse_parameter_value(&param_info.handler, args, &mut i)?;
+                let value = self.parse_parameter_value(&param_info, args, &mut i)?;
                 parsed.insert(param_info.name, value);
             } else {
                 // Unknown argument - could be a flag or typo
@@ -179,18 +179,47 @@ impl DynamicCli {
 
     fn parse_parameter_value(
         &self,
-        handler: &ParameterHandler,
+        param_info: &ParameterInfo,
         args: &[String],
         index: &mut usize,
     ) -> Result<serde_json::Value> {
-        match handler {
+        match &param_info.handler {
             ParameterHandler::Simple { .. } => {
                 // Simple value - next arg is the value
                 *index += 1;
                 if *index < args.len() {
-                    let value = args[*index].clone();
+                    let value_str = &args[*index];
                     *index += 1;
-                    Ok(serde_json::json!(value))
+
+                    // Parse according to JSON Schema type
+                    let json_type = param_info.spec.get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("string");
+
+                    let value = match json_type {
+                        "number" | "integer" => {
+                            // Try parsing as number
+                            if let Ok(num) = value_str.parse::<f64>() {
+                                serde_json::json!(num)
+                            } else {
+                                return Err(anyhow::anyhow!("Invalid number: {}", value_str));
+                            }
+                        }
+                        "boolean" => {
+                            // Parse as boolean
+                            match value_str.to_lowercase().as_str() {
+                                "true" | "1" | "yes" => serde_json::json!(true),
+                                "false" | "0" | "no" => serde_json::json!(false),
+                                _ => return Err(anyhow::anyhow!("Invalid boolean: {}", value_str)),
+                            }
+                        }
+                        _ => {
+                            // Default to string
+                            serde_json::json!(value_str)
+                        }
+                    };
+
+                    Ok(value)
                 } else {
                     Err(anyhow::anyhow!("Missing value for parameter"))
                 }
@@ -213,7 +242,7 @@ impl DynamicCli {
                 }
 
                 // Apply combiner
-                self.apply_combiner(composite, combiner)
+                self.apply_combiner(composite, &combiner)
             }
             ParameterHandler::Interactive { prompt, choices, multi_select } => {
                 // Check if value provided, otherwise prompt
@@ -224,7 +253,7 @@ impl DynamicCli {
                     Ok(serde_json::json!(value))
                 } else {
                     // Would prompt here
-                    self.prompt_interactive(prompt, choices, *multi_select)
+                    self.prompt_interactive(&prompt, choices, *multi_select)
                 }
             }
             _ => {

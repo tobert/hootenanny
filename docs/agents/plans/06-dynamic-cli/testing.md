@@ -4,6 +4,8 @@
 
 We've implemented comprehensive Rust integration tests for the dynamic CLI, providing type-safe, fast, and maintainable testing without requiring external languages like Python or shell scripts.
 
+**🎉 BREAKTHROUGH**: We replaced mock servers with **real ephemeral MCP servers** embedded in tests. This uncovered and fixed critical bugs that mocks would have hidden. See [TEST-INFRASTRUCTURE-BREAKTHROUGH.md](./TEST-INFRASTRUCTURE-BREAKTHROUGH.md) for the full story.
+
 ## Test Structure
 
 ```
@@ -17,10 +19,11 @@ crates/hrcli/tests/
 ## Testing Philosophy
 
 ### Pure Rust Approach
-- **No Python**: Mock servers using `wiremock` crate
+- **No Python**: Real embedded MCP servers (not mocks!)
 - **No complex shell**: Tests run with `cargo test`
 - **Type Safety**: Compile-time verification
-- **Parallel Execution**: Fast feedback loops
+- **Fast Execution**: <0.1s per test (was 10s+ with failures)
+- **Real Integration**: Actual MCP protocol, SSE streams, JSON-RPC
 
 ### Dual-Audience Testing
 Tests verify the CLI serves both audiences:
@@ -108,35 +111,56 @@ fn supports_algorithmic_emotion_evolution() {
 assert_cmd = "2"       # CLI testing framework
 predicates = "3"       # Flexible assertions
 tempfile = "3"         # Temporary directories for cache
-wiremock = "0.6"       # Mock MCP servers
+hootenanny = { path = "../hootenanny" }  # Real MCP server for tests!
 insta = "1"           # Snapshot testing
 tokio-test = "0.4"    # Async test utilities
-serial_test = "3"     # Sequential test execution
+tokio-util = "0.7"    # CancellationToken for server shutdown
 ```
 
-## Mock Server Strategy
+## Real Server Strategy
 
-### Using Wiremock
+### Using Embedded Hootenanny
 ```rust
-async fn setup_mock_server() -> MockServer {
-    let mock_server = MockServer::start().await;
+// crates/hrcli/tests/common/mod.rs
 
-    Mock::given(method("POST"))
-        .and(path("/message"))
-        .respond_with(ResponseTemplate::new(200)
-            .set_body_json(tools_response))
-        .mount(&mock_server)
-        .await;
+pub struct TestMcpServer {
+    pub port: u16,
+    pub url: String,
+    _temp_dir: TempDir,
+    shutdown_token: CancellationToken,
+}
 
-    mock_server
+impl TestMcpServer {
+    pub async fn start() -> Result<Self> {
+        // 1. Create temp state directory
+        let temp_dir = TempDir::new()?;
+
+        // 2. Initialize real conversation state
+        let conversation_state = ConversationState::new(temp_dir.path())?;
+
+        // 3. Start real MCP server in dedicated thread
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
+                // Register service in server's runtime context
+                let ct = sse_server.with_service(|| {...});
+                axum::serve(listener, router).await
+            });
+        });
+
+        // 4. Wait for MCP handshake (not just HTTP 200!)
+        Self::wait_for_mcp_ready(port).await?;
+
+        Ok(Self { port, url, temp_dir, shutdown_token })
+    }
 }
 ```
 
-### No Python Required
-- Rust-native mocking with `wiremock`
-- SSE simulation for MCP protocol
-- JSON-RPC request/response handling
-- Error injection for failure testing
+### No Mocks Required
+- Real MCP server with full protocol
+- Actual SSE streams (not simulated!)
+- Real JSON-RPC handling
+- Catches integration bugs mocks miss
 
 ## Running the Tests
 
@@ -186,13 +210,13 @@ jobs:
         run: cargo tarpaulin -p hrcli --out Xml
 ```
 
-## Test Coverage Goals
+## Test Coverage Status
 
-### Core Functionality (100% coverage)
-- [ ] Tool discovery from server
-- [ ] Cache management with TTL
-- [ ] Parameter type mapping
-- [ ] JSON-RPC transformation
+### Core Functionality
+- [x] Tool discovery from real server ✅
+- [x] Parameter type mapping (numbers, booleans, strings) ✅
+- [x] JSON-RPC transformation with proper types ✅
+- [ ] Cache management with TTL (not yet implemented)
 
 ### User Experience (High coverage)
 - [ ] Help text for both audiences
@@ -305,20 +329,37 @@ fn fuzz_json_parsing() {
 
 ### Integration with Real Server
 ```rust
-#[test]
-#[ignore]  // Run with: cargo test -- --ignored
-fn test_with_real_server() {
-    // Test against actual hootenanny server
+#[tokio::test]
+async fn test_with_real_server() {
+    // All tests use REAL servers now!
+    let server = TestMcpServer::start().await.unwrap();
+
+    Command::cargo_bin("hrcli")
+        .env("HRCLI_SERVER", &server.url)
+        .arg("discover")
+        .assert()
+        .success();
+
+    // Server auto-cleaned up via Drop
 }
 ```
 
+## Bugs Fixed Through Real Server Testing
+
+1. **SSE Stream Consumption** - Listener received no messages after session ID
+2. **Runtime Context Race** - Service registered in wrong tokio runtime
+3. **Parameter Type Loss** - All parameters sent as strings instead of proper JSON types
+
+See [TEST-INFRASTRUCTURE-BREAKTHROUGH.md](./TEST-INFRASTRUCTURE-BREAKTHROUGH.md) for detailed analysis.
+
 ## Conclusion
 
-The Rust integration test suite provides:
-- ✅ **Complete coverage** of dynamic CLI features
-- ✅ **No external dependencies** (no Python, minimal shell)
-- ✅ **Fast execution** with parallel testing
+The Rust integration test suite with **real embedded MCP servers** provides:
+- ✅ **Battle-tested infrastructure** - Found and fixed 3 critical bugs
+- ✅ **No external dependencies** (no Python, no mocks, minimal shell)
+- ✅ **Fast execution** - <0.1s per test (was 10s+ timeouts)
 - ✅ **Type safety** catching errors at compile time
+- ✅ **Real integration** - Actual MCP protocol, not simulations
 - ✅ **Maintainable** with clear structure and documentation
 
-This approach ensures the dynamic CLI will be robust, performant, and truly serve both human and AI users effectively.
+This approach ensures the dynamic CLI is robust, performant, and truly serves both human and AI users effectively.
