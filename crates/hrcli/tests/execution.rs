@@ -115,14 +115,11 @@ async fn executes_get_tree_status_successfully() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    if !output.status.success() {
-        eprintln!("stdout: {}", stdout);
-        eprintln!("stderr: {}", stderr);
-    }
-
     assert!(output.status.success(), "Get tree status should succeed");
-    assert!(stdout.contains("branch") || stdout.contains("node"),
-            "Should show tree information");
+
+    let stdout_lower = stdout.to_lowercase();
+    assert!(stdout_lower.contains("branch") || stdout_lower.contains("node"),
+            "Should show tree information (got: {})", stdout);
 }
 
 #[test]

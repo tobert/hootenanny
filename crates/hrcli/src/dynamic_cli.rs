@@ -213,6 +213,14 @@ impl DynamicCli {
                                 _ => return Err(anyhow::anyhow!("Invalid boolean: {}", value_str)),
                             }
                         }
+                        "array" => {
+                            // Parse comma-separated values as array
+                            let items: Vec<&str> = value_str.split(',')
+                                .map(|s| s.trim())
+                                .filter(|s| !s.is_empty())
+                                .collect();
+                            serde_json::json!(items)
+                        }
                         _ => {
                             // Default to string
                             serde_json::json!(value_str)
