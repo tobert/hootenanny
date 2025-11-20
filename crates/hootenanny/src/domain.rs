@@ -127,6 +127,20 @@ pub enum ConcreteEvent {
     Chord(ChordEvent),
     Control(ControlEvent),
     Pattern(PatternInstance),
+    MidiClip(CasReference),
+}
+
+/// A reference to an immutable artifact in CAS.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CasReference {
+    /// The BLAKE3 hash of the content (32 hex chars).
+    pub hash: String,
+    /// MIME type of the content (e.g., "audio/midi").
+    pub mime_type: String,
+    /// Size in bytes (for quick introspection).
+    pub size_bytes: u64,
+    /// Optional path for debugging/direct access if locally available.
+    pub local_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
