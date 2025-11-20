@@ -1,6 +1,9 @@
 use crate::conversation::{ConversationTree, ForkReason};
-use crate::domain::{EmotionalVector, Event, AbstractEvent, IntentionEvent, ConcreteEvent};
+use crate::domain::{EmotionalVector, Event, AbstractEvent, IntentionEvent, ConcreteEvent, CasReference};
 use crate::persistence::conversation_store::ConversationStore;
+use crate::mcp_tools::local_models::{
+    LocalModels, OrpheusGenerateParams, OrpheusGenerateResult, OrpheusClassifyResult, DeepSeekQueryResult, Message
+};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
@@ -59,10 +62,20 @@ impl ConversationState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EventDualityServer {
     tool_router: ToolRouter<Self>,
     state: Arc<Mutex<ConversationState>>,
+    local_models: Arc<LocalModels>,
+}
+
+// Implement Debug manually because LocalModels doesn't implement Debug (client)
+impl std::fmt::Debug for EventDualityServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EventDualityServer")
+            .field("state", &self.state)
+            .finish()
+    }
 }
 
 /// Request to add a node to the conversation tree.
@@ -154,12 +167,47 @@ pub struct BroadcastMessageRequest {
     pub msg: String,
 }
 
+// --- Local Model Requests ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct OrpheusGenerateRequest {
+    pub model: String,
+    pub task: String,
+    pub input_hash: Option<String>,
+    pub params: OrpheusGenerateParams,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct OrpheusClassifyRequest {
+    pub model: Option<String>,
+    pub input_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DeepSeekQueryRequest {
+    pub model: Option<String>,
+    pub messages: Vec<Message>,
+    pub stream: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CasStoreRequest {
+    pub content_base64: String,
+    pub mime_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CasInspectRequest {
+    pub hash: String,
+}
+
 #[tool_router]
 impl EventDualityServer {
-    pub fn new_with_state(state: Arc<Mutex<ConversationState>>) -> Self {
+    pub fn new_with_state(state: Arc<Mutex<ConversationState>>, local_models: Arc<LocalModels>) -> Self {
         Self {
             tool_router: Self::tool_router(),
             state,
+            local_models,
         }
     }
 
@@ -169,7 +217,12 @@ impl EventDualityServer {
         std::fs::create_dir_all(&state_dir).expect("Failed to create temp dir");
 
         let state = ConversationState::new(state_dir).expect("Failed to create conversation state");
-        Self::new_with_state(Arc::new(Mutex::new(state)))
+        
+        // Dummy local models for default constructor (should be replaced in real use)
+        let cas = crate::cas::Cas::new(&std::env::temp_dir().join("hrmcp_cas")).expect("Failed to create CAS");
+        let local_models = Arc::new(LocalModels::new(cas, 2000, 2001));
+
+        Self::new_with_state(Arc::new(Mutex::new(state)), local_models)
     }
 
     #[tool(description = "Merge two branches in the conversation tree")]
@@ -448,6 +501,56 @@ impl EventDualityServer {
 
         Ok(CallToolResult::success(vec![Content::text(
             result.to_string(),
+        )]))
+    }
+
+    // --- Local Model Tools ---
+
+    #[tool(description = "Generate music using the local Orpheus model")]
+    async fn orpheus_generate(
+        &self,
+        Parameters(request): Parameters<OrpheusGenerateRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self.local_models.run_orpheus_generate(
+            request.model,
+            request.task,
+            request.input_hash,
+            request.params
+        ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&result).unwrap()
+        )]))
+    }
+
+    #[tool(description = "Classify music using the local Orpheus model")]
+    async fn orpheus_classify(
+        &self,
+        Parameters(request): Parameters<OrpheusClassifyRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self.local_models.run_orpheus_classify(
+            request.model,
+            request.input_hash,
+        ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&result).unwrap()
+        )]))
+    }
+
+    #[tool(description = "Query the local DeepSeek Coder model")]
+    async fn deepseek_query(
+        &self,
+        Parameters(request): Parameters<DeepSeekQueryRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self.local_models.run_deepseek_query(
+            request.model,
+            request.messages,
+            request.stream,
+        ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&result).unwrap()
         )]))
     }
 }

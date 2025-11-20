@@ -4,12 +4,17 @@ mod realization;
 mod server;
 mod telemetry;
 pub mod persistence;
+pub mod cas;
+pub mod mcp_tools;
+pub mod web;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use persistence::journal::{Journal, SessionEvent};
 use rmcp::transport::sse_server::{SseServer, SseServerConfig};
 use server::{ConversationState, EventDualityServer};
+use cas::Cas;
+use mcp_tools::local_models::LocalModels;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -28,6 +33,14 @@ struct Cli {
     /// Port to listen on
     #[arg(short, long, default_value = "8080")]
     port: u16,
+
+    /// Orpheus Model Port
+    #[arg(long, default_value = "2000")]
+    orpheus_port: u16,
+
+    /// DeepSeek Model Port
+    #[arg(long, default_value = "2001")]
+    deepseek_port: u16,
 
     /// OTLP gRPC endpoint for OpenTelemetry (e.g., "127.0.0.1:35991")
     #[arg(long, default_value = "127.0.0.1:35991")]
@@ -89,11 +102,31 @@ async fn main() -> Result<()> {
     tracing::info!("💾 Journal flushed to disk");
     // --- End Persistence Test ---
 
+    // --- CAS Initialization ---
+    tracing::info!("📦 Initializing Content Addressable Storage (CAS)...");
+    let cas_dir = state_dir.join("cas");
+    std::fs::create_dir_all(&cas_dir)?;
+    let cas = Cas::new(&cas_dir)?;
+    tracing::info!("   CAS ready at: {}", cas_dir.display());
+
+    // --- Local Models Initialization ---
+    tracing::info!("🤖 Initializing Local Models client...");
+    let local_models = Arc::new(LocalModels::new(
+        cas.clone(),
+        cli.orpheus_port,
+        cli.deepseek_port
+    ));
+    tracing::info!("   Orpheus: port {}", cli.orpheus_port);
+    tracing::info!("   DeepSeek: port {}", cli.deepseek_port);
+
     let addr = format!("127.0.0.1:{}", cli.port);
 
     tracing::info!("🎵 Event Duality Server starting on http://{}", addr);
     tracing::info!("   Connect via: GET http://{}/sse", addr);
     tracing::info!("   Send messages: POST http://{}/message?sessionId=<id>", addr);
+    tracing::info!("   CAS Upload: POST http://{}/cas", addr);
+    tracing::info!("   CAS Download: GET http://{}/cas/:hash", addr);
+
 
     // Create shared conversation state FIRST
     tracing::info!("🌳 Initializing conversation tree...");
@@ -111,20 +144,32 @@ async fn main() -> Result<()> {
         sse_keep_alive: Some(Duration::from_secs(15)),
     };
 
-    let (sse_server, router) = SseServer::new(sse_config);
+    let (sse_server, sse_router) = SseServer::new(sse_config);
+
+    // Create WEB Router for CAS
+    let web_router = web::router(cas.clone());
+    
+    // Merge routers: WEB + SSE
+    let app_router = sse_router.merge(web_router);
 
     // Save bind address before sse_server is moved
     let bind_addr = sse_server.config.bind;
 
     // Register the service BEFORE starting the server
     tracing::info!("Setting up SSE server with EventDualityServer service.");
-    let ct = sse_server.with_service(move || EventDualityServer::new_with_state(shared_state.clone()));
+    let local_models_clone = local_models.clone();
+    let ct = sse_server.with_service(move || {
+        EventDualityServer::new_with_state(
+            shared_state.clone(),
+            local_models_clone.clone()
+        )
+    });
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
 
-    tracing::info!("Router created: {:?}", router);
+    tracing::info!("Router created: {:?}", app_router);
 
-    let server = axum::serve(listener, router).with_graceful_shutdown(async move {
+    let server = axum::serve(listener, app_router).with_graceful_shutdown(async move {
         ct.cancelled().await;
         tracing::info!("SSE server cancelled");
     });

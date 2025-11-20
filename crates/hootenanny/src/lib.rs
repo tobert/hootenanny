@@ -10,3 +10,4 @@ pub mod server;
 pub mod telemetry;
 pub mod cas;
 pub mod mcp_tools;
+pub mod web;
