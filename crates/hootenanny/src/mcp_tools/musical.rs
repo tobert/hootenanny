@@ -7,13 +7,13 @@ use crate::domain::messages::JamMessage;
 use crate::domain::Event;
 use crate::conversation::{AgentId, BranchId, NodeId};
 use resonode::MusicalTime;
-use rmcp::rpc;
+// use rmcp::rpc;
 
 /// A stream of events.
 pub type EventStream = Vec<Event>;
 pub type ConversationId = String;
 
-#[rpc]
+// #[rpc]
 pub trait MusicalMCP {
     /// Create a new conversation with a given musical context.
     async fn create_conversation(&self, context: MusicalContext) -> ConversationId;
