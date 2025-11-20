@@ -1,8 +1,9 @@
+use crate::artifact_store::{Artifact, ArtifactStore, FileStore};
 use crate::conversation::{ConversationTree, ForkReason};
-use crate::domain::{EmotionalVector, Event, AbstractEvent, IntentionEvent, ConcreteEvent, CasReference};
+use crate::domain::{EmotionalVector, Event, AbstractEvent, IntentionEvent, ConcreteEvent};
 use crate::persistence::conversation_store::ConversationStore;
 use crate::mcp_tools::local_models::{
-    LocalModels, OrpheusGenerateParams, OrpheusGenerateResult, OrpheusClassifyResult, DeepSeekQueryResult, Message
+    LocalModels, OrpheusGenerateParams, Message
 };
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -12,6 +13,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use base64::{Engine as _, engine::general_purpose};
 
 /// Shared state for the conversation tree and persistence.
 #[derive(Debug)]
@@ -67,6 +69,7 @@ pub struct EventDualityServer {
     tool_router: ToolRouter<Self>,
     state: Arc<Mutex<ConversationState>>,
     local_models: Arc<LocalModels>,
+    artifact_store: Arc<FileStore>,
 }
 
 // Implement Debug manually because LocalModels doesn't implement Debug (client)
@@ -123,9 +126,6 @@ pub struct ForkRequest {
     pub participants: Vec<String>,
 }
 
-use crate::domain::context::MusicalContext;
-use crate::domain::messages::JamMessage;
-use resonode::MusicalTime;
 
 pub type ConversationId = String;
 pub type EventStream = Vec<Event>;
@@ -171,23 +171,219 @@ pub struct BroadcastMessageRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct OrpheusGenerateRequest {
-    pub model: String,
-    pub task: String,
-    pub input_hash: Option<String>,
-    pub params: OrpheusGenerateParams,
+    #[schemars(description = "Model variant (default: 'base'). Options: 'base', 'children', 'mono_melodies'")]
+    pub model: Option<String>,
+
+    #[schemars(description = "Sampling temperature 0.0-2.0 (default: 1.0). Higher = more random")]
+    pub temperature: Option<f32>,
+
+    #[schemars(description = "Nucleus sampling 0.0-1.0 (default: 0.95). Lower = more focused")]
+    pub top_p: Option<f32>,
+
+    #[schemars(description = "Max tokens to generate (default: 1024). Lower = shorter output")]
+    pub max_tokens: Option<u32>,
+
+    #[schemars(description = "Number of variations to generate (default: 1)")]
+    pub num_variations: Option<u32>,
+
+    // Artifact/variation tracking fields
+    #[schemars(description = "Optional variation set ID to group related generations")]
+    pub variation_set_id: Option<String>,
+
+    #[schemars(description = "Optional parent artifact ID for refinements")]
+    pub parent_id: Option<String>,
+
+    #[schemars(description = "Optional tags for organizing artifacts (e.g., ['phase:initial', 'experiment:upbeat'])")]
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[schemars(description = "Creator identifier (agent or user ID)")]
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
+}
+
+fn default_creator() -> Option<String> {
+    Some("unknown".to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct OrpheusGenerateSeededRequest {
+    #[schemars(description = "CAS hash of seed MIDI (required)")]
+    pub seed_hash: String,
+
+    #[schemars(description = "Model variant (default: 'base'). Options: 'base', 'children', 'mono_melodies'")]
+    pub model: Option<String>,
+
+    #[schemars(description = "Sampling temperature 0.0-2.0 (default: 1.0). Higher = more random")]
+    pub temperature: Option<f32>,
+
+    #[schemars(description = "Nucleus sampling 0.0-1.0 (default: 0.95). Lower = more focused")]
+    pub top_p: Option<f32>,
+
+    #[schemars(description = "Max tokens to generate (default: 1024). Lower = shorter output")]
+    pub max_tokens: Option<u32>,
+
+    #[schemars(description = "Number of variations to generate (default: 1)")]
+    pub num_variations: Option<u32>,
+
+    // Artifact/variation tracking fields
+    #[schemars(description = "Optional variation set ID to group related generations")]
+    pub variation_set_id: Option<String>,
+
+    #[schemars(description = "Optional parent artifact ID for refinements")]
+    pub parent_id: Option<String>,
+
+    #[schemars(description = "Optional tags for organizing artifacts")]
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[schemars(description = "Creator identifier (agent or user ID)")]
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct OrpheusContinueRequest {
+    #[schemars(description = "CAS hash of MIDI to continue (required)")]
+    pub input_hash: String,
+
+    #[schemars(description = "Model variant (default: 'base'). Options: 'base', 'children', 'mono_melodies'")]
+    pub model: Option<String>,
+
+    #[schemars(description = "Sampling temperature 0.0-2.0 (default: 1.0). Higher = more random")]
+    pub temperature: Option<f32>,
+
+    #[schemars(description = "Nucleus sampling 0.0-1.0 (default: 0.95). Lower = more focused")]
+    pub top_p: Option<f32>,
+
+    #[schemars(description = "Max tokens to generate (default: 1024). Lower = shorter output")]
+    pub max_tokens: Option<u32>,
+
+    #[schemars(description = "Number of variations to generate (default: 1)")]
+    pub num_variations: Option<u32>,
+
+    // Artifact/variation tracking fields
+    #[schemars(description = "Optional variation set ID to group related generations")]
+    pub variation_set_id: Option<String>,
+
+    #[schemars(description = "Optional parent artifact ID for refinements")]
+    pub parent_id: Option<String>,
+
+    #[schemars(description = "Optional tags for organizing artifacts")]
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[schemars(description = "Creator identifier (agent or user ID)")]
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct OrpheusBridgeRequest {
+    #[schemars(description = "CAS hash of first section MIDI (required)")]
+    pub section_a_hash: String,
+
+    #[schemars(description = "CAS hash of second section (optional, for future use)")]
+    pub section_b_hash: Option<String>,
+
+    #[schemars(description = "Model variant (default: 'bridge'). Recommended: 'bridge'")]
+    pub model: Option<String>,
+
+    #[schemars(description = "Sampling temperature 0.0-2.0 (default: 1.0). Higher = more random")]
+    pub temperature: Option<f32>,
+
+    #[schemars(description = "Nucleus sampling 0.0-1.0 (default: 0.95). Lower = more focused")]
+    pub top_p: Option<f32>,
+
+    #[schemars(description = "Max tokens to generate (default: 1024). Lower = shorter output")]
+    pub max_tokens: Option<u32>,
+
+    // Artifact/variation tracking fields
+    #[schemars(description = "Optional variation set ID to group related generations")]
+    pub variation_set_id: Option<String>,
+
+    #[schemars(description = "Optional parent artifact ID for refinements")]
+    pub parent_id: Option<String>,
+
+    #[schemars(description = "Optional tags for organizing artifacts")]
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[schemars(description = "Creator identifier (agent or user ID)")]
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct OrpheusLoopsRequest {
+    #[schemars(description = "CAS hash of seed MIDI (optional)")]
+    pub seed_hash: Option<String>,
+
+    #[schemars(description = "Model variant (default: 'loops'). Recommended: 'loops'")]
+    pub model: Option<String>,
+
+    #[schemars(description = "Sampling temperature 0.0-2.0 (default: 1.0). Higher = more random")]
+    pub temperature: Option<f32>,
+
+    #[schemars(description = "Nucleus sampling 0.0-1.0 (default: 0.95). Lower = more focused")]
+    pub top_p: Option<f32>,
+
+    #[schemars(description = "Max tokens to generate (default: 1024). Lower = shorter output")]
+    pub max_tokens: Option<u32>,
+
+    #[schemars(description = "Number of variations to generate (default: 1)")]
+    pub num_variations: Option<u32>,
+
+    // Artifact/variation tracking fields
+    #[schemars(description = "Optional variation set ID to group related generations")]
+    pub variation_set_id: Option<String>,
+
+    #[schemars(description = "Optional parent artifact ID for refinements")]
+    pub parent_id: Option<String>,
+
+    #[schemars(description = "Optional tags for organizing artifacts")]
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[schemars(description = "Creator identifier (agent or user ID)")]
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct OrpheusClassifyRequest {
+    #[schemars(description = "Model to use (default: 'classifier')")]
     pub model: Option<String>,
+
+    #[schemars(description = "CAS hash of MIDI file to classify")]
     pub input_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DeepSeekQueryRequest {
+    #[schemars(description = "Model name (default: 'deepseek-coder-v2-lite')")]
     pub model: Option<String>,
+
+    #[schemars(description = "Chat messages: [{role: 'user', content: '...'}]")]
     pub messages: Vec<Message>,
+
+    #[schemars(description = "Stream response (default: false, not implemented)")]
     pub stream: Option<bool>,
+
+    // Artifact/variation tracking fields
+    #[schemars(description = "Optional variation set ID to group related generations")]
+    pub variation_set_id: Option<String>,
+
+    #[schemars(description = "Optional parent artifact ID for refinements")]
+    pub parent_id: Option<String>,
+
+    #[schemars(description = "Optional tags for organizing artifacts (e.g., ['language:rust', 'task:debug'])")]
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[schemars(description = "Creator identifier (agent or user ID)")]
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -203,11 +399,16 @@ pub struct CasInspectRequest {
 
 #[tool_router]
 impl EventDualityServer {
-    pub fn new_with_state(state: Arc<Mutex<ConversationState>>, local_models: Arc<LocalModels>) -> Self {
+    pub fn new_with_state(
+        state: Arc<Mutex<ConversationState>>,
+        local_models: Arc<LocalModels>,
+        artifact_store: Arc<FileStore>,
+    ) -> Self {
         Self {
             tool_router: Self::tool_router(),
             state,
             local_models,
+            artifact_store,
         }
     }
 
@@ -216,19 +417,25 @@ impl EventDualityServer {
         let state_dir = std::env::temp_dir().join("hrmcp_default");
         std::fs::create_dir_all(&state_dir).expect("Failed to create temp dir");
 
-        let state = ConversationState::new(state_dir).expect("Failed to create conversation state");
-        
+        let state = ConversationState::new(state_dir.clone()).expect("Failed to create conversation state");
+
         // Dummy local models for default constructor (should be replaced in real use)
         let cas = crate::cas::Cas::new(&std::env::temp_dir().join("hrmcp_cas")).expect("Failed to create CAS");
         let local_models = Arc::new(LocalModels::new(cas, 2000, 2001));
 
-        Self::new_with_state(Arc::new(Mutex::new(state)), local_models)
+        // Artifact store
+        let artifact_store = Arc::new(
+            FileStore::new(state_dir.join("artifacts.json")).expect("Failed to create artifact store")
+        );
+
+        Self::new_with_state(Arc::new(Mutex::new(state)), local_models, artifact_store)
     }
 
     #[tool(description = "Merge two branches in the conversation tree")]
+    #[tracing::instrument(name = "mcp.tool.merge_branches", skip(self, _request))]
     fn merge_branches(
         &self,
-        Parameters(request): Parameters<MergeRequest>,
+        Parameters(_request): Parameters<MergeRequest>,
     ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![Content::text(
             "not implemented".to_string(),
@@ -236,9 +443,10 @@ impl EventDualityServer {
     }
 
     #[tool(description = "Prune a branch from the conversation tree")]
+    #[tracing::instrument(name = "mcp.tool.prune_branch", skip(self, _request))]
     fn prune_branch(
         &self,
-        Parameters(request): Parameters<PruneRequest>,
+        Parameters(_request): Parameters<PruneRequest>,
     ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![Content::text(
             "not implemented".to_string(),
@@ -246,9 +454,10 @@ impl EventDualityServer {
     }
 
     #[tool(description = "Evaluate a branch")]
+    #[tracing::instrument(name = "mcp.tool.evaluate_branch", skip(self, _request))]
     fn evaluate_branch(
         &self,
-        Parameters(request): Parameters<EvaluateRequest>,
+        Parameters(_request): Parameters<EvaluateRequest>,
     ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![Content::text(
             "not implemented".to_string(),
@@ -256,9 +465,10 @@ impl EventDualityServer {
     }
 
     #[tool(description = "Get the musical context at a specific time")]
+    #[tracing::instrument(name = "mcp.tool.get_context", skip(self, _request))]
     fn get_context(
         &self,
-        Parameters(request): Parameters<GetContextRequest>,
+        Parameters(_request): Parameters<GetContextRequest>,
     ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![Content::text(
             "not implemented".to_string(),
@@ -266,6 +476,7 @@ impl EventDualityServer {
     }
 
     #[tool(description = "Subscribe to a stream of events")]
+    #[tracing::instrument(name = "mcp.tool.subscribe_events", skip(self))]
     fn subscribe_events(&self) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![Content::text(
             "not implemented".to_string(),
@@ -273,9 +484,10 @@ impl EventDualityServer {
     }
 
     #[tool(description = "Broadcast a message to all agents in the conversation")]
+    #[tracing::instrument(name = "mcp.tool.broadcast_message", skip(self, _request))]
     fn broadcast_message(
         &self,
-        Parameters(request): Parameters<BroadcastMessageRequest>,
+        Parameters(_request): Parameters<BroadcastMessageRequest>,
     ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![Content::text(
             "not implemented".to_string(),
@@ -325,7 +537,8 @@ impl EventDualityServer {
             }
         }
 
-        let result = serde_json::to_value(sound).unwrap();
+        let result = serde_json::to_value(sound)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize sound: {}", e), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(
             result.to_string(),
@@ -504,26 +717,546 @@ impl EventDualityServer {
         )]))
     }
 
+    // --- CAS Tools ---
+
+    #[tool(description = "Store content in Content Addressable Storage (CAS).
+
+Example: {content_base64: 'SGVsbG8=', mime_type: 'text/plain'}
+
+Returns: BLAKE3 hash string that can be used to retrieve the content.
+Use cas_inspect to get the local file path.")]
+    #[tracing::instrument(
+        name = "mcp.tool.cas_store",
+        skip(self, request),
+        fields(
+            cas.mime_type = %request.mime_type,
+            cas.content_size = request.content_base64.len(),
+            cas.hash = tracing::field::Empty,
+        )
+    )]
+    async fn cas_store(
+        &self,
+        Parameters(request): Parameters<CasStoreRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let decoded_content = general_purpose::STANDARD.decode(&request.content_base64)
+            .map_err(|e| McpError::parse_error(format!("Failed to base64 decode content: {}", e), None))?;
+
+        let hash = self.local_models.store_cas_content(&decoded_content, &request.mime_type)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Failed to store content in CAS: {}", e), None))?;
+
+        tracing::Span::current().record("cas.hash", &hash);
+
+        Ok(CallToolResult::success(vec![Content::text(hash)]))
+    }
+
+    #[tool(description = "Inspect content in CAS and get its metadata.
+
+Example: {hash: '5ca7815...'}
+
+Returns: {hash, mime_type, size, local_path}
+The local_path can be used to access the file directly on disk.")]
+    #[tracing::instrument(
+        name = "mcp.tool.cas_inspect",
+        skip(self, request),
+        fields(
+            cas.hash = %request.hash,
+            cas.mime_type = tracing::field::Empty,
+            cas.size_bytes = tracing::field::Empty,
+        )
+    )]
+    async fn cas_inspect(
+        &self,
+        Parameters(request): Parameters<CasInspectRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let cas_ref = self.local_models.inspect_cas_content(&request.hash)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Failed to inspect CAS: {}", e), None))?;
+
+        let span = tracing::Span::current();
+        span.record("cas.mime_type", &*cas_ref.mime_type);
+        span.record("cas.size_bytes", cas_ref.size_bytes);
+
+        let result = serde_json::json!({
+            "hash": cas_ref.hash,
+            "mime_type": cas_ref.mime_type,
+            "size": cas_ref.size_bytes,
+            "local_path": cas_ref.local_path,
+        });
+
+        let json = serde_json::to_string(&result)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize CAS reference: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
     // --- Local Model Tools ---
 
-    #[tool(description = "Generate music using the local Orpheus model")]
+    // Helper function to validate sampling parameters
+    fn validate_sampling_params(temperature: Option<f32>, top_p: Option<f32>) -> Result<(), McpError> {
+        if let Some(temp) = temperature {
+            if temp < 0.0 || temp > 2.0 {
+                return Err(McpError::invalid_params(
+                    format!("temperature must be 0.0-2.0, got {}", temp),
+                    None
+                ));
+            }
+        }
+        if let Some(p) = top_p {
+            if p < 0.0 || p > 1.0 {
+                return Err(McpError::invalid_params(
+                    format!("top_p must be 0.0-1.0, got {}", p),
+                    None
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    // Helper function to create and store artifact
+    fn create_artifact(
+        &self,
+        output_hash: &str,
+        task: &str,
+        model: &str,
+        temperature: Option<f32>,
+        tokens: Option<u32>,
+        variation_set_id: Option<String>,
+        parent_id: Option<String>,
+        tags: Vec<String>,
+        creator: Option<String>,
+    ) -> Result<Artifact, McpError> {
+        let artifact_id = format!("artifact_{}", &output_hash[..12]);
+        let creator = creator.unwrap_or_else(|| "agent_orpheus".to_string());
+
+        // Determine artifact type and tool name based on task
+        let (artifact_type, tool_name) = if task == "query" {
+            ("type:text", format!("tool:deepseek_{}", task))
+        } else {
+            ("type:midi", format!("tool:orpheus_{}", task))
+        };
+
+        let mut artifact = Artifact::new(
+            &artifact_id,
+            &creator,
+            serde_json::json!({
+                "hash": output_hash,
+                "tokens": tokens,
+                "model": model,
+                "temperature": temperature,
+                "task": task,
+            })
+        )
+        .with_tags(vec![
+            artifact_type,
+            "phase:generation",
+            &tool_name
+        ]);
+
+        // Add variation set info if provided
+        if let Some(set_id) = variation_set_id {
+            let index = self.artifact_store.next_variation_index(&set_id)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            artifact = artifact.with_variation_set(&set_id, index);
+        }
+
+        // Add parent if provided
+        if let Some(parent_id) = parent_id {
+            artifact = artifact.with_parent(&parent_id);
+        }
+
+        // Add custom tags
+        artifact = artifact.with_tags(tags);
+
+        // Store artifact
+        self.artifact_store.put(artifact.clone())
+            .map_err(|e| McpError::internal_error(format!("Failed to store artifact: {}", e), None))?;
+
+        // Flush to disk
+        self.artifact_store.flush()
+            .map_err(|e| McpError::internal_error(format!("Failed to flush artifact store: {}", e), None))?;
+
+        Ok(artifact)
+    }
+
+    #[tool(description = "Generate music from scratch using Orpheus.
+
+Example: {temperature: 1.2, max_tokens: 512, num_variations: 1}
+
+Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N tokens'}
+The output_hash can be used with cas_inspect to get the MIDI file path.")]
+    #[tracing::instrument(
+        name = "mcp.tool.orpheus_generate",
+        skip(self, request),
+        fields(
+            model.name = ?request.model,
+            model.temperature = request.temperature,
+            model.num_variations = request.num_variations,
+            model.output_hash = tracing::field::Empty,
+        )
+    )]
     async fn orpheus_generate(
         &self,
         Parameters(request): Parameters<OrpheusGenerateRequest>,
     ) -> Result<CallToolResult, McpError> {
+        // Validate parameters
+        Self::validate_sampling_params(request.temperature, request.top_p)?;
+
+        let params = OrpheusGenerateParams {
+            temperature: request.temperature,
+            top_p: request.top_p,
+            max_tokens: request.max_tokens,
+            num_variations: request.num_variations,
+        };
+
+        let model = request.model.clone().unwrap_or_else(|| "base".to_string());
+
         let result = self.local_models.run_orpheus_generate(
-            request.model,
-            request.task,
-            request.input_hash,
-            request.params
+            model.clone(),
+            "generate".to_string(),
+            None,  // No input for from-scratch generation
+            params
         ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string(&result).unwrap()
-        )]))
+        tracing::Span::current().record("model.output_hash", &*result.output_hash);
+
+        // Create artifact automatically
+        let tokens = result.summary.split_whitespace()
+            .find(|s| s.parse::<u32>().is_ok())
+            .and_then(|s| s.parse::<u32>().ok());
+
+        let artifact = self.create_artifact(
+            &result.output_hash,
+            "generate",
+            &model,
+            request.temperature,
+            tokens,
+            request.variation_set_id,
+            request.parent_id,
+            request.tags,
+            request.creator,
+        )?;
+
+        // Enhanced response with artifact info
+        let response = serde_json::json!({
+            "status": result.status,
+            "output_hash": result.output_hash,
+            "summary": result.summary,
+            "artifact_id": artifact.id,
+            "variation_set_id": artifact.variation_set_id,
+            "variation_index": artifact.variation_index,
+        });
+
+        let json = serde_json::to_string(&response)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize result: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    #[tool(description = "Classify music using the local Orpheus model")]
+    #[tool(description = "Generate music using a seed MIDI as inspiration.
+
+Example: {seed_hash: '5ca7815abc...', temperature: 0.8}
+
+Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N tokens'}")]
+    #[tracing::instrument(
+        name = "mcp.tool.orpheus_generate_seeded",
+        skip(self, request),
+        fields(
+            model.name = ?request.model,
+            model.seed_hash = %request.seed_hash,
+            model.temperature = request.temperature,
+            model.output_hash = tracing::field::Empty,
+        )
+    )]
+    async fn orpheus_generate_seeded(
+        &self,
+        Parameters(request): Parameters<OrpheusGenerateSeededRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        Self::validate_sampling_params(request.temperature, request.top_p)?;
+
+        let params = OrpheusGenerateParams {
+            temperature: request.temperature,
+            top_p: request.top_p,
+            max_tokens: request.max_tokens,
+            num_variations: request.num_variations,
+        };
+
+        let model = request.model.clone().unwrap_or_else(|| "base".to_string());
+
+        let result = self.local_models.run_orpheus_generate(
+            model.clone(),
+            "generate".to_string(),
+            Some(request.seed_hash),  // Seed MIDI as input
+            params
+        ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        tracing::Span::current().record("model.output_hash", &*result.output_hash);
+
+        // Create artifact automatically
+        let tokens = result.summary.split_whitespace()
+            .find(|s| s.parse::<u32>().is_ok())
+            .and_then(|s| s.parse::<u32>().ok());
+
+        let artifact = self.create_artifact(
+            &result.output_hash,
+            "generate_seeded",
+            &model,
+            request.temperature,
+            tokens,
+            request.variation_set_id,
+            request.parent_id,
+            request.tags,
+            request.creator,
+        )?;
+
+        // Enhanced response with artifact info
+        let response = serde_json::json!({
+            "status": result.status,
+            "output_hash": result.output_hash,
+            "summary": result.summary,
+            "artifact_id": artifact.id,
+            "variation_set_id": artifact.variation_set_id,
+            "variation_index": artifact.variation_index,
+        });
+
+        let json = serde_json::to_string(&response)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Continue an existing MIDI sequence.
+
+Example: {input_hash: '5ca7815abc...', max_tokens: 256}
+
+Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N tokens'}")]
+    #[tracing::instrument(
+        name = "mcp.tool.orpheus_continue",
+        skip(self, request),
+        fields(
+            model.name = ?request.model,
+            model.input_hash = %request.input_hash,
+            model.temperature = request.temperature,
+            model.output_hash = tracing::field::Empty,
+        )
+    )]
+    async fn orpheus_continue(
+        &self,
+        Parameters(request): Parameters<OrpheusContinueRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        Self::validate_sampling_params(request.temperature, request.top_p)?;
+
+        let params = OrpheusGenerateParams {
+            temperature: request.temperature,
+            top_p: request.top_p,
+            max_tokens: request.max_tokens,
+            num_variations: request.num_variations,
+        };
+
+        let model = request.model.clone().unwrap_or_else(|| "base".to_string());
+
+        let result = self.local_models.run_orpheus_generate(
+            model.clone(),
+            "continue".to_string(),  // Task is "continue"
+            Some(request.input_hash),
+            params
+        ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        tracing::Span::current().record("model.output_hash", &*result.output_hash);
+
+        // Create artifact automatically
+        let tokens = result.summary.split_whitespace()
+            .find(|s| s.parse::<u32>().is_ok())
+            .and_then(|s| s.parse::<u32>().ok());
+
+        let artifact = self.create_artifact(
+            &result.output_hash,
+            "continue",
+            &model,
+            request.temperature,
+            tokens,
+            request.variation_set_id,
+            request.parent_id,
+            request.tags,
+            request.creator,
+        )?;
+
+        // Enhanced response with artifact info
+        let response = serde_json::json!({
+            "status": result.status,
+            "output_hash": result.output_hash,
+            "summary": result.summary,
+            "artifact_id": artifact.id,
+            "variation_set_id": artifact.variation_set_id,
+            "variation_index": artifact.variation_index,
+        });
+
+        let json = serde_json::to_string(&response)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Generate a musical bridge connecting sections.
+
+Example: {section_a_hash: '5ca7815abc...', model: 'bridge'}
+
+Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N tokens'}")]
+    #[tracing::instrument(
+        name = "mcp.tool.orpheus_bridge",
+        skip(self, request),
+        fields(
+            model.name = ?request.model,
+            model.section_a_hash = %request.section_a_hash,
+            model.section_b_hash = ?request.section_b_hash,
+            model.temperature = request.temperature,
+            model.output_hash = tracing::field::Empty,
+        )
+    )]
+    async fn orpheus_bridge(
+        &self,
+        Parameters(request): Parameters<OrpheusBridgeRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        Self::validate_sampling_params(request.temperature, request.top_p)?;
+
+        let params = OrpheusGenerateParams {
+            temperature: request.temperature,
+            top_p: request.top_p,
+            max_tokens: request.max_tokens,
+            num_variations: None,  // Bridge doesn't use variations
+        };
+
+        let model = request.model.clone().unwrap_or_else(|| "bridge".to_string());
+
+        // Note: API currently uses section_a as midi_input, section_b for future use
+        let result = self.local_models.run_orpheus_generate(
+            model.clone(),
+            "bridge".to_string(),
+            Some(request.section_a_hash),
+            params
+        ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        tracing::Span::current().record("model.output_hash", &*result.output_hash);
+
+        // Create artifact automatically
+        let tokens = result.summary.split_whitespace()
+            .find(|s| s.parse::<u32>().is_ok())
+            .and_then(|s| s.parse::<u32>().ok());
+
+        let artifact = self.create_artifact(
+            &result.output_hash,
+            "bridge",
+            &model,
+            request.temperature,
+            tokens,
+            request.variation_set_id,
+            request.parent_id,
+            request.tags,
+            request.creator,
+        )?;
+
+        // Enhanced response with artifact info
+        let response = serde_json::json!({
+            "status": result.status,
+            "output_hash": result.output_hash,
+            "summary": result.summary,
+            "artifact_id": artifact.id,
+            "variation_set_id": artifact.variation_set_id,
+            "variation_index": artifact.variation_index,
+        });
+
+        let json = serde_json::to_string(&response)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Generate multi-instrumental loops.
+
+Example: {model: 'loops', num_variations: 3}
+
+Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N tokens'}")]
+    #[tracing::instrument(
+        name = "mcp.tool.orpheus_loops",
+        skip(self, request),
+        fields(
+            model.name = ?request.model,
+            model.seed_hash = ?request.seed_hash,
+            model.temperature = request.temperature,
+            model.num_variations = request.num_variations,
+            model.output_hash = tracing::field::Empty,
+        )
+    )]
+    async fn orpheus_loops(
+        &self,
+        Parameters(request): Parameters<OrpheusLoopsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        Self::validate_sampling_params(request.temperature, request.top_p)?;
+
+        let params = OrpheusGenerateParams {
+            temperature: request.temperature,
+            top_p: request.top_p,
+            max_tokens: request.max_tokens,
+            num_variations: request.num_variations,
+        };
+
+        let model = request.model.clone().unwrap_or_else(|| "loops".to_string());
+
+        let result = self.local_models.run_orpheus_generate(
+            model.clone(),
+            "loops".to_string(),
+            request.seed_hash,  // Optional seed
+            params
+        ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        tracing::Span::current().record("model.output_hash", &*result.output_hash);
+
+        // Create artifact automatically
+        let tokens = result.summary.split_whitespace()
+            .find(|s| s.parse::<u32>().is_ok())
+            .and_then(|s| s.parse::<u32>().ok());
+
+        let artifact = self.create_artifact(
+            &result.output_hash,
+            "loops",
+            &model,
+            request.temperature,
+            tokens,
+            request.variation_set_id,
+            request.parent_id,
+            request.tags,
+            request.creator,
+        )?;
+
+        // Enhanced response with artifact info
+        let response = serde_json::json!({
+            "status": result.status,
+            "output_hash": result.output_hash,
+            "summary": result.summary,
+            "artifact_id": artifact.id,
+            "variation_set_id": artifact.variation_set_id,
+            "variation_index": artifact.variation_index,
+        });
+
+        let json = serde_json::to_string(&response)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Classify MIDI as human or AI-composed using the local Orpheus model.
+
+Example: {input_hash: '<cas-hash-of-midi>'}
+
+Returns: {is_human: true/false, confidence: 0.0-1.0, probabilities: {...}}")]
+    #[tracing::instrument(
+        name = "mcp.tool.orpheus_classify",
+        skip(self, request),
+        fields(
+            model.name = ?request.model,
+            model.input_hash = %request.input_hash,
+        )
+    )]
     async fn orpheus_classify(
         &self,
         Parameters(request): Parameters<OrpheusClassifyRequest>,
@@ -533,25 +1266,78 @@ impl EventDualityServer {
             request.input_hash,
         ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string(&result).unwrap()
-        )]))
+        let json = serde_json::to_string(&result)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize Orpheus classification: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    #[tool(description = "Query the local DeepSeek Coder model")]
+    #[tool(description = "Query the local DeepSeek Coder model for code generation and questions.
+
+Example: {messages: [{role: 'user', content: 'Write a hello world in Rust'}]}
+
+Returns: {text: '...response...', finish_reason: 'stop'}")]
+    #[tracing::instrument(
+        name = "mcp.tool.deepseek_query",
+        skip(self, request),
+        fields(
+            model.name = ?request.model,
+            model.message_count = request.messages.len(),
+            model.stream = ?request.stream,
+            model.response_length = tracing::field::Empty,
+        )
+    )]
     async fn deepseek_query(
         &self,
         Parameters(request): Parameters<DeepSeekQueryRequest>,
     ) -> Result<CallToolResult, McpError> {
+        let model = request.model.clone().unwrap_or_else(|| "deepseek-coder-v2-lite".to_string());
+
         let result = self.local_models.run_deepseek_query(
             request.model,
             request.messages,
             request.stream,
         ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string(&result).unwrap()
-        )]))
+        let response_len = result.text.len();
+        tracing::Span::current().record("model.response_length", response_len);
+
+        // Warn if response is very large (>100KB)
+        if response_len > 100_000 {
+            tracing::warn!("DeepSeek response is large: {} bytes", response_len);
+        }
+
+        // Store generated text in CAS
+        let text_hash = self.local_models.store_cas_content(
+            result.text.as_bytes(),
+            "text/plain"
+        ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        // Create artifact
+        let artifact = self.create_artifact(
+            &text_hash,
+            "query",
+            &model,
+            None, // No temperature for DeepSeek
+            Some(response_len as u32),
+            request.variation_set_id,
+            request.parent_id,
+            request.tags,
+            request.creator,
+        )?;
+
+        // Include artifact_id in response
+        let response = serde_json::json!({
+            "text": result.text,
+            "finish_reason": result.finish_reason,
+            "artifact_id": artifact.id,
+            "cas_hash": text_hash,
+        });
+
+        let json = serde_json::to_string(&response)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize DeepSeek result: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 }
 

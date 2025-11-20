@@ -5,7 +5,7 @@
 use crate::cas::Cas;
 use axum::{
     extract::{Path, State},
-    http::{StatusCode, header},
+    http::{StatusCode, header, HeaderMap},
     response::{IntoResponse, Response},
     routing::{get, post},
     Router,
@@ -17,15 +17,22 @@ use tokio_util::io::ReaderStream;
 pub fn router(cas: Cas) -> Router {
     Router::new()
         .route("/cas", post(upload_cas))
-        .route("/cas/:hash", get(download_cas))
+        .route("/cas/{hash}", get(download_cas))
         .with_state(Arc::new(cas))
 }
 
 async fn upload_cas(
     State(cas): State<Arc<Cas>>,
+    headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    match cas.write(&body) {
+    // Extract MIME type from Content-Type header, default to application/octet-stream
+    let mime_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+
+    match cas.write(&body, mime_type) {
         Ok(hash) => (StatusCode::OK, hash).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }

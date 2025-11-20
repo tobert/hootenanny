@@ -1,3 +1,4 @@
+mod artifact_store;
 mod conversation;
 mod domain;
 mod realization;
@@ -119,6 +120,15 @@ async fn main() -> Result<()> {
     tracing::info!("   Orpheus: port {}", cli.orpheus_port);
     tracing::info!("   DeepSeek: port {}", cli.deepseek_port);
 
+    // --- Artifact Store Initialization ---
+    tracing::info!("📚 Initializing Artifact Store...");
+    let artifact_store_path = state_dir.join("artifacts.json");
+    let artifact_store = Arc::new(
+        artifact_store::FileStore::new(&artifact_store_path)
+            .context("Failed to initialize artifact store")?
+    );
+    tracing::info!("   Artifact store at: {}", artifact_store_path.display());
+
     let addr = format!("127.0.0.1:{}", cli.port);
 
     tracing::info!("🎵 Event Duality Server starting on http://{}", addr);
@@ -158,10 +168,12 @@ async fn main() -> Result<()> {
     // Register the service BEFORE starting the server
     tracing::info!("Setting up SSE server with EventDualityServer service.");
     let local_models_clone = local_models.clone();
+    let artifact_store_clone = artifact_store.clone();
     let ct = sse_server.with_service(move || {
         EventDualityServer::new_with_state(
             shared_state.clone(),
-            local_models_clone.clone()
+            local_models_clone.clone(),
+            artifact_store_clone.clone()
         )
     });
 

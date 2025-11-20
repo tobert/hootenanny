@@ -8,7 +8,6 @@ use crate::domain::CasReference;
 use anyhow::{Context, Result};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 // --- Data Structures ---
 
@@ -17,6 +16,7 @@ pub struct OrpheusGenerateParams {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub max_tokens: Option<u32>,
+    pub num_variations: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -112,8 +112,30 @@ impl LocalModels {
     }
 
     // Helper to store bytes to CAS
-    fn store_cas(&self, data: &[u8]) -> Result<String> {
-        self.cas.write(data)
+    fn store_cas(&self, data: &[u8], mime_type: &str) -> Result<String> {
+        self.cas.write(data, mime_type)
+    }
+
+    // Helper to inject traceparent header for distributed tracing
+    fn inject_trace_context(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        use opentelemetry::trace::TraceContextExt;
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+        let span = tracing::Span::current();
+        let context = span.context();
+        let ctx_span = context.span();
+        let span_context = ctx_span.span_context();
+
+        if span_context.is_valid() {
+            let trace_id = span_context.trace_id();
+            let span_id = span_context.span_id();
+            let flags = if span_context.is_sampled() { "01" } else { "00" };
+
+            let traceparent = format!("00-{}-{}-{}", trace_id, span_id, flags);
+            builder.header("traceparent", traceparent)
+        } else {
+            builder
+        }
     }
 }
 
@@ -122,6 +144,23 @@ impl LocalModels {
 // Here is the logic that would go inside the trait implementation.
 
 impl LocalModels {
+    pub async fn store_cas_content(
+        &self,
+        content: &[u8],
+        mime_type: &str,
+    ) -> Result<String> {
+        self.cas.write(content, mime_type)
+            .context("Failed to store content in CAS")
+    }
+
+    pub async fn inspect_cas_content(
+        &self,
+        hash: &str,
+    ) -> Result<CasReference> {
+        self.cas.inspect(hash)?
+            .ok_or_else(|| anyhow::anyhow!("CAS object with hash {} not found", hash))
+    }
+
     pub async fn run_orpheus_generate(
         &self,
         model: String,
@@ -142,6 +181,9 @@ impl LocalModels {
         if let Some(max) = params.max_tokens {
             request_body.insert("max_tokens".to_string(), serde_json::json!(max));
         }
+        if let Some(num_var) = params.num_variations {
+            request_body.insert("num_variations".to_string(), serde_json::json!(num_var));
+        }
 
         if let Some(hash) = input_hash {
             let midi_bytes = self.resolve_cas(&hash)?;
@@ -151,24 +193,29 @@ impl LocalModels {
             request_body.insert("midi_input".to_string(), serde_json::json!(b64_midi));
         }
 
-        let resp = self.client.post(format!("{}/predict", self.orpheus_url))
-            .json(&request_body)
-            .send()
+        let builder = self.client.post(format!("{}/predict", self.orpheus_url))
+            .json(&request_body);
+        let builder = self.inject_trace_context(builder);
+        let resp = builder.send()
             .await
             .context("Failed to call Orpheus API")?;
 
-        if !resp.status().is_success() {
-            anyhow::bail!("Orpheus API error: {}", resp.status());
+        let status = resp.status();
+        if !status.is_success() {
+            // Capture error response body for better debugging
+            let error_body = resp.text().await.unwrap_or_else(|_| "<failed to read error body>".to_string());
+            anyhow::bail!("Orpheus API error {}: {}", status, error_body);
         }
 
-        let resp_json: serde_json::Value = resp.json().await?;
+        let resp_json: serde_json::Value = resp.json().await
+            .context("Failed to parse Orpheus response as JSON")?;
         
         // Extract MIDI output
         if let Some(midi_b64) = resp_json.get("midi_base64").and_then(|v| v.as_str()) {
              use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
              let midi_bytes = BASE64.decode(midi_b64).context("Failed to decode API output")?;
              
-             let hash = self.store_cas(&midi_bytes)?;
+             let hash = self.store_cas(&midi_bytes, "audio/midi")?;
              
              let token_count = resp_json.get("num_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
 
@@ -197,20 +244,30 @@ impl LocalModels {
             "midi_input": b64_midi
         });
 
-        let resp = self.client.post(format!("{}/predict", self.orpheus_url))
-            .json(&request_body)
-            .send()
+        let builder = self.client.post(format!("{}/predict", self.orpheus_url))
+            .json(&request_body);
+        let builder = self.inject_trace_context(builder);
+        let resp = builder.send()
             .await
             .context("Failed to call Orpheus API")?;
 
-        let resp_json: serde_json::Value = resp.json().await?;
-        
+        let status = resp.status();
+        if !status.is_success() {
+            let error_body = resp.text().await.unwrap_or_else(|_| "<failed to read error body>".to_string());
+            anyhow::bail!("Orpheus API error {}: {}", status, error_body);
+        }
+
+        let resp_json: serde_json::Value = resp.json().await
+            .context("Failed to parse Orpheus response as JSON")?;
+
         if let Some(classification) = resp_json.get("classification") {
              let is_human = classification.get("is_human").and_then(|v| v.as_bool()).unwrap_or(false);
              let confidence = classification.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-             
-             // Safe unwrap for simplicity in PoC
-             let probs: std::collections::HashMap<String, f32> = serde_json::from_value(classification.get("probabilities").unwrap().clone())?;
+
+             let probabilities = classification.get("probabilities")
+                .ok_or_else(|| anyhow::anyhow!("Missing 'probabilities' field in classification"))?;
+             let probs: std::collections::HashMap<String, f32> = serde_json::from_value(probabilities.clone())
+                .context("Failed to parse probabilities map")?;
 
              Ok(OrpheusClassifyResult {
                  is_human,
@@ -236,15 +293,26 @@ impl LocalModels {
 
         // Note: For PoC we only handle non-streaming /predict endpoint even if stream is requested
         // as implementing SSE client here is complex.
-        let resp = self.client.post(format!("{}/predict", self.deepseek_url))
-            .json(&request_body)
-            .send()
+        let builder = self.client.post(format!("{}/predict", self.deepseek_url))
+            .json(&request_body);
+        let builder = self.inject_trace_context(builder);
+        let resp = builder.send()
             .await
             .context("Failed to call DeepSeek API")?;
 
-        let resp_json: serde_json::Value = resp.json().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let error_body = resp.text().await.unwrap_or_else(|_| "<failed to read error body>".to_string());
+            anyhow::bail!("DeepSeek API error {}: {}", status, error_body);
+        }
 
-        let text = resp_json.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let resp_json: serde_json::Value = resp.json().await
+            .context("Failed to parse DeepSeek response as JSON")?;
+
+        let text = resp_json.get("text")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'text' field in DeepSeek response"))?
+            .to_string();
 
         Ok(DeepSeekQueryResult {
             text,

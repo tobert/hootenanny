@@ -2,6 +2,7 @@
 //!
 //! Library exposing core modules for testing and reuse.
 
+pub mod artifact_store;
 pub mod conversation;
 pub mod domain;
 pub mod persistence;

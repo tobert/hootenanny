@@ -1107,6 +1107,7 @@ dependencies = [
  "bincode",
  "blake3",
  "capnpc",
+ "chrono",
  "clap",
  "hex",
  "opentelemetry",
