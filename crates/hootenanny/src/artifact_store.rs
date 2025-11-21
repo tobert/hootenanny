@@ -396,4 +396,176 @@ mod tests {
         // Cleanup
         std::fs::remove_file(&path).ok();
     }
+
+    #[test]
+    fn test_artifact_types() {
+        // Test different artifact types match tool outputs
+        let midi_artifact = Artifact::new("midi_001", "agent_orpheus", json!({"hash": "abc"}))
+            .with_tags(vec!["type:midi", "phase:generation", "tool:orpheus_generate"]);
+        assert_eq!(midi_artifact.artifact_type(), Some("type:midi"));
+        assert_eq!(midi_artifact.phase(), Some("phase:generation"));
+
+        let text_artifact = Artifact::new("text_001", "agent_claude", json!({"hash": "def"}))
+            .with_tags(vec!["type:text", "phase:generation", "tool:deepseek_query"]);
+        assert_eq!(text_artifact.artifact_type(), Some("type:text"));
+
+        let event_artifact = Artifact::new("event_001", "agent_gemini", json!({"hash": "ghi"}))
+            .with_tags(vec!["type:musical_event", "phase:realization", "tool:play"]);
+        assert_eq!(event_artifact.artifact_type(), Some("type:musical_event"));
+        assert_eq!(event_artifact.phase(), Some("phase:realization"));
+
+        let intention_artifact = Artifact::new("intention_001", "agent_claude", json!({"hash": "jkl"}))
+            .with_tags(vec!["type:intention", "phase:contribution", "tool:add_node"]);
+        assert_eq!(intention_artifact.artifact_type(), Some("type:intention"));
+        assert_eq!(intention_artifact.phase(), Some("phase:contribution"));
+    }
+
+    #[test]
+    fn test_variation_set_tracking() {
+        let store = InMemoryStore::new();
+
+        // Create variation set with 3 artifacts
+        for i in 0..3 {
+            let artifact = Artifact::new(
+                format!("var_{}", i),
+                "agent_claude",
+                json!({"variation": i})
+            )
+            .with_variation_set("vset_exploration", i)
+            .with_tags(vec!["phase:exploration", "type:midi"]);
+
+            store.put(artifact).unwrap();
+        }
+
+        // Verify all in same set
+        let all = store.all().unwrap();
+        let in_set: Vec<_> = all.iter()
+            .filter(|a| a.variation_set_id.as_deref() == Some("vset_exploration"))
+            .collect();
+        assert_eq!(in_set.len(), 3);
+
+        // Verify indices are correct
+        assert!(in_set.iter().any(|a| a.variation_index == Some(0)));
+        assert!(in_set.iter().any(|a| a.variation_index == Some(1)));
+        assert!(in_set.iter().any(|a| a.variation_index == Some(2)));
+
+        // Next index should be 3
+        assert_eq!(store.next_variation_index("vset_exploration").unwrap(), 3);
+    }
+
+    #[test]
+    fn test_parent_child_chain() {
+        let store = InMemoryStore::new();
+
+        // Create parent
+        let parent = Artifact::new("parent_001", "agent", json!({"gen": 0}))
+            .with_tags(vec!["phase:initial"]);
+        store.put(parent).unwrap();
+
+        // Create child
+        let child = Artifact::new("child_001", "agent", json!({"gen": 1}))
+            .with_parent("parent_001")
+            .with_tags(vec!["phase:refinement"]);
+        store.put(child).unwrap();
+
+        // Create grandchild
+        let grandchild = Artifact::new("grandchild_001", "agent", json!({"gen": 2}))
+            .with_parent("child_001")
+            .with_tags(vec!["phase:final"]);
+        store.put(grandchild).unwrap();
+
+        // Verify chain
+        let retrieved_child = store.get("child_001").unwrap().unwrap();
+        assert_eq!(retrieved_child.parent_id, Some("parent_001".to_string()));
+
+        let retrieved_grandchild = store.get("grandchild_001").unwrap().unwrap();
+        assert_eq!(retrieved_grandchild.parent_id, Some("child_001".to_string()));
+
+        // Verify we can traverse the chain
+        let all = store.all().unwrap();
+        let has_parent: Vec<_> = all.iter()
+            .filter(|a| a.parent_id.is_some())
+            .collect();
+        assert_eq!(has_parent.len(), 2); // child and grandchild
+    }
+
+    #[test]
+    fn test_multi_tool_artifact_collection() {
+        let store = InMemoryStore::new();
+
+        // Simulate artifacts from different tools
+        let orpheus_artifact = Artifact::new("orpheus_001", "agent_orpheus", json!({"task": "generate"}))
+            .with_tags(vec!["type:midi", "phase:generation", "tool:orpheus_generate"]);
+        store.put(orpheus_artifact).unwrap();
+
+        let deepseek_artifact = Artifact::new("deepseek_001", "agent_claude", json!({"task": "query"}))
+            .with_tags(vec!["type:text", "phase:generation", "tool:deepseek_query"]);
+        store.put(deepseek_artifact).unwrap();
+
+        let play_artifact = Artifact::new("play_001", "agent_gemini", json!({"task": "play"}))
+            .with_tags(vec!["type:musical_event", "phase:realization", "tool:play"]);
+        store.put(play_artifact).unwrap();
+
+        let node_artifact = Artifact::new("node_001", "agent_claude", json!({"task": "add_node"}))
+            .with_tags(vec!["type:intention", "phase:contribution", "tool:add_node"]);
+        store.put(node_artifact).unwrap();
+
+        // Verify count
+        assert_eq!(store.count().unwrap(), 4);
+
+        // Query by type
+        let all = store.all().unwrap();
+        let midi_artifacts: Vec<_> = all.iter()
+            .filter(|a| a.has_tag("type:midi"))
+            .collect();
+        assert_eq!(midi_artifacts.len(), 1);
+
+        let text_artifacts: Vec<_> = all.iter()
+            .filter(|a| a.has_tag("type:text"))
+            .collect();
+        assert_eq!(text_artifacts.len(), 1);
+
+        // Query by phase
+        let generation_artifacts: Vec<_> = all.iter()
+            .filter(|a| a.has_tag("phase:generation"))
+            .collect();
+        assert_eq!(generation_artifacts.len(), 2); // orpheus + deepseek
+    }
+
+    #[test]
+    fn test_tag_filtering() {
+        let store = InMemoryStore::new();
+
+        // Create artifacts with various tag combinations
+        let a1 = Artifact::new("a1", "agent", json!({}))
+            .with_tags(vec!["language:rust", "task:parsing", "quality:high"]);
+        let a2 = Artifact::new("a2", "agent", json!({}))
+            .with_tags(vec!["language:python", "task:parsing"]);
+        let a3 = Artifact::new("a3", "agent", json!({}))
+            .with_tags(vec!["language:rust", "task:debugging"]);
+
+        store.put(a1).unwrap();
+        store.put(a2).unwrap();
+        store.put(a3).unwrap();
+
+        let all = store.all().unwrap();
+
+        // Filter by single tag
+        let rust_artifacts: Vec<_> = all.iter()
+            .filter(|a| a.has_tag("language:rust"))
+            .collect();
+        assert_eq!(rust_artifacts.len(), 2);
+
+        // Filter by multiple tags (all must match)
+        let rust_parsing: Vec<_> = all.iter()
+            .filter(|a| a.has_all_tags(&["language:rust", "task:parsing"]))
+            .collect();
+        assert_eq!(rust_parsing.len(), 1);
+
+        // Filter by prefix
+        let language_tags: Vec<_> = all.iter()
+            .flat_map(|a| a.tags_with_prefix("language:"))
+            .collect();
+        assert_eq!(language_tags.len(), 3); // rust, python, rust
+    }
 }
