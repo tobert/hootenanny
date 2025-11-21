@@ -6,11 +6,17 @@
 
 ## What It Does
 
-Every Orpheus tool call now **automatically creates an Artifact** that tracks:
-- The generated MIDI (via CAS hash)
+**8 content-generating MCP tools** now automatically create Artifacts that track:
+- The generated content (via CAS hash)
 - Variation relationships (sets, parents, siblings)
 - Arbitrary tags for organization
 - Creator and metadata
+
+**Supported Tools:**
+- **Music Generation** (5 tools): `orpheus_generate`, `orpheus_generate_seeded`, `orpheus_continue`, `orpheus_bridge`, `orpheus_loops` → MIDI files
+- **Code Generation** (1 tool): `deepseek_query` → Text/code
+- **Musical Events** (1 tool): `play` → Realized sound events
+- **Intentions** (1 tool): `add_node` → Musical contributions
 
 All artifacts stored in `state/artifacts.json` (JSON file, human-readable).
 
@@ -98,22 +104,28 @@ Every artifact has:
 
 ## Tool Parameters
 
-All 5 Orpheus tools support these **optional** parameters:
+All 8 content-generating tools support these **optional** artifact tracking parameters:
 
 ```typescript
 {
-  // Standard generation params
+  // Standard generation params (tool-specific)
   temperature?: number,
   max_tokens?: number,
-  // ... tool-specific params
+  messages?: Message[],
+  // ... other tool-specific params
 
   // Artifact tracking (all optional)
   variation_set_id?: string,    // Group with other variations
   parent_id?: string,            // Link to parent artifact
   tags?: string[],               // Custom tags
-  creator?: string               // Defaults to "agent_orpheus"
+  creator?: string               // Defaults vary by tool
 }
 ```
+
+**Default Creators:**
+- Orpheus tools: `"agent_orpheus"`
+- DeepSeek: `"unknown"` (specify your agent ID)
+- Play/Add Node: Uses `agent_id` from request
 
 ---
 
@@ -184,6 +196,77 @@ agent_gemini.orpheus_generate({
 // Both in same set, different creators and tags
 ```
 
+### Pattern 4: Code Generation with Refinement
+
+```json
+// Initial code generation
+deepseek_query({
+  messages: [{role: "user", content: "Write a Rust function to parse MIDI"}],
+  variation_set_id: "vset_midi_parser",
+  tags: ["language:rust", "task:parsing"],
+  creator: "agent_claude"
+})
+// → Returns: {text: "...", artifact_id: "artifact_abc", cas_hash: "..."}
+
+// Refine the code
+deepseek_query({
+  messages: [{role: "user", content: "Add error handling to that parser"}],
+  variation_set_id: "vset_midi_parser_v2",
+  parent_id: "artifact_abc",
+  tags: ["language:rust", "task:parsing", "phase:refinement"],
+  creator: "agent_claude"
+})
+```
+
+### Pattern 5: Musical Event Tracking
+
+```json
+// Track individual musical contributions
+play({
+  what: "C",
+  how: "boldly",
+  valence: 0.8,
+  arousal: 0.7,
+  agency: 0.6,
+  agent_id: "agent_claude",
+  variation_set_id: "vset_jam_session_1",
+  tags: ["role:lead", "emotion:energetic"]
+})
+// → Returns: {sound: {...}, artifact_id: "artifact_def", cas_hash: "..."}
+
+// Another agent responds
+play({
+  what: "E",
+  how: "softly",
+  valence: 0.5,
+  arousal: 0.3,
+  agency: -0.2,
+  agent_id: "agent_gemini",
+  variation_set_id: "vset_jam_session_1",
+  parent_id: "artifact_def",
+  tags: ["role:harmony", "emotion:calm"]
+})
+// → Creates call-and-response chain
+```
+
+### Pattern 6: Conversational Intentions
+
+```json
+// Track musical ideas in conversation tree
+add_node({
+  what: "D",
+  how: "questioning",
+  valence: 0.0,
+  arousal: 0.5,
+  agency: 0.3,
+  agent_id: "agent_claude",
+  description: "Exploring modal shift",
+  variation_set_id: "vset_exploration_phase",
+  tags: ["phase:exploration", "technique:modal"]
+})
+// → Adds to conversation tree + creates artifact
+```
+
 ---
 
 ## Tag Conventions
@@ -191,20 +274,50 @@ agent_gemini.orpheus_generate({
 Suggested tag format: `category:value`
 
 ```bash
-# Type
-type:midi
-type:audio
+# Type (auto-applied by tools)
+type:midi               # Orpheus tools
+type:text               # DeepSeek
+type:musical_event      # Play tool
+type:intention          # Add node tool
 
-# Phase
-phase:initial
-phase:exploration
-phase:refinement
-phase:final
+# Phase (auto-applied + custom)
+phase:generation        # Orpheus, DeepSeek
+phase:realization       # Play
+phase:contribution      # Add node
+phase:initial           # Custom
+phase:exploration       # Custom
+phase:refinement        # Custom
+phase:final             # Custom
 
-# Role
+# Language (for code)
+language:rust
+language:python
+language:javascript
+
+# Task (for code/music)
+task:parsing
+task:debugging
+task:refactoring
+task:melody
+task:harmony
+
+# Role (ensemble)
 role:melody_specialist
 role:harmony_specialist
 role:producer
+role:lead
+role:harmony
+
+# Emotion (musical events)
+emotion:energetic
+emotion:calm
+emotion:joyful
+emotion:melancholy
+
+# Technique
+technique:modal
+technique:counterpoint
+technique:improvisation
 
 # Experiment
 experiment:upbeat
@@ -330,12 +443,29 @@ orpheus_continue({
 
 ## Auto-Applied Tags
 
-Every artifact automatically gets:
+Every artifact automatically gets tags based on the tool used:
+
+### Orpheus Tools (5)
 - `type:midi`
 - `phase:generation`
-- `tool:orpheus_{task}` (e.g., `tool:orpheus_generate`)
+- `tool:orpheus_generate`, `tool:orpheus_generate_seeded`, `tool:orpheus_continue`, `tool:orpheus_bridge`, or `tool:orpheus_loops`
 
-Your custom tags are added to these.
+### DeepSeek Tool (1)
+- `type:text`
+- `phase:generation`
+- `tool:deepseek_query`
+
+### Play Tool (1)
+- `type:musical_event`
+- `phase:realization`
+- `tool:play`
+
+### Add Node Tool (1)
+- `type:intention`
+- `phase:contribution`
+- `tool:add_node`
+
+Your custom tags are **added** to these auto-applied tags.
 
 ---
 
