@@ -108,6 +108,17 @@ pub struct AddNodeRequest {
 
     #[schemars(description = "Optional description of this musical contribution")]
     pub description: Option<String>,
+
+    // Artifact/variation tracking fields
+    #[schemars(description = "Optional variation set ID to group related contributions")]
+    pub variation_set_id: Option<String>,
+
+    #[schemars(description = "Optional parent artifact ID for refinements")]
+    pub parent_id: Option<String>,
+
+    #[schemars(description = "Optional tags for organizing artifacts (e.g., ['role:melody', 'emotion:joyful'])")]
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// Request to fork a conversation branch.
@@ -510,14 +521,14 @@ impl EventDualityServer {
             sound.duration_ms = tracing::field::Empty,
         )
     )]
-    fn play(
+    async fn play(
         &self,
         Parameters(request): Parameters<AddNodeRequest>,
     ) -> Result<CallToolResult, McpError> {
         // Reuse the flattened AddNodeRequest structure for simplicity
         let intention = AbstractEvent::Intention(IntentionEvent {
-            what: request.what,
-            how: request.how,
+            what: request.what.clone(),
+            how: request.how.clone(),
             emotion: EmotionalVector {
                 valence: request.valence,
                 arousal: request.arousal,
@@ -537,11 +548,74 @@ impl EventDualityServer {
             }
         }
 
-        let result = serde_json::to_value(sound)
+        let result_value = serde_json::to_value(&sound)
             .map_err(|e| McpError::internal_error(format!("Failed to serialize sound: {}", e), None))?;
 
+        // Store the sound event in CAS
+        let sound_json = serde_json::to_string_pretty(&sound)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize sound for CAS: {}", e), None))?;
+
+        // Use general_purpose encoding
+        let sound_hash = self.local_models.store_cas_content(
+            sound_json.as_bytes(),
+            "application/json"
+        ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        // Create artifact with musical metadata
+        let artifact_id = format!("artifact_{}", &sound_hash[..12]);
+        let mut artifact = Artifact::new(
+            &artifact_id,
+            &request.agent_id,
+            serde_json::json!({
+                "hash": sound_hash,
+                "intention": {
+                    "what": request.what,
+                    "how": request.how,
+                },
+                "emotion": {
+                    "valence": request.valence,
+                    "arousal": request.arousal,
+                    "agency": request.agency,
+                },
+                "description": request.description,
+            })
+        )
+        .with_tags(vec![
+            "type:musical_event",
+            "phase:realization",
+            "tool:play"
+        ]);
+
+        // Add variation set info if provided
+        if let Some(set_id) = request.variation_set_id {
+            let index = self.artifact_store.next_variation_index(&set_id)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            artifact = artifact.with_variation_set(&set_id, index);
+        }
+
+        // Add parent if provided
+        if let Some(parent_id) = request.parent_id {
+            artifact = artifact.with_parent(&parent_id);
+        }
+
+        // Add custom tags
+        artifact = artifact.with_tags(request.tags);
+
+        // Store artifact
+        self.artifact_store.put(artifact.clone())
+            .map_err(|e| McpError::internal_error(format!("Failed to store artifact: {}", e), None))?;
+        self.artifact_store.flush()
+            .map_err(|e| McpError::internal_error(format!("Failed to flush artifact store: {}", e), None))?;
+
+        // Include artifact_id in response
+        let response = serde_json::json!({
+            "sound": result_value,
+            "artifact_id": artifact.id,
+            "cas_hash": sound_hash,
+        });
+
         Ok(CallToolResult::success(vec![Content::text(
-            result.to_string(),
+            response.to_string(),
         )]))
     }
 
