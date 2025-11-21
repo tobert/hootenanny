@@ -637,56 +637,123 @@ impl EventDualityServer {
             tree.nodes_after = tracing::field::Empty,
         )
     )]
-    fn add_node(
+    async fn add_node(
         &self,
         Parameters(request): Parameters<AddNodeRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let mut state = self.state.lock().unwrap();
+        // Scope the mutex to ensure it's dropped before async operations
+        let (node_id, branch_id, total_nodes, intention) = {
+            let mut state = self.state.lock().unwrap();
 
-        let branch_id = request.branch_id.unwrap_or_else(|| state.current_branch.clone());
+            let branch_id = request.branch_id.clone().unwrap_or_else(|| state.current_branch.clone());
 
-        let nodes_before = state.tree.nodes.len();
+            let nodes_before = state.tree.nodes.len();
 
-        // Record branch resolution
-        let span = tracing::Span::current();
-        span.record("conversation.branch_id", &*branch_id);
-        span.record("tree.nodes_before", nodes_before);
+            // Record branch resolution
+            let span = tracing::Span::current();
+            span.record("conversation.branch_id", &*branch_id);
+            span.record("tree.nodes_before", nodes_before);
 
-        // Construct AbstractEvent from flattened parameters
-        let intention = AbstractEvent::Intention(IntentionEvent {
-            what: request.what,
-            how: request.how,
-            emotion: EmotionalVector {
-                valence: request.valence,
-                arousal: request.arousal,
-                agency: request.agency,
-            },
-        });
+            // Construct AbstractEvent from flattened parameters
+            let intention = AbstractEvent::Intention(IntentionEvent {
+                what: request.what.clone(),
+                how: request.how.clone(),
+                emotion: EmotionalVector {
+                    valence: request.valence,
+                    arousal: request.arousal,
+                    agency: request.agency,
+                },
+            });
 
-        let event = Event::Abstract(intention);
+            let event = Event::Abstract(intention.clone());
 
-        let node_id = state
-            .tree
-            .add_node(
-                &branch_id,
-                event,
-                request.agent_id.clone(),
-                EmotionalVector::neutral(), // Use intention's emotion
-                request.description,
-            )
-            .map_err(|e| McpError::parse_error(e, None))?;
+            let node_id = state
+                .tree
+                .add_node(
+                    &branch_id,
+                    event,
+                    request.agent_id.clone(),
+                    EmotionalVector::neutral(), // Use intention's emotion
+                    request.description.clone(),
+                )
+                .map_err(|e| McpError::parse_error(e, None))?;
 
-        // Record node creation
-        span.record("conversation.node_id", node_id);
-        span.record("tree.nodes_after", state.tree.nodes.len());
+            // Record node creation
+            span.record("conversation.node_id", node_id);
+            span.record("tree.nodes_after", state.tree.nodes.len());
 
-        // Save to persistence
-        state.save().map_err(|e| McpError::parse_error(e.to_string(), None))?;
+            // Save to persistence
+            state.save().map_err(|e| McpError::parse_error(e.to_string(), None))?;
+
+            let total_nodes = state.tree.nodes.len();
+
+            // MutexGuard dropped here at end of scope
+            (node_id, branch_id, total_nodes, intention)
+        };
+
+        // Store the intention in CAS
+        let intention_json = serde_json::to_string_pretty(&intention)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize intention: {}", e), None))?;
+
+        let intention_hash = self.local_models.store_cas_content(
+            intention_json.as_bytes(),
+            "application/json"
+        ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        // Create artifact with conversation context
+        let artifact_id = format!("artifact_{}", &intention_hash[..12]);
+        let mut artifact = Artifact::new(
+            &artifact_id,
+            &request.agent_id,
+            serde_json::json!({
+                "hash": intention_hash,
+                "node_id": node_id,
+                "branch_id": branch_id,
+                "intention": {
+                    "what": request.what,
+                    "how": request.how,
+                },
+                "emotion": {
+                    "valence": request.valence,
+                    "arousal": request.arousal,
+                    "agency": request.agency,
+                },
+                "description": request.description,
+            })
+        )
+        .with_tags(vec![
+            "type:intention",
+            "phase:contribution",
+            "tool:add_node"
+        ]);
+
+        // Add variation set info if provided
+        if let Some(set_id) = request.variation_set_id {
+            let index = self.artifact_store.next_variation_index(&set_id)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            artifact = artifact.with_variation_set(&set_id, index);
+        }
+
+        // Add parent if provided
+        if let Some(parent_id) = request.parent_id {
+            artifact = artifact.with_parent(&parent_id);
+        }
+
+        // Add custom tags
+        artifact = artifact.with_tags(request.tags);
+
+        // Store artifact
+        self.artifact_store.put(artifact.clone())
+            .map_err(|e| McpError::internal_error(format!("Failed to store artifact: {}", e), None))?;
+        self.artifact_store.flush()
+            .map_err(|e| McpError::internal_error(format!("Failed to flush artifact store: {}", e), None))?;
 
         let result = serde_json::json!({
             "node_id": node_id,
             "branch_id": branch_id,
-            "total_nodes": state.tree.nodes.len(),
+            "total_nodes": total_nodes,
+            "artifact_id": artifact.id,
+            "cas_hash": intention_hash,
         });
 
         Ok(CallToolResult::success(vec![Content::text(
