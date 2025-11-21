@@ -408,6 +408,42 @@ pub struct CasInspectRequest {
     pub hash: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UploadFileRequest {
+    #[schemars(description = "Absolute path to file to upload")]
+    pub file_path: String,
+
+    #[schemars(description = "MIME type of the file (e.g., 'audio/soundfont', 'audio/midi')")]
+    pub mime_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MidiToWavRequest {
+    #[schemars(description = "CAS hash of MIDI file to render (required)")]
+    pub input_hash: String,
+
+    #[schemars(description = "CAS hash of SoundFont file (required)")]
+    pub soundfont_hash: String,
+
+    #[schemars(description = "Sample rate (default: 44100)")]
+    pub sample_rate: Option<u32>,
+
+    // Artifact tracking fields
+    #[schemars(description = "Optional variation set ID to group related conversions")]
+    pub variation_set_id: Option<String>,
+
+    #[schemars(description = "Optional parent artifact ID for refinements")]
+    pub parent_id: Option<String>,
+
+    #[schemars(description = "Optional tags for organizing artifacts")]
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[schemars(description = "Creator identifier (agent or user ID)")]
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
+}
+
 #[tool_router]
 impl EventDualityServer {
     pub fn new_with_state(
@@ -931,6 +967,52 @@ The local_path can be used to access the file directly on disk.")]
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
+    #[tool(description = "Upload a file from disk to Content Addressable Storage (CAS).
+
+Example: {file_path: '/path/to/soundfont.sf2', mime_type: 'audio/soundfont'}
+
+Returns: BLAKE3 hash string that can be used to retrieve the content.")]
+    #[tracing::instrument(
+        name = "mcp.tool.upload_file",
+        skip(self, request),
+        fields(
+            file.path = %request.file_path,
+            file.mime_type = %request.mime_type,
+            file.size = tracing::field::Empty,
+            cas.hash = tracing::field::Empty,
+        )
+    )]
+    async fn upload_file(
+        &self,
+        Parameters(request): Parameters<UploadFileRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        // Read file from disk
+        let file_bytes = tokio::fs::read(&request.file_path)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Failed to read file: {}", e), None))?;
+
+        let span = tracing::Span::current();
+        span.record("file.size", file_bytes.len());
+
+        // Store in CAS
+        let hash = self.local_models.store_cas_content(&file_bytes, &request.mime_type)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Failed to store file in CAS: {}", e), None))?;
+
+        span.record("cas.hash", &*hash);
+
+        let result = serde_json::json!({
+            "hash": hash,
+            "size_bytes": file_bytes.len(),
+            "mime_type": request.mime_type,
+        });
+
+        let json = serde_json::to_string(&result)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize response: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
     // --- Local Model Tools ---
 
     // Helper function to validate sampling parameters
@@ -973,6 +1055,8 @@ The local_path can be used to access the file directly on disk.")]
         // Determine artifact type and tool name based on task
         let (artifact_type, tool_name) = if task == "query" {
             ("type:text", format!("tool:deepseek_{}", task))
+        } else if task == "midi_to_wav" {
+            ("type:audio", "tool:midi_to_wav".to_string())
         } else {
             ("type:midi", format!("tool:orpheus_{}", task))
         };
@@ -1477,6 +1561,87 @@ Returns: {text: '...response...', finish_reason: 'stop'}")]
 
         let json = serde_json::to_string(&response)
             .map_err(|e| McpError::internal_error(format!("Failed to serialize DeepSeek result: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Render MIDI file to WAV using RustySynth.
+
+Example: {input_hash: '5ca7815abc...', soundfont_hash: 'a1b2c3d...', sample_rate: 44100}
+
+Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Rendered N seconds'}
+The output_hash can be used with cas_inspect to get the WAV file path.")]
+    #[tracing::instrument(
+        name = "mcp.tool.midi_to_wav",
+        skip(self, request),
+        fields(
+            midi.input_hash = %request.input_hash,
+            soundfont.hash = %request.soundfont_hash,
+            audio.sample_rate = request.sample_rate.unwrap_or(44100),
+            audio.output_hash = tracing::field::Empty,
+            audio.duration_seconds = tracing::field::Empty,
+        )
+    )]
+    async fn midi_to_wav(
+        &self,
+        Parameters(request): Parameters<MidiToWavRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        // Get MIDI file from CAS
+        let midi_bytes = self.local_models.read_cas_content(&request.input_hash)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Failed to read MIDI from CAS: {}", e), None))?;
+
+        // Get SoundFont from CAS
+        let soundfont_bytes = self.local_models.read_cas_content(&request.soundfont_hash)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Failed to read SoundFont from CAS: {}", e), None))?;
+
+        // Render using RustySynth
+        let sample_rate = request.sample_rate.unwrap_or(44100);
+        let wav_bytes = crate::mcp_tools::rustysynth::render_midi_to_wav(
+            &midi_bytes,
+            &soundfont_bytes,
+            sample_rate,
+        ).map_err(|e| McpError::internal_error(format!("Failed to render MIDI: {}", e), None))?;
+
+        // Calculate duration
+        let duration_seconds = crate::mcp_tools::rustysynth::calculate_wav_duration(&wav_bytes, sample_rate);
+
+        // Store WAV in CAS
+        let wav_hash = self.local_models.store_cas_content(&wav_bytes, "audio/wav")
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let span = tracing::Span::current();
+        span.record("audio.output_hash", &*wav_hash);
+        span.record("audio.duration_seconds", duration_seconds);
+
+        // Create artifact
+        let artifact = self.create_artifact(
+            &wav_hash,
+            "midi_to_wav",
+            "rustysynth",
+            None,  // No temperature for this tool
+            Some(wav_bytes.len() as u32),  // Store size instead of tokens
+            request.variation_set_id,
+            request.parent_id,
+            request.tags,
+            request.creator,
+        )?;
+
+        // Return response
+        let response = serde_json::json!({
+            "status": "success",
+            "output_hash": wav_hash,
+            "summary": format!("Rendered {:.2} seconds of audio", duration_seconds),
+            "artifact_id": artifact.id,
+            "sample_rate": sample_rate,
+            "size_bytes": wav_bytes.len(),
+            "duration_seconds": duration_seconds,
+        });
+
+        let json = serde_json::to_string(&response)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }

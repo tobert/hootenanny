@@ -161,6 +161,13 @@ impl LocalModels {
             .ok_or_else(|| anyhow::anyhow!("CAS object with hash {} not found", hash))
     }
 
+    pub async fn read_cas_content(
+        &self,
+        hash: &str,
+    ) -> Result<Vec<u8>> {
+        self.resolve_cas(hash)
+    }
+
     pub async fn run_orpheus_generate(
         &self,
         model: String,
