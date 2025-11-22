@@ -42,18 +42,22 @@ async fn download_cas(
     State(cas): State<Arc<Cas>>,
     Path(hash): Path<String>,
 ) -> Response {
+    // Get metadata first to retrieve MIME type
+    let mime_type = match cas.inspect(&hash) {
+        Ok(Some(cas_ref)) => cas_ref.mime_type,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+
     match cas.get_path(&hash) {
         Ok(Some(path)) => {
             match tokio::fs::File::open(path).await {
                 Ok(file) => {
                     let stream = ReaderStream::new(file);
                     let body = Body::from_stream(stream);
-                    
-                    // Determine mime type? For now generic.
-                    // In a real implementation, we might store mime type in a separate DB or extended attributes.
-                    // Or the client should know what it asked for.
-                    // We'll rely on the client to handle it for now.
-                    ([(header::CONTENT_TYPE, "application/octet-stream")], body).into_response()
+
+                    // Use stored MIME type from CAS metadata
+                    ([(header::CONTENT_TYPE, mime_type.as_str())], body).into_response()
                 }
                 Err(_) => StatusCode::NOT_FOUND.into_response(),
             }
