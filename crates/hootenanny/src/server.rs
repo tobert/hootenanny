@@ -203,6 +203,25 @@ pub struct CancelJobRequest {
     pub job_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PollRequest {
+    #[schemars(description = "Timeout in milliseconds (max 300000 = 5 minutes)")]
+    pub timeout_ms: u64,
+
+    #[schemars(description = "Job IDs to poll (empty = just timeout/sleep)")]
+    #[serde(default)]
+    pub job_ids: Vec<String>,
+
+    #[schemars(description = "Mode: 'any' (return on first complete) or 'all' (wait for all). Default: 'any'")]
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SleepRequest {
+    #[schemars(description = "Milliseconds to sleep (max 30000 = 30 seconds)")]
+    pub milliseconds: u64,
+}
+
 // --- Local Model Requests ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -1025,6 +1044,161 @@ Attempts to abort the job's execution. Returns success if cancelled.")]
         let response = serde_json::json!({
             "status": "cancelled",
             "job_id": job_id.as_str(),
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(response.to_string())]))
+    }
+
+    #[tool(description = "Poll for job completion or timeout.
+
+Wait for jobs to complete or timeout to expire. Returns immediately when:
+- mode='any': First job completes (default)
+- mode='all': All jobs complete
+- timeout expires
+- no jobs provided: acts as sleep
+
+Example: {timeout_ms: 30000, job_ids: ['abc-123', 'def-456'], mode: 'any'}
+
+Returns: {
+  completed: ['abc-123'],
+  pending: ['def-456'],
+  failed: [],
+  elapsed_ms: 5234,
+  reason: 'job_complete' | 'timeout'
+}")]
+    #[tracing::instrument(
+        name = "mcp.tool.poll",
+        skip(self, request),
+        fields(
+            poll.timeout_ms = request.timeout_ms,
+            poll.job_count = request.job_ids.len(),
+            poll.mode = ?request.mode,
+            poll.elapsed_ms = tracing::field::Empty,
+            poll.reason = tracing::field::Empty,
+        )
+    )]
+    async fn poll(
+        &self,
+        Parameters(request): Parameters<PollRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        use std::time::{Duration, Instant};
+        use crate::job_system::JobStatus;
+
+        // Cap timeout at 5 minutes
+        let timeout_ms = request.timeout_ms.min(300000);
+        let timeout = Duration::from_millis(timeout_ms);
+        let mode = request.mode.as_deref().unwrap_or("any");
+
+        // Validate mode
+        if mode != "any" && mode != "all" {
+            return Err(McpError::invalid_params(
+                format!("mode must be 'any' or 'all', got '{}'", mode),
+                None
+            ));
+        }
+
+        // Convert job_ids to JobId
+        let job_ids: Vec<JobId> = request.job_ids.into_iter()
+            .map(JobId::from)
+            .collect();
+
+        let start = Instant::now();
+        let poll_interval = Duration::from_millis(500);
+
+        loop {
+            let mut completed = Vec::new();
+            let mut pending = Vec::new();
+            let mut failed = Vec::new();
+
+            // Check status of all jobs
+            for job_id in &job_ids {
+                match self.job_store.get_job(job_id) {
+                    Ok(job_info) => {
+                        match job_info.status {
+                            JobStatus::Complete => completed.push(job_id.as_str().to_string()),
+                            JobStatus::Failed | JobStatus::Cancelled => failed.push(job_id.as_str().to_string()),
+                            JobStatus::Pending | JobStatus::Running => pending.push(job_id.as_str().to_string()),
+                        }
+                    }
+                    Err(_) => {
+                        // Job not found - treat as failed
+                        failed.push(job_id.as_str().to_string());
+                    }
+                }
+            }
+
+            let elapsed = start.elapsed();
+            let elapsed_ms = elapsed.as_millis() as u64;
+
+            // Check completion conditions
+            let should_return = if job_ids.is_empty() {
+                // No jobs - just timeout/sleep
+                elapsed >= timeout
+            } else if mode == "any" {
+                // Return if ANY job completed or failed
+                !completed.is_empty() || !failed.is_empty()
+            } else {
+                // mode == "all" - return if ALL jobs done
+                pending.is_empty()
+            };
+
+            let reason = if should_return && (!completed.is_empty() || !failed.is_empty()) {
+                "job_complete"
+            } else if elapsed >= timeout {
+                "timeout"
+            } else {
+                // Keep polling
+                tokio::time::sleep(poll_interval).await;
+                continue;
+            };
+
+            // Record and return
+            tracing::Span::current().record("poll.elapsed_ms", elapsed_ms);
+            tracing::Span::current().record("poll.reason", reason);
+
+            let response = serde_json::json!({
+                "completed": completed,
+                "pending": pending,
+                "failed": failed,
+                "elapsed_ms": elapsed_ms,
+                "reason": reason,
+            });
+
+            return Ok(CallToolResult::success(vec![Content::text(response.to_string())]));
+        }
+    }
+
+    #[tool(description = "Sleep for specified milliseconds.
+
+Simple delay tool. For waiting on background jobs, use poll() instead!
+
+Example: {milliseconds: 5000}
+
+Returns: {slept_ms: 5000, completed_at: <timestamp>}")]
+    #[tracing::instrument(
+        name = "mcp.tool.sleep",
+        skip(self, request),
+        fields(
+            sleep.milliseconds = request.milliseconds,
+        )
+    )]
+    async fn sleep(
+        &self,
+        Parameters(request): Parameters<SleepRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        // Cap at 30 seconds
+        let ms = request.milliseconds.min(30000);
+
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+
+        let completed_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let response = serde_json::json!({
+            "slept_ms": ms,
+            "completed_at": completed_at,
         });
 
         Ok(CallToolResult::success(vec![Content::text(response.to_string())]))
