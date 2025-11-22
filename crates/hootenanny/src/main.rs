@@ -129,7 +129,7 @@ async fn main() -> Result<()> {
     );
     tracing::info!("   Artifact store at: {}", artifact_store_path.display());
 
-    let addr = format!("127.0.0.1:{}", cli.port);
+    let addr = format!("0.0.0.0:{}", cli.port);
 
     tracing::info!("🎵 Event Duality Server starting on http://{}", addr);
     tracing::info!("   Connect via: GET http://{}/sse", addr);
