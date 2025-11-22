@@ -8,6 +8,7 @@ pub mod persistence;
 pub mod cas;
 pub mod mcp_tools;
 pub mod web;
+pub mod job_system;
 
 use anyhow::{Context, Result};
 use clap::Parser;
