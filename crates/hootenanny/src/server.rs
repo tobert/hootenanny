@@ -1570,7 +1570,10 @@ Returns: {text: '...response...', finish_reason: 'stop'}")]
 Example: {input_hash: '5ca7815abc...', soundfont_hash: 'a1b2c3d...', sample_rate: 44100}
 
 Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Rendered N seconds'}
-The output_hash can be used with cas_inspect to get the WAV file path.")]
+
+Access the rendered WAV:
+- Local: Use cas_inspect to get file path
+- HTTP: http://<server-ip>:8080/cas/<output_hash> (plays in browser)")]
     #[tracing::instrument(
         name = "mcp.tool.midi_to_wav",
         skip(self, request),
