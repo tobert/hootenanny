@@ -1036,6 +1036,40 @@ Returns: BLAKE3 hash string that can be used to retrieve the content.")]
         Ok(())
     }
 
+    // Helper function to create artifacts for multiple variations
+    fn create_artifacts_for_variations(
+        &self,
+        output_hashes: &[String],
+        num_tokens: &[u64],
+        task: &str,
+        model: &str,
+        temperature: Option<f32>,
+        variation_set_id: Option<String>,
+        parent_id: Option<String>,
+        tags: Vec<String>,
+        creator: Option<String>,
+    ) -> Result<Vec<Artifact>, McpError> {
+        let mut artifacts = Vec::new();
+
+        for (i, hash) in output_hashes.iter().enumerate() {
+            let tokens = num_tokens.get(i).copied().map(|t| t as u32);
+            let artifact = self.create_artifact(
+                hash,
+                task,
+                model,
+                temperature,
+                tokens,
+                variation_set_id.clone(),
+                parent_id.clone(),
+                tags.clone(),
+                creator.clone(),
+            )?;
+            artifacts.push(artifact);
+        }
+
+        Ok(artifacts)
+    }
+
     // Helper function to create and store artifact
     fn create_artifact(
         &self,
@@ -1106,10 +1140,14 @@ Returns: BLAKE3 hash string that can be used to retrieve the content.")]
 
     #[tool(description = "Generate music from scratch using Orpheus.
 
-Example: {temperature: 1.2, max_tokens: 512, num_variations: 1}
+Example: {temperature: 1.2, max_tokens: 512, num_variations: 3}
 
-Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N tokens'}
-The output_hash can be used with cas_inspect to get the MIDI file path.")]
+Returns: {
+  status: 'success',
+  output_hashes: ['hash1', 'hash2', 'hash3'],
+  artifact_ids: ['artifact_hash1...', 'artifact_hash2...'],
+  summary: 'Generated 3 variations (1536 tokens total)'
+}")]
     #[tracing::instrument(
         name = "mcp.tool.orpheus_generate",
         skip(self, request),
@@ -1117,7 +1155,7 @@ The output_hash can be used with cas_inspect to get the MIDI file path.")]
             model.name = ?request.model,
             model.temperature = request.temperature,
             model.num_variations = request.num_variations,
-            model.output_hash = tracing::field::Empty,
+            model.num_outputs = tracing::field::Empty,
         )
     )]
     async fn orpheus_generate(
@@ -1143,33 +1181,29 @@ The output_hash can be used with cas_inspect to get the MIDI file path.")]
             params
         ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        tracing::Span::current().record("model.output_hash", &*result.output_hash);
+        tracing::Span::current().record("model.num_outputs", result.output_hashes.len());
 
-        // Create artifact automatically
-        let tokens = result.summary.split_whitespace()
-            .find(|s| s.parse::<u32>().is_ok())
-            .and_then(|s| s.parse::<u32>().ok());
-
-        let artifact = self.create_artifact(
-            &result.output_hash,
+        // Create artifacts for all variations
+        let artifacts = self.create_artifacts_for_variations(
+            &result.output_hashes,
+            &result.num_tokens,
             "generate",
             &model,
             request.temperature,
-            tokens,
             request.variation_set_id,
             request.parent_id,
             request.tags,
             request.creator,
         )?;
 
-        // Enhanced response with artifact info
+        // Build response with arrays
         let response = serde_json::json!({
             "status": result.status,
-            "output_hash": result.output_hash,
+            "output_hashes": result.output_hashes,
+            "artifact_ids": artifacts.iter().map(|a| &a.id).collect::<Vec<_>>(),
             "summary": result.summary,
-            "artifact_id": artifact.id,
-            "variation_set_id": artifact.variation_set_id,
-            "variation_index": artifact.variation_index,
+            "variation_set_id": artifacts.first().and_then(|a| a.variation_set_id.as_ref()),
+            "variation_indices": artifacts.iter().map(|a| a.variation_index).collect::<Vec<_>>(),
         });
 
         let json = serde_json::to_string(&response)
@@ -1180,9 +1214,14 @@ The output_hash can be used with cas_inspect to get the MIDI file path.")]
 
     #[tool(description = "Generate music using a seed MIDI as inspiration.
 
-Example: {seed_hash: '5ca7815abc...', temperature: 0.8}
+Example: {seed_hash: '5ca7815abc...', temperature: 0.8, num_variations: 2}
 
-Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N tokens'}")]
+Returns: {
+  status: 'success',
+  output_hashes: ['hash1', 'hash2'],
+  artifact_ids: ['artifact_hash1...'],
+  summary: 'Generated 2 variations'
+}")]
     #[tracing::instrument(
         name = "mcp.tool.orpheus_generate_seeded",
         skip(self, request),
@@ -1190,7 +1229,7 @@ Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N to
             model.name = ?request.model,
             model.seed_hash = %request.seed_hash,
             model.temperature = request.temperature,
-            model.output_hash = tracing::field::Empty,
+            model.num_outputs = tracing::field::Empty,
         )
     )]
     async fn orpheus_generate_seeded(
@@ -1210,38 +1249,32 @@ Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N to
 
         let result = self.local_models.run_orpheus_generate(
             model.clone(),
-            "generate".to_string(),
+            "generate_seeded".to_string(),
             Some(request.seed_hash),  // Seed MIDI as input
             params
         ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        tracing::Span::current().record("model.output_hash", &*result.output_hash);
+        tracing::Span::current().record("model.num_outputs", result.output_hashes.len());
 
-        // Create artifact automatically
-        let tokens = result.summary.split_whitespace()
-            .find(|s| s.parse::<u32>().is_ok())
-            .and_then(|s| s.parse::<u32>().ok());
-
-        let artifact = self.create_artifact(
-            &result.output_hash,
+        let artifacts = self.create_artifacts_for_variations(
+            &result.output_hashes,
+            &result.num_tokens,
             "generate_seeded",
             &model,
             request.temperature,
-            tokens,
             request.variation_set_id,
             request.parent_id,
             request.tags,
             request.creator,
         )?;
 
-        // Enhanced response with artifact info
         let response = serde_json::json!({
             "status": result.status,
-            "output_hash": result.output_hash,
+            "output_hashes": result.output_hashes,
+            "artifact_ids": artifacts.iter().map(|a| &a.id).collect::<Vec<_>>(),
             "summary": result.summary,
-            "artifact_id": artifact.id,
-            "variation_set_id": artifact.variation_set_id,
-            "variation_index": artifact.variation_index,
+            "variation_set_id": artifacts.first().and_then(|a| a.variation_set_id.as_ref()),
+            "variation_indices": artifacts.iter().map(|a| a.variation_index).collect::<Vec<_>>(),
         });
 
         let json = serde_json::to_string(&response)
@@ -1252,17 +1285,16 @@ Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N to
 
     #[tool(description = "Continue an existing MIDI sequence.
 
-Example: {input_hash: '5ca7815abc...', max_tokens: 256}
+Example: {input_hash: '5ca7815abc...', max_tokens: 256, num_variations: 2}
 
-Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N tokens'}")]
+Returns: {output_hashes: ['hash1', 'hash2'], artifact_ids: [...], summary: '...'}")]
     #[tracing::instrument(
         name = "mcp.tool.orpheus_continue",
         skip(self, request),
         fields(
             model.name = ?request.model,
             model.input_hash = %request.input_hash,
-            model.temperature = request.temperature,
-            model.output_hash = tracing::field::Empty,
+            model.num_outputs = tracing::field::Empty,
         )
     )]
     async fn orpheus_continue(
@@ -1282,38 +1314,30 @@ Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N to
 
         let result = self.local_models.run_orpheus_generate(
             model.clone(),
-            "continue".to_string(),  // Task is "continue"
+            "continue".to_string(),
             Some(request.input_hash),
             params
         ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        tracing::Span::current().record("model.output_hash", &*result.output_hash);
+        tracing::Span::current().record("model.num_outputs", result.output_hashes.len());
 
-        // Create artifact automatically
-        let tokens = result.summary.split_whitespace()
-            .find(|s| s.parse::<u32>().is_ok())
-            .and_then(|s| s.parse::<u32>().ok());
-
-        let artifact = self.create_artifact(
-            &result.output_hash,
+        let artifacts = self.create_artifacts_for_variations(
+            &result.output_hashes,
+            &result.num_tokens,
             "continue",
             &model,
             request.temperature,
-            tokens,
             request.variation_set_id,
             request.parent_id,
             request.tags,
             request.creator,
         )?;
 
-        // Enhanced response with artifact info
         let response = serde_json::json!({
             "status": result.status,
-            "output_hash": result.output_hash,
+            "output_hashes": result.output_hashes,
+            "artifact_ids": artifacts.iter().map(|a| &a.id).collect::<Vec<_>>(),
             "summary": result.summary,
-            "artifact_id": artifact.id,
-            "variation_set_id": artifact.variation_set_id,
-            "variation_index": artifact.variation_index,
         });
 
         let json = serde_json::to_string(&response)
@@ -1326,7 +1350,7 @@ Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N to
 
 Example: {section_a_hash: '5ca7815abc...', model: 'bridge'}
 
-Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N tokens'}")]
+Returns: {output_hashes: ['hash1'], artifact_ids: [...], summary: '...'}")]
     #[tracing::instrument(
         name = "mcp.tool.orpheus_bridge",
         skip(self, request),
@@ -1334,8 +1358,7 @@ Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N to
             model.name = ?request.model,
             model.section_a_hash = %request.section_a_hash,
             model.section_b_hash = ?request.section_b_hash,
-            model.temperature = request.temperature,
-            model.output_hash = tracing::field::Empty,
+            model.num_outputs = tracing::field::Empty,
         )
     )]
     async fn orpheus_bridge(
@@ -1348,46 +1371,37 @@ Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N to
             temperature: request.temperature,
             top_p: request.top_p,
             max_tokens: request.max_tokens,
-            num_variations: None,  // Bridge doesn't use variations
+            num_variations: Some(1),  // Bridge typically returns single output
         };
 
         let model = request.model.clone().unwrap_or_else(|| "bridge".to_string());
 
-        // Note: API currently uses section_a as midi_input, section_b for future use
         let result = self.local_models.run_orpheus_generate(
             model.clone(),
             "bridge".to_string(),
-            Some(request.section_a_hash),
+            Some(request.section_a_hash),  // section_a as midi_input
             params
         ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        tracing::Span::current().record("model.output_hash", &*result.output_hash);
+        tracing::Span::current().record("model.num_outputs", result.output_hashes.len());
 
-        // Create artifact automatically
-        let tokens = result.summary.split_whitespace()
-            .find(|s| s.parse::<u32>().is_ok())
-            .and_then(|s| s.parse::<u32>().ok());
-
-        let artifact = self.create_artifact(
-            &result.output_hash,
+        let artifacts = self.create_artifacts_for_variations(
+            &result.output_hashes,
+            &result.num_tokens,
             "bridge",
             &model,
             request.temperature,
-            tokens,
             request.variation_set_id,
             request.parent_id,
             request.tags,
             request.creator,
         )?;
 
-        // Enhanced response with artifact info
         let response = serde_json::json!({
             "status": result.status,
-            "output_hash": result.output_hash,
+            "output_hashes": result.output_hashes,
+            "artifact_ids": artifacts.iter().map(|a| &a.id).collect::<Vec<_>>(),
             "summary": result.summary,
-            "artifact_id": artifact.id,
-            "variation_set_id": artifact.variation_set_id,
-            "variation_index": artifact.variation_index,
         });
 
         let json = serde_json::to_string(&response)
@@ -1400,16 +1414,15 @@ Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N to
 
 Example: {model: 'loops', num_variations: 3}
 
-Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N tokens'}")]
+Returns: {output_hashes: ['hash1', 'hash2', 'hash3'], artifact_ids: [...], summary: '...'}")]
     #[tracing::instrument(
         name = "mcp.tool.orpheus_loops",
         skip(self, request),
         fields(
             model.name = ?request.model,
             model.seed_hash = ?request.seed_hash,
-            model.temperature = request.temperature,
             model.num_variations = request.num_variations,
-            model.output_hash = tracing::field::Empty,
+            model.num_outputs = tracing::field::Empty,
         )
     )]
     async fn orpheus_loops(
@@ -1434,33 +1447,25 @@ Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Generated N to
             params
         ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        tracing::Span::current().record("model.output_hash", &*result.output_hash);
+        tracing::Span::current().record("model.num_outputs", result.output_hashes.len());
 
-        // Create artifact automatically
-        let tokens = result.summary.split_whitespace()
-            .find(|s| s.parse::<u32>().is_ok())
-            .and_then(|s| s.parse::<u32>().ok());
-
-        let artifact = self.create_artifact(
-            &result.output_hash,
+        let artifacts = self.create_artifacts_for_variations(
+            &result.output_hashes,
+            &result.num_tokens,
             "loops",
             &model,
             request.temperature,
-            tokens,
             request.variation_set_id,
             request.parent_id,
             request.tags,
             request.creator,
         )?;
 
-        // Enhanced response with artifact info
         let response = serde_json::json!({
             "status": result.status,
-            "output_hash": result.output_hash,
+            "output_hashes": result.output_hashes,
+            "artifact_ids": artifacts.iter().map(|a| &a.id).collect::<Vec<_>>(),
             "summary": result.summary,
-            "artifact_id": artifact.id,
-            "variation_set_id": artifact.variation_set_id,
-            "variation_index": artifact.variation_index,
         });
 
         let json = serde_json::to_string(&response)

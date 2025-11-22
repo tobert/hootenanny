@@ -22,7 +22,8 @@ pub struct OrpheusGenerateParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OrpheusGenerateResult {
     pub status: String,
-    pub output_hash: String,
+    pub output_hashes: Vec<String>,
+    pub num_tokens: Vec<u64>,
     pub summary: String,
 }
 
@@ -216,23 +217,46 @@ impl LocalModels {
 
         let resp_json: serde_json::Value = resp.json().await
             .context("Failed to parse Orpheus response as JSON")?;
-        
-        // Extract MIDI output
-        if let Some(midi_b64) = resp_json.get("midi_base64").and_then(|v| v.as_str()) {
-             use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-             let midi_bytes = BASE64.decode(midi_b64).context("Failed to decode API output")?;
-             
-             let hash = self.store_cas(&midi_bytes, "audio/midi")?;
-             
-             let token_count = resp_json.get("num_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
 
-             Ok(OrpheusGenerateResult {
-                 status: "success".to_string(),
-                 output_hash: hash,
-                 summary: format!("Generated {} tokens", token_count),
-             })
+        // Extract variations array from new API format
+        if let Some(variations) = resp_json.get("variations").and_then(|v| v.as_array()) {
+            use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+            let mut output_hashes = Vec::new();
+            let mut num_tokens_list = Vec::new();
+
+            for variation in variations {
+                if let Some(midi_b64) = variation.get("midi_base64").and_then(|v| v.as_str()) {
+                    let midi_bytes = BASE64.decode(midi_b64)
+                        .context("Failed to decode variation MIDI")?;
+
+                    let hash = self.store_cas(&midi_bytes, "audio/midi")?;
+                    output_hashes.push(hash);
+
+                    let tokens = variation.get("num_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    num_tokens_list.push(tokens);
+                } else {
+                    anyhow::bail!("Variation missing midi_base64 field");
+                }
+            }
+
+            let total_tokens: u64 = num_tokens_list.iter().sum();
+            let summary = if output_hashes.len() == 1 {
+                format!("Generated {} tokens", total_tokens)
+            } else {
+                format!("Generated {} variations ({} tokens total)", output_hashes.len(), total_tokens)
+            };
+
+            Ok(OrpheusGenerateResult {
+                status: "success".to_string(),
+                output_hashes,
+                num_tokens: num_tokens_list,
+                summary,
+            })
         } else {
-            anyhow::bail!("No MIDI output in response");
+            anyhow::bail!("No variations array in response (expected new API format)");
         }
     }
 
