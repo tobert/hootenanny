@@ -25,17 +25,28 @@ pub fn render_midi_to_wav(
     // Load SoundFont from bytes
     let mut sf_cursor = Cursor::new(soundfont_bytes);
     let sound_font = Arc::new(SoundFont::new(&mut sf_cursor)
-        .context("Failed to load SoundFont")?);
+        .map_err(|e| {
+            let error_msg = format!("{:?}", e);
+            if error_msg.contains("SanityCheckFailed") {
+                anyhow::anyhow!(
+                    "SoundFont failed compatibility check (RustySynth SanityCheckFailed). \
+                    This SF2 may use features not supported by RustySynth. \
+                    Try a simpler SoundFont like GeneralUser GS, FluidR3, or TR-808 drums."
+                )
+            } else {
+                anyhow::anyhow!("Failed to load SoundFont: {}", e)
+            }
+        })?);
 
     // Load MIDI from bytes
     let mut midi_cursor = Cursor::new(midi_bytes);
     let midi = Arc::new(MidiFile::new(&mut midi_cursor)
-        .context("Failed to load MIDI file")?);
+        .map_err(|e| anyhow::anyhow!("Failed to parse MIDI file: {}", e))?);
 
     // Create synthesizer
     let settings = SynthesizerSettings::new(sample_rate as i32);
     let synthesizer = Synthesizer::new(&sound_font, &settings)
-        .context("Failed to create synthesizer")?;
+        .map_err(|e| anyhow::anyhow!("Failed to create synthesizer: {}", e))?;
 
     // Create sequencer and play MIDI
     let mut sequencer = MidiFileSequencer::new(synthesizer);

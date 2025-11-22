@@ -6,7 +6,7 @@
 
 ## What It Does
 
-**8 content-generating MCP tools** now automatically create Artifacts that track:
+**9 content-generating MCP tools** now automatically create Artifacts that track:
 - The generated content (via CAS hash)
 - Variation relationships (sets, parents, siblings)
 - Arbitrary tags for organization
@@ -14,9 +14,15 @@
 
 **Supported Tools:**
 - **Music Generation** (5 tools): `orpheus_generate`, `orpheus_generate_seeded`, `orpheus_continue`, `orpheus_bridge`, `orpheus_loops` → MIDI files
+- **Audio Rendering** (1 tool): `midi_to_wav` → WAV audio files
 - **Code Generation** (1 tool): `deepseek_query` → Text/code
 - **Musical Events** (1 tool): `play` → Realized sound events
 - **Intentions** (1 tool): `add_node` → Musical contributions
+
+**Utility Tools (CAS only, no artifacts):**
+- `upload_file` - Upload files from disk to CAS (e.g., SoundFonts)
+- `cas_store` - Store base64 content in CAS
+- `cas_inspect` - Get CAS metadata and local paths
 
 All artifacts stored in `state/artifacts.json` (JSON file, human-readable).
 
@@ -267,6 +273,49 @@ add_node({
 // → Adds to conversation tree + creates artifact
 ```
 
+### Pattern 7: MIDI to WAV Rendering Pipeline
+
+```json
+// 1. Upload SoundFont to CAS (no artifact, utility only)
+const sf2 = upload_file({
+  file_path: "/path/to/soundfont.sf2",
+  mime_type: "audio/soundfont"
+})
+// → Returns: {hash: "abc123...", size_bytes: 407218}
+
+// 2. Generate MIDI with Orpheus
+const midi = orpheus_generate({
+  temperature: 1.0,
+  max_tokens: 512,
+  variation_set_id: "vset_composition_v1",
+  tags: ["phase:generation", "instrument:piano"]
+})
+// → Returns: {output_hash: "def456...", artifact_id: "artifact_def456..."}
+
+// 3. Render MIDI to WAV
+const wav = midi_to_wav({
+  input_hash: midi.output_hash,
+  soundfont_hash: sf2.hash,
+  sample_rate: 44100,
+  variation_set_id: "vset_composition_v1_audio",
+  parent_id: midi.artifact_id,  // Links audio back to MIDI
+  tags: ["phase:rendering", "format:wav", "soundfont:tr808"]
+})
+// → Returns: {
+//     output_hash: "ghi789...",
+//     artifact_id: "artifact_ghi789...",
+//     duration_seconds: 25.16,
+//     size_bytes: 4438264
+//   }
+
+// 4. Get local path to listen
+cas_inspect({hash: wav.output_hash})
+// → {local_path: "/path/to/cas/objects/gh/i789...", ...}
+```
+
+**Creates lineage:** MIDI artifact → WAV artifact (via parent_id)
+**See:** [SoundFont Compatibility](soundfont-compatibility.md) for working SF2 files
+
 ---
 
 ## Tag Conventions
@@ -276,12 +325,14 @@ Suggested tag format: `category:value`
 ```bash
 # Type (auto-applied by tools)
 type:midi               # Orpheus tools
+type:audio              # MIDI to WAV tool
 type:text               # DeepSeek
 type:musical_event      # Play tool
 type:intention          # Add node tool
 
 # Phase (auto-applied + custom)
-phase:generation        # Orpheus, DeepSeek
+phase:generation        # Orpheus, DeepSeek, MIDI to WAV
+phase:rendering         # Custom (for audio conversion)
 phase:realization       # Play
 phase:contribution      # Add node
 phase:initial           # Custom
@@ -326,6 +377,22 @@ experiment:jazzy
 # Quality
 quality:high_energy
 quality:smooth
+
+# Format (for audio/MIDI)
+format:wav
+format:midi
+format:mp3
+
+# SoundFont (for rendered audio)
+soundfont:tr808
+soundfont:ff6
+soundfont:timber
+soundfont:generaluser
+
+# Instrument
+instrument:piano
+instrument:drums
+instrument:synth
 
 # Custom (anything!)
 my_project_tag
@@ -465,12 +532,17 @@ Every artifact automatically gets tags based on the tool used:
 - `phase:contribution`
 - `tool:add_node`
 
+### MIDI to WAV Tool (1)
+- `type:audio`
+- `phase:generation`
+- `tool:midi_to_wav`
+
 Your custom tags are **added** to these auto-applied tags.
 
 ---
 
 ## See Also
 
-- **Full Design:** `docs/artifact-store-design.md`
-- **Variation System:** `docs/variation-system-design.md`
-- **Simple Primitives:** `docs/simple-primitives-design.md`
+- **Architecture:** `docs/ARCHITECTURE.md`
+- **CAS HTTP API:** `docs/CAS_HTTP_API.md`
+- **SoundFont Compatibility:** `docs/soundfont-compatibility.md`
