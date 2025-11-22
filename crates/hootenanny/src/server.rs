@@ -1206,36 +1206,6 @@ Returns: BLAKE3 hash string that can be used to retrieve the content.")]
         Ok(artifacts)
     }
 
-    // Helper macro to spawn background jobs with common patterns
-    macro_rules! spawn_async_tool {
-        ($self:ident, $tool_name:expr, $work:expr) => {{
-            let job_id = $self.job_store.create_job($tool_name.to_string());
-            let job_store = $self.job_store.clone();
-            let job_id_clone = job_id.clone();
-
-            let handle = tokio::spawn(async move {
-                let _ = job_store.mark_running(&job_id_clone);
-
-                match $work.await {
-                    Ok(result) => {
-                        let _ = job_store.mark_complete(&job_id_clone, result);
-                    }
-                    Err(e) => {
-                        let _ = job_store.mark_failed(&job_id_clone, e.to_string());
-                    }
-                }
-            });
-
-            $self.job_store.store_handle(&job_id, handle);
-
-            serde_json::json!({
-                "job_id": job_id.as_str(),
-                "status": "pending",
-                "message": format!("{} started. Use get_job_status() or wait_for_job() to retrieve results.", $tool_name)
-            })
-        }};
-    }
-
     // Helper function to create and store artifact
     fn create_artifact(
         &self,
@@ -1452,16 +1422,13 @@ When complete, job result contains:
         Ok(CallToolResult::success(vec![Content::text(response.to_string())]))
     }
 
-    #[tool(description = "Generate music using a seed MIDI as inspiration.
+    #[tool(description = "Generate music using a seed MIDI as inspiration (async).
+
+Starts background generation and returns immediately with a job_id.
 
 Example: {seed_hash: '5ca7815abc...', temperature: 0.8, num_variations: 2}
 
-Returns: {
-  status: 'success',
-  output_hashes: ['hash1', 'hash2'],
-  artifact_ids: ['artifact_hash1...'],
-  summary: 'Generated 2 variations'
-}")]
+Returns: {job_id: 'abc-123-def'}")]
     #[tracing::instrument(
         name = "mcp.tool.orpheus_generate_seeded",
         skip(self, request),
@@ -1469,7 +1436,7 @@ Returns: {
             model.name = ?request.model,
             model.seed_hash = %request.seed_hash,
             model.temperature = request.temperature,
-            model.num_outputs = tracing::field::Empty,
+            job.id = tracing::field::Empty,
         )
     )]
     async fn orpheus_generate_seeded(
@@ -1478,63 +1445,119 @@ Returns: {
     ) -> Result<CallToolResult, McpError> {
         Self::validate_sampling_params(request.temperature, request.top_p)?;
 
-        let params = OrpheusGenerateParams {
-            temperature: request.temperature,
-            top_p: request.top_p,
-            max_tokens: request.max_tokens,
-            num_variations: request.num_variations,
-        };
+        let job_id = self.job_store.create_job("orpheus_generate_seeded".to_string());
+        tracing::Span::current().record("job.id", job_id.as_str());
 
-        let model = request.model.clone().unwrap_or_else(|| "base".to_string());
+        let local_models = Arc::clone(&self.local_models);
+        let artifact_store = Arc::clone(&self.artifact_store);
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
 
-        let result = self.local_models.run_orpheus_generate(
-            model.clone(),
-            "generate_seeded".to_string(),
-            Some(request.seed_hash),  // Seed MIDI as input
-            params
-        ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let handle = tokio::spawn(async move {
+            let _ = job_store.mark_running(&job_id_clone);
 
-        tracing::Span::current().record("model.num_outputs", result.output_hashes.len());
+            let params = OrpheusGenerateParams {
+                temperature: request.temperature,
+                top_p: request.top_p,
+                max_tokens: request.max_tokens,
+                num_variations: request.num_variations,
+            };
 
-        let artifacts = self.create_artifacts_for_variations(
-            &result.output_hashes,
-            &result.num_tokens,
-            "generate_seeded",
-            &model,
-            request.temperature,
-            request.variation_set_id,
-            request.parent_id,
-            request.tags,
-            request.creator,
-        )?;
+            let model = request.model.unwrap_or_else(|| "base".to_string());
 
-        let response = serde_json::json!({
-            "status": result.status,
-            "output_hashes": result.output_hashes,
-            "artifact_ids": artifacts.iter().map(|a| &a.id).collect::<Vec<_>>(),
-            "summary": result.summary,
-            "variation_set_id": artifacts.first().and_then(|a| a.variation_set_id.as_ref()),
-            "variation_indices": artifacts.iter().map(|a| a.variation_index).collect::<Vec<_>>(),
+            match local_models.run_orpheus_generate(
+                model.clone(),
+                "generate_seeded".to_string(),
+                Some(request.seed_hash),
+                params
+            ).await {
+                Ok(result) => {
+                    let artifacts_result = (|| -> anyhow::Result<Vec<Artifact>> {
+                        let mut artifacts = Vec::new();
+                        for (i, hash) in result.output_hashes.iter().enumerate() {
+                            let tokens = result.num_tokens.get(i).copied().map(|t| t as u32);
+                            let artifact_id = format!("artifact_{}", &hash[..12]);
+                            let creator = request.creator.clone().unwrap_or_else(|| "agent_orpheus".to_string());
+
+                            let mut artifact = Artifact::new(
+                                &artifact_id,
+                                &creator,
+                                serde_json::json!({
+                                    "hash": hash,
+                                    "tokens": tokens,
+                                    "model": model,
+                                    "temperature": request.temperature,
+                                    "task": "generate_seeded",
+                                })
+                            )
+                            .with_tags(vec!["type:midi", "phase:generation", "tool:orpheus_generate_seeded"]);
+
+                            if let Some(ref set_id) = request.variation_set_id {
+                                let index = artifact_store.next_variation_index(set_id)?;
+                                artifact = artifact.with_variation_set(set_id, index);
+                            }
+
+                            if let Some(ref parent_id) = request.parent_id {
+                                artifact = artifact.with_parent(parent_id);
+                            }
+
+                            artifact = artifact.with_tags(request.tags.clone());
+                            artifact_store.put(artifact.clone())?;
+                            artifacts.push(artifact);
+                        }
+
+                        artifact_store.flush()?;
+                        Ok(artifacts)
+                    })();
+
+                    match artifacts_result {
+                        Ok(artifacts) => {
+                            let response = serde_json::json!({
+                                "status": result.status,
+                                "output_hashes": result.output_hashes,
+                                "artifact_ids": artifacts.iter().map(|a| &a.id).collect::<Vec<_>>(),
+                                "summary": result.summary,
+                                "variation_set_id": artifacts.first().and_then(|a| a.variation_set_id.as_ref()),
+                                "variation_indices": artifacts.iter().map(|a| a.variation_index).collect::<Vec<_>>(),
+                            });
+                            let _ = job_store.mark_complete(&job_id_clone, response);
+                        }
+                        Err(e) => {
+                            let _ = job_store.mark_failed(&job_id_clone, format!("Failed to create artifacts: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
         });
 
-        let json = serde_json::to_string(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e), None))?;
+        self.job_store.store_handle(&job_id, handle);
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        let response = serde_json::json!({
+            "job_id": job_id.as_str(),
+            "status": "pending",
+            "message": "Seeded generation started. Use get_job_status() or wait_for_job() to retrieve results."
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(response.to_string())]))
     }
 
-    #[tool(description = "Continue an existing MIDI sequence.
+    #[tool(description = "Continue an existing MIDI sequence (async).
+
+Starts background continuation and returns immediately with a job_id.
 
 Example: {input_hash: '5ca7815abc...', max_tokens: 256, num_variations: 2}
 
-Returns: {output_hashes: ['hash1', 'hash2'], artifact_ids: [...], summary: '...'}")]
+Returns: {job_id: 'abc-123-def'}")]
     #[tracing::instrument(
         name = "mcp.tool.orpheus_continue",
         skip(self, request),
         fields(
             model.name = ?request.model,
             model.input_hash = %request.input_hash,
-            model.num_outputs = tracing::field::Empty,
+            job.id = tracing::field::Empty,
         )
     )]
     async fn orpheus_continue(
@@ -1543,62 +1566,117 @@ Returns: {output_hashes: ['hash1', 'hash2'], artifact_ids: [...], summary: '...'
     ) -> Result<CallToolResult, McpError> {
         Self::validate_sampling_params(request.temperature, request.top_p)?;
 
-        let params = OrpheusGenerateParams {
-            temperature: request.temperature,
-            top_p: request.top_p,
-            max_tokens: request.max_tokens,
-            num_variations: request.num_variations,
-        };
+        let job_id = self.job_store.create_job("orpheus_continue".to_string());
+        tracing::Span::current().record("job.id", job_id.as_str());
 
-        let model = request.model.clone().unwrap_or_else(|| "base".to_string());
+        let local_models = Arc::clone(&self.local_models);
+        let artifact_store = Arc::clone(&self.artifact_store);
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
 
-        let result = self.local_models.run_orpheus_generate(
-            model.clone(),
-            "continue".to_string(),
-            Some(request.input_hash),
-            params
-        ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let handle = tokio::spawn(async move {
+            let _ = job_store.mark_running(&job_id_clone);
 
-        tracing::Span::current().record("model.num_outputs", result.output_hashes.len());
+            let params = OrpheusGenerateParams {
+                temperature: request.temperature,
+                top_p: request.top_p,
+                max_tokens: request.max_tokens,
+                num_variations: request.num_variations,
+            };
 
-        let artifacts = self.create_artifacts_for_variations(
-            &result.output_hashes,
-            &result.num_tokens,
-            "continue",
-            &model,
-            request.temperature,
-            request.variation_set_id,
-            request.parent_id,
-            request.tags,
-            request.creator,
-        )?;
+            let model = request.model.unwrap_or_else(|| "base".to_string());
 
-        let response = serde_json::json!({
-            "status": result.status,
-            "output_hashes": result.output_hashes,
-            "artifact_ids": artifacts.iter().map(|a| &a.id).collect::<Vec<_>>(),
-            "summary": result.summary,
+            match local_models.run_orpheus_generate(
+                model.clone(),
+                "continue".to_string(),
+                Some(request.input_hash),
+                params
+            ).await {
+                Ok(result) => {
+                    let artifacts_result = (|| -> anyhow::Result<Vec<Artifact>> {
+                        let mut artifacts = Vec::new();
+                        for (i, hash) in result.output_hashes.iter().enumerate() {
+                            let tokens = result.num_tokens.get(i).copied().map(|t| t as u32);
+                            let artifact_id = format!("artifact_{}", &hash[..12]);
+                            let creator = request.creator.clone().unwrap_or_else(|| "agent_orpheus".to_string());
+
+                            let mut artifact = Artifact::new(
+                                &artifact_id,
+                                &creator,
+                                serde_json::json!({
+                                    "hash": hash,
+                                    "tokens": tokens,
+                                    "model": model,
+                                    "temperature": request.temperature,
+                                    "task": "continue",
+                                })
+                            )
+                            .with_tags(vec!["type:midi", "phase:generation", "tool:orpheus_continue"]);
+
+                            if let Some(ref set_id) = request.variation_set_id {
+                                let index = artifact_store.next_variation_index(set_id)?;
+                                artifact = artifact.with_variation_set(set_id, index);
+                            }
+
+                            if let Some(ref parent_id) = request.parent_id {
+                                artifact = artifact.with_parent(parent_id);
+                            }
+
+                            artifact = artifact.with_tags(request.tags.clone());
+                            artifact_store.put(artifact.clone())?;
+                            artifacts.push(artifact);
+                        }
+
+                        artifact_store.flush()?;
+                        Ok(artifacts)
+                    })();
+
+                    match artifacts_result {
+                        Ok(artifacts) => {
+                            let response = serde_json::json!({
+                                "status": result.status,
+                                "output_hashes": result.output_hashes,
+                                "artifact_ids": artifacts.iter().map(|a| &a.id).collect::<Vec<_>>(),
+                                "summary": result.summary,
+                            });
+                            let _ = job_store.mark_complete(&job_id_clone, response);
+                        }
+                        Err(e) => {
+                            let _ = job_store.mark_failed(&job_id_clone, format!("Failed to create artifacts: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
         });
 
-        let json = serde_json::to_string(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e), None))?;
+        self.job_store.store_handle(&job_id, handle);
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        let response = serde_json::json!({
+            "job_id": job_id.as_str(),
+            "status": "pending",
+            "message": "Continuation started. Use get_job_status() or wait_for_job() to retrieve results."
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(response.to_string())]))
     }
 
-    #[tool(description = "Generate a musical bridge connecting sections.
+    #[tool(description = "Generate a musical bridge connecting sections (async).
+
+Starts background bridge generation and returns immediately with a job_id.
 
 Example: {section_a_hash: '5ca7815abc...', model: 'bridge'}
 
-Returns: {output_hashes: ['hash1'], artifact_ids: [...], summary: '...'}")]
+Returns: {job_id: 'abc-123-def'}")]
     #[tracing::instrument(
         name = "mcp.tool.orpheus_bridge",
         skip(self, request),
         fields(
             model.name = ?request.model,
             model.section_a_hash = %request.section_a_hash,
-            model.section_b_hash = ?request.section_b_hash,
-            model.num_outputs = tracing::field::Empty,
+            job.id = tracing::field::Empty,
         )
     )]
     async fn orpheus_bridge(
@@ -1607,62 +1685,94 @@ Returns: {output_hashes: ['hash1'], artifact_ids: [...], summary: '...'}")]
     ) -> Result<CallToolResult, McpError> {
         Self::validate_sampling_params(request.temperature, request.top_p)?;
 
-        let params = OrpheusGenerateParams {
-            temperature: request.temperature,
-            top_p: request.top_p,
-            max_tokens: request.max_tokens,
-            num_variations: Some(1),  // Bridge typically returns single output
-        };
+        let job_id = self.job_store.create_job("orpheus_bridge".to_string());
+        tracing::Span::current().record("job.id", job_id.as_str());
 
-        let model = request.model.clone().unwrap_or_else(|| "bridge".to_string());
+        let local_models = Arc::clone(&self.local_models);
+        let artifact_store = Arc::clone(&self.artifact_store);
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
 
-        let result = self.local_models.run_orpheus_generate(
-            model.clone(),
-            "bridge".to_string(),
-            Some(request.section_a_hash),  // section_a as midi_input
-            params
-        ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let handle = tokio::spawn(async move {
+            let _ = job_store.mark_running(&job_id_clone);
 
-        tracing::Span::current().record("model.num_outputs", result.output_hashes.len());
+            let params = OrpheusGenerateParams {
+                temperature: request.temperature,
+                top_p: request.top_p,
+                max_tokens: request.max_tokens,
+                num_variations: Some(1),
+            };
 
-        let artifacts = self.create_artifacts_for_variations(
-            &result.output_hashes,
-            &result.num_tokens,
-            "bridge",
-            &model,
-            request.temperature,
-            request.variation_set_id,
-            request.parent_id,
-            request.tags,
-            request.creator,
-        )?;
+            let model = request.model.unwrap_or_else(|| "bridge".to_string());
 
-        let response = serde_json::json!({
-            "status": result.status,
-            "output_hashes": result.output_hashes,
-            "artifact_ids": artifacts.iter().map(|a| &a.id).collect::<Vec<_>>(),
-            "summary": result.summary,
+            match local_models.run_orpheus_generate(
+                model.clone(),
+                "bridge".to_string(),
+                Some(request.section_a_hash),
+                params
+            ).await {
+                Ok(result) => {
+                    let artifacts_result = (|| -> anyhow::Result<Vec<Artifact>> {
+                        let mut artifacts = Vec::new();
+                        for (i, hash) in result.output_hashes.iter().enumerate() {
+                            let tokens = result.num_tokens.get(i).copied().map(|t| t as u32);
+                            let artifact_id = format!("artifact_{}", &hash[..12]);
+                            let creator = request.creator.clone().unwrap_or_else(|| "agent_orpheus".to_string());
+
+                            let mut artifact = Artifact::new(
+                                &artifact_id,
+                                &creator,
+                                serde_json::json!({"hash": hash, "tokens": tokens, "model": model, "temperature": request.temperature, "task": "bridge"})
+                            ).with_tags(vec!["type:midi", "phase:generation", "tool:orpheus_bridge"]);
+
+                            if let Some(ref set_id) = request.variation_set_id {
+                                let index = artifact_store.next_variation_index(set_id)?;
+                                artifact = artifact.with_variation_set(set_id, index);
+                            }
+                            if let Some(ref parent_id) = request.parent_id {
+                                artifact = artifact.with_parent(parent_id);
+                            }
+                            artifact = artifact.with_tags(request.tags.clone());
+                            artifact_store.put(artifact.clone())?;
+                            artifacts.push(artifact);
+                        }
+                        artifact_store.flush()?;
+                        Ok(artifacts)
+                    })();
+
+                    match artifacts_result {
+                        Ok(artifacts) => {
+                            let _ = job_store.mark_complete(&job_id_clone, serde_json::json!({"status": result.status, "output_hashes": result.output_hashes, "artifact_ids": artifacts.iter().map(|a| &a.id).collect::<Vec<_>>(), "summary": result.summary}));
+                        }
+                        Err(e) => {
+                            let _ = job_store.mark_failed(&job_id_clone, format!("Failed to create artifacts: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
         });
 
-        let json = serde_json::to_string(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e), None))?;
+        self.job_store.store_handle(&job_id, handle);
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(CallToolResult::success(vec![Content::text(serde_json::json!({"job_id": job_id.as_str(), "status": "pending", "message": "Bridge generation started."}).to_string())]))
     }
 
-    #[tool(description = "Generate multi-instrumental loops.
+    #[tool(description = "Generate multi-instrumental loops (async).
+
+Starts background loop generation and returns immediately with a job_id.
 
 Example: {model: 'loops', num_variations: 3}
 
-Returns: {output_hashes: ['hash1', 'hash2', 'hash3'], artifact_ids: [...], summary: '...'}")]
+Returns: {job_id: 'abc-123-def'}")]
     #[tracing::instrument(
         name = "mcp.tool.orpheus_loops",
         skip(self, request),
         fields(
             model.name = ?request.model,
-            model.seed_hash = ?request.seed_hash,
-            model.num_variations = request.num_variations,
-            model.num_outputs = tracing::field::Empty,
+            job.id = tracing::field::Empty,
         )
     )]
     async fn orpheus_loops(
@@ -1671,47 +1781,70 @@ Returns: {output_hashes: ['hash1', 'hash2', 'hash3'], artifact_ids: [...], summa
     ) -> Result<CallToolResult, McpError> {
         Self::validate_sampling_params(request.temperature, request.top_p)?;
 
-        let params = OrpheusGenerateParams {
-            temperature: request.temperature,
-            top_p: request.top_p,
-            max_tokens: request.max_tokens,
-            num_variations: request.num_variations,
-        };
+        let job_id = self.job_store.create_job("orpheus_loops".to_string());
+        tracing::Span::current().record("job.id", job_id.as_str());
 
-        let model = request.model.clone().unwrap_or_else(|| "loops".to_string());
+        let local_models = Arc::clone(&self.local_models);
+        let artifact_store = Arc::clone(&self.artifact_store);
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
 
-        let result = self.local_models.run_orpheus_generate(
-            model.clone(),
-            "loops".to_string(),
-            request.seed_hash,  // Optional seed
-            params
-        ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let handle = tokio::spawn(async move {
+            let _ = job_store.mark_running(&job_id_clone);
 
-        tracing::Span::current().record("model.num_outputs", result.output_hashes.len());
+            let params = OrpheusGenerateParams {
+                temperature: request.temperature,
+                top_p: request.top_p,
+                max_tokens: request.max_tokens,
+                num_variations: request.num_variations,
+            };
 
-        let artifacts = self.create_artifacts_for_variations(
-            &result.output_hashes,
-            &result.num_tokens,
-            "loops",
-            &model,
-            request.temperature,
-            request.variation_set_id,
-            request.parent_id,
-            request.tags,
-            request.creator,
-        )?;
+            let model = request.model.unwrap_or_else(|| "loops".to_string());
 
-        let response = serde_json::json!({
-            "status": result.status,
-            "output_hashes": result.output_hashes,
-            "artifact_ids": artifacts.iter().map(|a| &a.id).collect::<Vec<_>>(),
-            "summary": result.summary,
+            match local_models.run_orpheus_generate(model.clone(), "loops".to_string(), request.seed_hash, params).await {
+                Ok(result) => {
+                    let artifacts_result = (|| -> anyhow::Result<Vec<Artifact>> {
+                        let mut artifacts = Vec::new();
+                        for (i, hash) in result.output_hashes.iter().enumerate() {
+                            let tokens = result.num_tokens.get(i).copied().map(|t| t as u32);
+                            let artifact_id = format!("artifact_{}", &hash[..12]);
+                            let creator = request.creator.clone().unwrap_or_else(|| "agent_orpheus".to_string());
+
+                            let mut artifact = Artifact::new(&artifact_id, &creator, serde_json::json!({"hash": hash, "tokens": tokens, "model": model, "temperature": request.temperature, "task": "loops"}))
+                                .with_tags(vec!["type:midi", "phase:generation", "tool:orpheus_loops"]);
+
+                            if let Some(ref set_id) = request.variation_set_id {
+                                artifact = artifact.with_variation_set(set_id, artifact_store.next_variation_index(set_id)?);
+                            }
+                            if let Some(ref parent_id) = request.parent_id {
+                                artifact = artifact.with_parent(parent_id);
+                            }
+                            artifact = artifact.with_tags(request.tags.clone());
+                            artifact_store.put(artifact.clone())?;
+                            artifacts.push(artifact);
+                        }
+                        artifact_store.flush()?;
+                        Ok(artifacts)
+                    })();
+
+                    match artifacts_result {
+                        Ok(artifacts) => {
+                            let _ = job_store.mark_complete(&job_id_clone, serde_json::json!({"status": result.status, "output_hashes": result.output_hashes, "artifact_ids": artifacts.iter().map(|a| &a.id).collect::<Vec<_>>(), "summary": result.summary}));
+                        }
+                        Err(e) => {
+                            let _ = job_store.mark_failed(&job_id_clone, format!("Failed to create artifacts: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
         });
 
-        let json = serde_json::to_string(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e), None))?;
+        self.job_store.store_handle(&job_id, handle);
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(CallToolResult::success(vec![Content::text(serde_json::json!({"job_id": job_id.as_str(), "status": "pending", "message": "Loop generation started."}).to_string())]))
     }
 
     #[tool(description = "Classify MIDI as human or AI-composed using the local Orpheus model.
@@ -1742,156 +1875,192 @@ Returns: {is_human: true/false, confidence: 0.0-1.0, probabilities: {...}}")]
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    #[tool(description = "Query the local DeepSeek Coder model for code generation and questions.
+    #[tool(description = "Query the local DeepSeek Coder model for code generation and questions (async).
+
+Starts background query and returns immediately with a job_id.
 
 Example: {messages: [{role: 'user', content: 'Write a hello world in Rust'}]}
 
-Returns: {text: '...response...', finish_reason: 'stop'}")]
+Returns: {job_id: 'abc-123-def'}")]
     #[tracing::instrument(
         name = "mcp.tool.deepseek_query",
         skip(self, request),
         fields(
             model.name = ?request.model,
             model.message_count = request.messages.len(),
-            model.stream = ?request.stream,
-            model.response_length = tracing::field::Empty,
+            job.id = tracing::field::Empty,
         )
     )]
     async fn deepseek_query(
         &self,
         Parameters(request): Parameters<DeepSeekQueryRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let model = request.model.clone().unwrap_or_else(|| "deepseek-coder-v2-lite".to_string());
+        let job_id = self.job_store.create_job("deepseek_query".to_string());
+        tracing::Span::current().record("job.id", job_id.as_str());
 
-        let result = self.local_models.run_deepseek_query(
-            request.model,
-            request.messages,
-            request.stream,
-        ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let local_models = Arc::clone(&self.local_models);
+        let artifact_store = Arc::clone(&self.artifact_store);
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
 
-        let response_len = result.text.len();
-        tracing::Span::current().record("model.response_length", response_len);
+        let handle = tokio::spawn(async move {
+            let _ = job_store.mark_running(&job_id_clone);
 
-        // Warn if response is very large (>100KB)
-        if response_len > 100_000 {
-            tracing::warn!("DeepSeek response is large: {} bytes", response_len);
-        }
+            let model = request.model.clone().unwrap_or_else(|| "deepseek-coder-v2-lite".to_string());
 
-        // Store generated text in CAS
-        let text_hash = self.local_models.store_cas_content(
-            result.text.as_bytes(),
-            "text/plain"
-        ).await.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            match local_models.run_deepseek_query(request.model, request.messages, request.stream).await {
+                Ok(result) => {
+                    let response_len = result.text.len();
+                    if response_len > 100_000 {
+                        tracing::warn!("DeepSeek response is large: {} bytes", response_len);
+                    }
 
-        // Create artifact
-        let artifact = self.create_artifact(
-            &text_hash,
-            "query",
-            &model,
-            None, // No temperature for DeepSeek
-            Some(response_len as u32),
-            request.variation_set_id,
-            request.parent_id,
-            request.tags,
-            request.creator,
-        )?;
+                    match local_models.store_cas_content(result.text.as_bytes(), "text/plain").await {
+                        Ok(text_hash) => {
+                            let artifact_result = (|| -> anyhow::Result<Artifact> {
+                                let artifact_id = format!("artifact_{}", &text_hash[..12]);
+                                let creator = request.creator.unwrap_or_else(|| "agent_deepseek".to_string());
 
-        // Include artifact_id in response
-        let response = serde_json::json!({
-            "text": result.text,
-            "finish_reason": result.finish_reason,
-            "artifact_id": artifact.id,
-            "cas_hash": text_hash,
+                                let mut artifact = Artifact::new(&artifact_id, &creator, serde_json::json!({"hash": text_hash, "tokens": response_len as u32, "model": model, "task": "query"}))
+                                    .with_tags(vec!["type:text", "phase:generation", "tool:deepseek_query"]);
+
+                                if let Some(ref set_id) = request.variation_set_id {
+                                    artifact = artifact.with_variation_set(set_id, artifact_store.next_variation_index(set_id)?);
+                                }
+                                if let Some(ref parent_id) = request.parent_id {
+                                    artifact = artifact.with_parent(parent_id);
+                                }
+                                artifact = artifact.with_tags(request.tags);
+                                artifact_store.put(artifact.clone())?;
+                                artifact_store.flush()?;
+                                Ok(artifact)
+                            })();
+
+                            match artifact_result {
+                                Ok(artifact) => {
+                                    let _ = job_store.mark_complete(&job_id_clone, serde_json::json!({"text": result.text, "finish_reason": result.finish_reason, "artifact_id": artifact.id, "cas_hash": text_hash}));
+                                }
+                                Err(e) => {
+                                    let _ = job_store.mark_failed(&job_id_clone, format!("Failed to create artifact: {}", e));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = job_store.mark_failed(&job_id_clone, format!("Failed to store in CAS: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
         });
 
-        let json = serde_json::to_string(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize DeepSeek result: {}", e), None))?;
+        self.job_store.store_handle(&job_id, handle);
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(CallToolResult::success(vec![Content::text(serde_json::json!({"job_id": job_id.as_str(), "status": "pending", "message": "DeepSeek query started."}).to_string())]))
     }
 
-    #[tool(description = "Render MIDI file to WAV using RustySynth.
+    #[tool(description = "Render MIDI file to WAV using RustySynth (async).
+
+Starts background rendering and returns immediately with a job_id.
 
 Example: {input_hash: '5ca7815abc...', soundfont_hash: 'a1b2c3d...', sample_rate: 44100}
 
-Returns: {status: 'success', output_hash: '<cas-hash>', summary: 'Rendered N seconds'}
+Returns: {job_id: 'abc-123-def'}
 
-Access the rendered WAV:
-- Local: Use cas_inspect to get file path
-- HTTP: http://<server-ip>:8080/cas/<output_hash> (plays in browser)")]
+When complete, use cas_inspect or HTTP to access WAV:
+- HTTP: http://<server-ip>:8080/cas/<output_hash>")]
     #[tracing::instrument(
         name = "mcp.tool.midi_to_wav",
         skip(self, request),
         fields(
             midi.input_hash = %request.input_hash,
             soundfont.hash = %request.soundfont_hash,
-            audio.sample_rate = request.sample_rate.unwrap_or(44100),
-            audio.output_hash = tracing::field::Empty,
-            audio.duration_seconds = tracing::field::Empty,
+            job.id = tracing::field::Empty,
         )
     )]
     async fn midi_to_wav(
         &self,
         Parameters(request): Parameters<MidiToWavRequest>,
     ) -> Result<CallToolResult, McpError> {
-        // Get MIDI file from CAS
-        let midi_bytes = self.local_models.read_cas_content(&request.input_hash)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Failed to read MIDI from CAS: {}", e), None))?;
+        let job_id = self.job_store.create_job("midi_to_wav".to_string());
+        tracing::Span::current().record("job.id", job_id.as_str());
 
-        // Get SoundFont from CAS
-        let soundfont_bytes = self.local_models.read_cas_content(&request.soundfont_hash)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Failed to read SoundFont from CAS: {}", e), None))?;
+        let local_models = Arc::clone(&self.local_models);
+        let artifact_store = Arc::clone(&self.artifact_store);
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
 
-        // Render using RustySynth
-        let sample_rate = request.sample_rate.unwrap_or(44100);
-        let wav_bytes = crate::mcp_tools::rustysynth::render_midi_to_wav(
-            &midi_bytes,
-            &soundfont_bytes,
-            sample_rate,
-        ).map_err(|e| McpError::internal_error(format!("Failed to render MIDI: {}", e), None))?;
+        let handle = tokio::spawn(async move {
+            let _ = job_store.mark_running(&job_id_clone);
 
-        // Calculate duration
-        let duration_seconds = crate::mcp_tools::rustysynth::calculate_wav_duration(&wav_bytes, sample_rate);
+            let sample_rate = request.sample_rate.unwrap_or(44100);
 
-        // Store WAV in CAS
-        let wav_hash = self.local_models.store_cas_content(&wav_bytes, "audio/wav")
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            // Get MIDI and SoundFont from CAS
+            let midi_result = local_models.read_cas_content(&request.input_hash).await;
+            let soundfont_result = local_models.read_cas_content(&request.soundfont_hash).await;
 
-        let span = tracing::Span::current();
-        span.record("audio.output_hash", &*wav_hash);
-        span.record("audio.duration_seconds", duration_seconds);
+            match (midi_result, soundfont_result) {
+                (Ok(midi_bytes), Ok(soundfont_bytes)) => {
+                    // Render using RustySynth
+                    match crate::mcp_tools::rustysynth::render_midi_to_wav(&midi_bytes, &soundfont_bytes, sample_rate) {
+                        Ok(wav_bytes) => {
+                            let duration_seconds = crate::mcp_tools::rustysynth::calculate_wav_duration(&wav_bytes, sample_rate);
 
-        // Create artifact
-        let artifact = self.create_artifact(
-            &wav_hash,
-            "midi_to_wav",
-            "rustysynth",
-            None,  // No temperature for this tool
-            Some(wav_bytes.len() as u32),  // Store size instead of tokens
-            request.variation_set_id,
-            request.parent_id,
-            request.tags,
-            request.creator,
-        )?;
+                            // Store WAV in CAS
+                            match local_models.store_cas_content(&wav_bytes, "audio/wav").await {
+                                Ok(wav_hash) => {
+                                    let artifact_result = (|| -> anyhow::Result<Artifact> {
+                                        let artifact_id = format!("artifact_{}", &wav_hash[..12]);
+                                        let creator = request.creator.unwrap_or_else(|| "agent_rustysynth".to_string());
 
-        // Return response
-        let response = serde_json::json!({
-            "status": "success",
-            "output_hash": wav_hash,
-            "summary": format!("Rendered {:.2} seconds of audio", duration_seconds),
-            "artifact_id": artifact.id,
-            "sample_rate": sample_rate,
-            "size_bytes": wav_bytes.len(),
-            "duration_seconds": duration_seconds,
+                                        let mut artifact = Artifact::new(&artifact_id, &creator, serde_json::json!({"hash": wav_hash, "tokens": wav_bytes.len() as u32, "model": "rustysynth", "task": "midi_to_wav"}))
+                                            .with_tags(vec!["type:audio", "phase:generation", "tool:midi_to_wav"]);
+
+                                        if let Some(ref set_id) = request.variation_set_id {
+                                            artifact = artifact.with_variation_set(set_id, artifact_store.next_variation_index(set_id)?);
+                                        }
+                                        if let Some(ref parent_id) = request.parent_id {
+                                            artifact = artifact.with_parent(parent_id);
+                                        }
+                                        artifact = artifact.with_tags(request.tags);
+                                        artifact_store.put(artifact.clone())?;
+                                        artifact_store.flush()?;
+                                        Ok(artifact)
+                                    })();
+
+                                    match artifact_result {
+                                        Ok(artifact) => {
+                                            let _ = job_store.mark_complete(&job_id_clone, serde_json::json!({"status": "success", "output_hash": wav_hash, "summary": format!("Rendered {:.2} seconds of audio", duration_seconds), "artifact_id": artifact.id, "sample_rate": sample_rate, "size_bytes": wav_bytes.len(), "duration_seconds": duration_seconds}));
+                                        }
+                                        Err(e) => {
+                                            let _ = job_store.mark_failed(&job_id_clone, format!("Failed to create artifact: {}", e));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = job_store.mark_failed(&job_id_clone, format!("Failed to store WAV in CAS: {}", e));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = job_store.mark_failed(&job_id_clone, format!("Failed to render MIDI: {}", e));
+                        }
+                    }
+                }
+                (Err(e), _) => {
+                    let _ = job_store.mark_failed(&job_id_clone, format!("Failed to read MIDI from CAS: {}", e));
+                }
+                (_, Err(e)) => {
+                    let _ = job_store.mark_failed(&job_id_clone, format!("Failed to read SoundFont from CAS: {}", e));
+                }
+            }
         });
 
-        let json = serde_json::to_string(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e), None))?;
+        self.job_store.store_handle(&job_id, handle);
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(CallToolResult::success(vec![Content::text(serde_json::json!({"job_id": job_id.as_str(), "status": "pending", "message": "MIDI to WAV rendering started."}).to_string())]))
     }
 }
 
