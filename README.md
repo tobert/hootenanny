@@ -1,233 +1,289 @@
 # HalfRemembered MCP 🎵
 
-**Event Duality: Where intentions become sounds.**
+**Where AI agents jam together and make music.**
 
-An MCP server for collaborative human-AI music ensemble. This is the Master Control Program for the HalfRemembered project - building music the way we build software.
+An MCP server for collaborative human-AI music creation. We're building an ensemble performance space where Claude, Gemini, DeepSeek, and Orpheus create music together through intention, emergence, and a little chaos.
 
-## Quick Start
+## ⚡ Quick Start
 
 ```bash
-# Run the MCP server (hootenanny crate)
-cargo run -p hootenanny
+# Run the server with auto-reload
+cargo watch -x 'run -p hootenanny'
 
-# In another terminal, test with curl
-curl -N http://127.0.0.1:8080/sse
+# Connect from Claude Code, Gemini CLI, or any MCP client
+# Server runs on http://127.0.0.1:8080/sse
 ```
 
-Then connect via your MCP client and try:
-```json
-{"what": "C", "how": "softly"}  → {"pitch": 60, "velocity": 40}
+## 🎭 What We Built
+
+This isn't your typical MCP server. We've got:
+
+### 🎵 **Music Generation** (Orpheus Models)
+- `orpheus_generate` - Generate MIDI from scratch (async!)
+- `orpheus_loops` - Multi-instrumental loops
+- `orpheus_bridge` - Musical bridges between sections
+- `orpheus_continue` - Continue existing MIDI sequences
+- `orpheus_generate_seeded` - Seed-based variations
+- `orpheus_classify` - Human vs AI music detector
+
+All async-by-design. Launch jobs, get job_id back instantly, poll when ready.
+
+### 🔊 **Audio Rendering**
+- `midi_to_wav` - RustySynth rendering (async)
+- SoundFont support
+- HTTP streaming via `http://0.0.0.0:8080/cas/<hash>`
+
+### 💾 **Content-Addressable Storage**
+- BLAKE3 hashing for all content
+- Store MIDI, audio, text, anything
+- `cas_store`, `cas_inspect`, `upload_file`
+- Automatic deduplication
+
+### 🤖 **Code Generation**
+- `deepseek_query` - Local DeepSeek Coder (async)
+- Chat-style API
+- Results stored in CAS
+
+### ⚡ **Async Job System**
+All slow operations return job_id immediately:
+
+```javascript
+// Launch 3 generations in parallel
+job1 = orpheus_generate({temp: 0.8})
+job2 = orpheus_generate({temp: 1.0})
+job3 = orpheus_generate({temp: 1.2})
+
+// Wait for first one
+result = poll({timeout_ms: 60000, job_ids: [job1, job2, job3], mode: "any"})
+
+// Or wait for all
+result = poll({timeout_ms: 120000, job_ids: [...], mode: "all"})
 ```
 
-## Current Status: Plan 00 - Event Duality Hello World ✅
+Job management tools:
+- `poll(timeout, jobs, mode)` - Flexible waiting (any/all modes)
+- `sleep(milliseconds)` - Simple delays
+- `get_job_status(job_id)` - Check one job
+- `wait_for_job(job_id)` - Block until complete
+- `list_jobs()` - See everything running
+- `cancel_job(job_id)` - Abort running job
 
-**COMPLETE!** Successfully tested end-to-end with Claude Code MCP client (2025-11-16).
+### 📦 **Artifact Tracking**
+Every generation is tracked with metadata:
+- Variation sets and indices
+- Parent/child lineage
+- Tags for organization
+- Creator attribution
+- Rich type system (no primitive obsession!)
 
-We've proven the core concept: **Intentions become sounds through type-rich transformations.**
+### 🌳 **Conversation Tree** (Musical Intentions)
+Event Duality architecture - intentions become sounds:
 
 ```rust
 enum Event {
-    Abstract(Intention),  // What you want: "play C softly"
-    Concrete(Sound),      // What you get: pitch:60, velocity:40
+    Abstract(Intention),  // "play C softly"
+    Concrete(Sound),      // pitch:60, velocity:40
 }
 ```
 
-**Test Results:**
-- ✅ C, softly → pitch: 60, velocity: 40 (quiet)
-- ✅ E, boldly → pitch: 64, velocity: 90 (strong)
-- ✅ G, questioning → pitch: 67, velocity: 50 (tentative)
-- ✅ A, normally → pitch: 69, velocity: 64 (moderate)
+Tools:
+- `play` - Transform intention → sound
+- `add_node` - Add to conversation tree
+- `fork_branch` - Explore alternative directions
+- `merge_branches` - Bring ideas together
+- `get_tree_status` - See the full state
 
-## Running the Server
+## 🚀 Running the Server
 
-### Basic Run
+### Development Mode (recommended)
+```bash
+cargo watch -x 'run -p hootenanny'
+```
 
+Auto-rebuilds when you change code. Pairs beautifully with Claude Code's `/mcp` reconnect.
+
+### Basic Mode
 ```bash
 cargo run -p hootenanny
 ```
 
-The server starts on **http://127.0.0.1:8080** with SSE transport (multi-client ready).
+### Connecting from Clients
 
-### Auto-Restart on Code Changes
+**Claude Code:** Just run `/mcp` after starting the server
 
-For development, use `cargo-watch` to automatically rebuild and restart when you modify code:
-
+**Claude CLI:**
 ```bash
-# Install cargo-watch (one time)
-cargo install cargo-watch
-
-# Run with auto-restart
-cargo watch -x 'run -p hootenanny'
+claude mcp add --transport sse hrmcp http://127.0.0.1:8080/sse
 ```
 
-Now any changes to `.rs` files in either `hootenanny` or `resonode` will trigger an automatic rebuild and restart! 🔄
-
-### Integration with MCP Clients
-
-The server is ready to use with any MCP client. For **Claude Code**:
-
-1. Start the server (with or without auto-restart)
-2. In Claude Code, run `/mcp` to reconnect
-3. The `play` tool will be available to use!
-
+**Gemini CLI:**
 ```bash
-# Terminal 1: Run the server with auto-restart
-cargo watch -x 'run -p hootenanny'
-
-# Terminal 2: Use Claude Code with /mcp
+gemini mcp add hrmcp http://127.0.0.1:8080/sse
 ```
 
-### Connecting with a Client
+## 🎯 Real-World Examples
 
-You can connect to the MCP server using various clients.
+### Generate Music Variations
+```javascript
+// Launch 3 variations with different temperatures
+jobs = []
+for temp in [0.8, 1.0, 1.2]:
+    job = orpheus_generate({
+        temperature: temp,
+        max_tokens: 256,
+        num_variations: 1,
+        variation_set_id: "experiment-1"
+    })
+    jobs.push(job.job_id)
 
-#### Claude CLI
+// Wait for all to complete
+result = poll({timeout_ms: 120000, job_ids: jobs, mode: "all"})
 
-To connect to the server using the Claude CLI, run the following command:
-
-```bash
-claude mcp add --transport sse hootenanny http://127.0.0.1:8080/sse
+// Now all variations are ready with shared variation_set_id
 ```
 
-This will add the `hootenanny` server to your Claude CLI configuration. You can then use the `play` tool and other tools provided by the server.
+### Render to Audio
+```javascript
+// Generate MIDI
+gen = orpheus_loops({max_tokens: 512})
+result = wait_for_job(gen.job_id)
 
-#### Gemini CLI
+// Render to WAV
+wav = midi_to_wav({
+    input_hash: result.output_hashes[0],
+    soundfont_hash: "<your-soundfont-hash>",
+    sample_rate: 44100
+})
+wav_result = wait_for_job(wav.job_id)
 
-To connect to the server using the Gemini CLI, run the following command:
-
-```bash
-gemini mcp add hootenanny http://127.0.0.1:8080/sse
+// Play in browser: http://0.0.0.0:8080/cas/<wav_result.output_hash>
 ```
 
-This will add the `hootenanny` server to your Gemini CLI configuration. You can then use the `play` tool and other tools provided by the server.
+### Ask DeepSeek for Help
+```javascript
+job = deepseek_query({
+    messages: [{
+        role: "user",
+        content: "Write a Rust function to parse MIDI events"
+    }]
+})
 
-### SSE Endpoints
-
-- **GET** `http://127.0.0.1:8080/sse` - Connect and receive your session ID via event stream
-- **POST** `http://127.0.0.1:8080/message?sessionId=<id>` - Send MCP messages
-
-## Testing with MCP Inspector
-
-### Using npx (Recommended)
-
-```bash
-npx @modelcontextprotocol/inspector
+result = wait_for_job(job.job_id)
+// Code is in result.text and stored in CAS
 ```
 
-Then connect to: `http://127.0.0.1:8080`
+## 🏗️ Architecture
 
-### Manual HTTP Test
+**Crates:**
+- `hootenanny` - MCP server, job system, tools
+- `resonode` - Musical domain (Event Duality, scales, realization)
 
-1. Connect to SSE stream:
-```bash
-curl -N http://127.0.0.1:8080/sse
+**Key Patterns:**
+- **Async-by-design:** All slow tools return job_id immediately
+- **Type-rich domain:** No primitive obsession, enums tell stories
+- **Content-addressable:** Everything has a hash, nothing duplicates
+- **Lineage tracking:** Know where every artifact came from
+- **SSE transport:** Multi-client HTTP streaming
+
+## 🧠 For Agent Developers
+
+**Using the async tools:**
+- ALL Orpheus tools are async (return job_id)
+- `midi_to_wav` and `deepseek_query` are async
+- Use `poll()` for flexible waiting
+- Use `sleep()` when you just need a delay
+- Check `CLAUDE.md` / `BOTS.md` for full agent context
+
+**The pattern:**
+1. Launch job → get `job_id`
+2. Do other work (or launch more jobs!)
+3. `poll()` or `wait_for_job()` to get results
+4. Results include artifact_ids with full lineage
+
+**Natural parallelism:**
+```javascript
+// This is the way
+jobs = [
+    orpheus_generate({temp: 0.9}),
+    orpheus_loops({num_variations: 2}),
+    deepseek_query({messages: [...]})
+]
+
+// All running in parallel!
+results = poll({timeout_ms: 120000, job_ids: jobs.map(j => j.job_id), mode: "all"})
 ```
 
-You'll receive events including your session ID.
+## 📊 Current Status
 
-2. Send a tool call:
-```bash
-curl -X POST "http://127.0.0.1:8080/message?sessionId=YOUR_SESSION_ID" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-      "name": "play",
-      "arguments": {
-        "what": "C",
-        "how": "softly"
-      }
-    }
-  }'
-```
+✅ **Async job system** - Background tasks, polling, status tracking
+✅ **Orpheus integration** - 6 model variants, all async
+✅ **Audio rendering** - MIDI→WAV with RustySynth
+✅ **CAS** - BLAKE3 content storage
+✅ **Artifact tracking** - Variations, lineage, metadata
+✅ **DeepSeek** - Local code generation
+✅ **Conversation tree** - Musical intention → sound
 
-Expected response:
-```json
-{
-  "pitch": 60,
-  "velocity": 40
-}
-```
+## 🎨 The Vision
 
-## Available Tools
-
-### `play`
-
-Transform an intention into sound.
-
-**Parameters:**
-- `what` (string): The note to play (C, D, E, F, G, A, B)
-- `how` (string): How to play it (softly, normally, boldly, questioning)
-
-**Returns:**
-- `pitch` (u8): MIDI note number
-- `velocity` (u8): MIDI velocity
-
-## Examples
-
-### Soft C Major
-```json
-{"what": "C", "how": "softly"}
-```
-→ `{"pitch": 60, "velocity": 40}`
-
-### Bold G
-```json
-{"what": "G", "how": "boldly"}
-```
-→ `{"pitch": 67, "velocity": 90}`
-
-### Questioning E
-```json
-{"what": "E", "how": "questioning"}
-```
-→ `{"pitch": 64, "velocity": 50}`
-
-## Architecture Highlights
-
-- **SSE Transport**: Multi-client HTTP transport ready for ensemble collaboration
-- **Type-Rich Domain**: `Intention` and `Sound` are first-class types, not primitives
-- **Realization Pattern**: Clear transformation from abstract → concrete
-- **MCP Compliant**: Full JSON-RPC protocol with schema generation
-
-## Logs
-
-Watch the server logs to see realizations happen:
-```
-🎵 softly C → pitch:60, vel:40
-🎵 boldly G → pitch:67, vel:90
-```
-
-## The Vision
-
-Building a real-time music generation system that is fast, weird, and expressive, powered by a distributed ensemble of language and music models. This MCP server is the foundation for:
+Building a real-time music generation system that is **fast, weird, and expressive**. An ensemble of AI models (Orpheus for music, DeepSeek for code, Claude/Gemini for reasoning) jamming together through:
 
 - Multi-agent musical dialogue
 - Conversation trees for improvisation
-- Ensemble coordination across models
-- Real-time performance systems
+- Temporal forking (explore alternate takes)
+- Real-time performance
 
-## What's Next
+Think: **Git for music improvisation** + **MCP for agent collaboration** + **Actually sounds good**
 
-**Architecture Evolution: Two-Crate Design**
+## 🛠️ Development
 
-We're splitting the system into focused crates:
+**Tools you'll want:**
+```bash
+cargo install cargo-watch  # Auto-reload on changes
+```
 
-- **`resonode`** 🎵 - Musical domain (Event Duality, sounds, realization, scales, rhythms)
-- **`hootenanny`** 🎭 - Conversation system (multi-agent collaboration, temporal forking, dialogue trees)
+**Workflow:**
+```bash
+# Terminal 1: Server with auto-reload
+cargo watch -x 'run -p hootenanny'
 
-This separation keeps musical logic independent from conversation mechanics.
+# Terminal 2: Claude Code or other MCP client
+# Just /mcp to reconnect after code changes
+```
 
-**Upcoming Plans:**
-- **Plan 01**: Expand resonode musical domain model
-- **Plan 02**: Build hootenanny conversation trees
-- **Plan 03**: Multi-agent ensemble coordination (Gemini is working on this!)
-- **Plan 04**: Browser UI for visual interaction
+**Using jj (Jujutsu):**
+We use jj for version control. See `CLAUDE.md` for the full workflow. Key commands:
+
+```bash
+jj new -m "feat: your feature"     # Start new work
+jj describe                         # Update description as you learn
+jj git push -c @                    # Share your work
+```
+
+## 📝 Documentation
+
+- `CLAUDE.md` / `BOTS.md` - Agent context (read this if you're an LLM!)
+- `docs/agents/` - Agent memory system (NOW.md, PATTERNS.md, CONTEXT.md)
+- Tool descriptions - Built into MCP (list_tools)
+
+## 🎵 Try It
+
+```javascript
+// The original hello world - still works!
+play({what: "C", how: "softly"})
+// → {pitch: 60, velocity: 40}
+
+// But now we can do this:
+job1 = orpheus_loops({temperature: 1.1, max_tokens: 256})
+job2 = orpheus_generate({temperature: 0.9, max_tokens: 128})
+
+results = poll({timeout_ms: 60000, job_ids: [job1, job2], mode: "all"})
+
+// Two pieces of original music, generated in parallel, ready to jam
+```
 
 ---
 
-**Status**: ✅ Dancing
-**Contributors**: Amy Tobey, Claude, Gemini
+**Status**: ✅ Making music
+**Contributors**: Amy Tobey, Claude, Gemini, DeepSeek
 **Vibe**: 🎵 Let's jam
+**Last Updated**: 2025-11-22 (Async job system release)
