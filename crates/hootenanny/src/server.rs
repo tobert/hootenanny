@@ -494,13 +494,14 @@ impl EventDualityServer {
         state: Arc<Mutex<ConversationState>>,
         local_models: Arc<LocalModels>,
         artifact_store: Arc<FileStore>,
+        job_store: Arc<JobStore>,
     ) -> Self {
         Self {
             tool_router: Self::tool_router(),
             state,
             local_models,
             artifact_store,
-            job_store: JobStore::new(),
+            job_store: (*job_store).clone(),
         }
     }
 
@@ -520,7 +521,10 @@ impl EventDualityServer {
             FileStore::new(state_dir.join("artifacts.json")).expect("Failed to create artifact store")
         );
 
-        Self::new_with_state(Arc::new(Mutex::new(state)), local_models, artifact_store)
+        // Job store
+        let job_store = Arc::new(JobStore::new());
+
+        Self::new_with_state(Arc::new(Mutex::new(state)), local_models, artifact_store, job_store)
     }
 
     #[tool(description = "Merge two branches in the conversation tree")]
@@ -1054,16 +1058,27 @@ Attempts to abort the job's execution. Returns success if cancelled.")]
 Wait for jobs to complete or timeout to expire. Returns immediately when:
 - mode='any': First job completes (default)
 - mode='all': All jobs complete
-- timeout expires
+- timeout expires (MAX 8 seconds to prevent SSE disconnects)
 - no jobs provided: acts as sleep
 
-Example: {timeout_ms: 30000, job_ids: ['abc-123', 'def-456'], mode: 'any'}
+**IMPORTANT for Claude Code agents:**
+Use TodoWrite to track long-running jobs instead of long polls!
+Pattern:
+1. Start job, get job_id
+2. TodoWrite: Add 'Waiting for job {job_id}' with in_progress status
+3. Poll with 2-3 second timeout
+4. If still pending, poll again (cheap: ~100 tokens per call)
+5. When complete: TodoWrite mark completed, process result
+
+This prevents SSE timeouts and gives visibility into progress.
+
+Example: {timeout_ms: 3000, job_ids: ['abc-123'], mode: 'any'}
 
 Returns: {
   completed: ['abc-123'],
-  pending: ['def-456'],
+  pending: [],
   failed: [],
-  elapsed_ms: 5234,
+  elapsed_ms: 1234,
   reason: 'job_complete' | 'timeout'
 }")]
     #[tracing::instrument(
@@ -1084,8 +1099,8 @@ Returns: {
         use std::time::{Duration, Instant};
         use crate::job_system::JobStatus;
 
-        // Cap timeout at 5 minutes
-        let timeout_ms = request.timeout_ms.min(300000);
+        // Cap timeout at 8 seconds (less than 10s SSE keep-alive to prevent disconnects)
+        let timeout_ms = request.timeout_ms.min(8000);
         let timeout = Duration::from_millis(timeout_ms);
         let mode = request.mode.as_deref().unwrap_or("any");
 
@@ -1512,7 +1527,8 @@ When complete, job result contains:
                 model.clone(),
                 "generate".to_string(),
                 None,  // No input for from-scratch generation
-                params
+                params,
+                Some(job_id_clone.as_str().to_string())
             ).await {
                 Ok(result) => {
                     // Create artifacts (need to handle errors gracefully)
@@ -1643,7 +1659,8 @@ Returns: {job_id: 'abc-123-def'}")]
                 model.clone(),
                 "generate_seeded".to_string(),
                 Some(request.seed_hash),
-                params
+                params,
+                Some(job_id_clone.as_str().to_string())
             ).await {
                 Ok(result) => {
                     let artifacts_result = (|| -> anyhow::Result<Vec<Artifact>> {
@@ -1764,7 +1781,8 @@ Returns: {job_id: 'abc-123-def'}")]
                 model.clone(),
                 "continue".to_string(),
                 Some(request.input_hash),
-                params
+                params,
+                Some(job_id_clone.as_str().to_string())
             ).await {
                 Ok(result) => {
                     let artifacts_result = (|| -> anyhow::Result<Vec<Artifact>> {
@@ -1883,7 +1901,8 @@ Returns: {job_id: 'abc-123-def'}")]
                 model.clone(),
                 "bridge".to_string(),
                 Some(request.section_a_hash),
-                params
+                params,
+                Some(job_id_clone.as_str().to_string())
             ).await {
                 Ok(result) => {
                     let artifacts_result = (|| -> anyhow::Result<Vec<Artifact>> {
@@ -1975,7 +1994,13 @@ Returns: {job_id: 'abc-123-def'}")]
 
             let model = request.model.unwrap_or_else(|| "loops".to_string());
 
-            match local_models.run_orpheus_generate(model.clone(), "loops".to_string(), request.seed_hash, params).await {
+            match local_models.run_orpheus_generate(
+                model.clone(),
+                "loops".to_string(),
+                request.seed_hash,
+                params,
+                Some(job_id_clone.as_str().to_string())
+            ).await {
                 Ok(result) => {
                     let artifacts_result = (|| -> anyhow::Result<Vec<Artifact>> {
                         let mut artifacts = Vec::new();

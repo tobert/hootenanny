@@ -175,22 +175,20 @@ impl LocalModels {
         task: String,
         input_hash: Option<String>,
         params: OrpheusGenerateParams,
+        client_job_id: Option<String>,
     ) -> Result<OrpheusGenerateResult> {
         let mut request_body = serde_json::Map::new();
         request_body.insert("model".to_string(), serde_json::json!(model));
         request_body.insert("task".to_string(), serde_json::json!(task));
 
-        if let Some(temp) = params.temperature {
-            request_body.insert("temperature".to_string(), serde_json::json!(temp));
-        }
-        if let Some(top_p) = params.top_p {
-            request_body.insert("top_p".to_string(), serde_json::json!(top_p));
-        }
-        if let Some(max) = params.max_tokens {
-            request_body.insert("max_tokens".to_string(), serde_json::json!(max));
-        }
-        if let Some(num_var) = params.num_variations {
-            request_body.insert("num_variations".to_string(), serde_json::json!(num_var));
+        // Always send these values, using defaults when None to ensure Python receives them
+        request_body.insert("temperature".to_string(), serde_json::json!(params.temperature.unwrap_or(1.0)));
+        request_body.insert("top_p".to_string(), serde_json::json!(params.top_p.unwrap_or(0.95)));
+        request_body.insert("max_tokens".to_string(), serde_json::json!(params.max_tokens.unwrap_or(1024)));
+        request_body.insert("num_variations".to_string(), serde_json::json!(params.num_variations.unwrap_or(1)));
+
+        if let Some(job_id) = client_job_id {
+            request_body.insert("client_job_id".to_string(), serde_json::json!(job_id));
         }
 
         if let Some(hash) = input_hash {
@@ -209,6 +207,28 @@ impl LocalModels {
             .context("Failed to call Orpheus API")?;
 
         let status = resp.status();
+
+        // Handle HTTP 429 - GPU busy, retry
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = resp.headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(5);
+
+            let error_body = resp.text().await
+                .unwrap_or_else(|_| "<failed to read error body>".to_string());
+
+            tracing::warn!(
+                retry_after = retry_after,
+                error_body = ?error_body,
+                "GPU busy, retrying after {}s",
+                retry_after
+            );
+
+            anyhow::bail!("GPU busy, retry after {}s", retry_after);
+        }
+
         if !status.is_success() {
             // Capture error response body for better debugging
             let error_body = resp.text().await.unwrap_or_else(|_| "<failed to read error body>".to_string());

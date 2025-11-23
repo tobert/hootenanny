@@ -130,6 +130,11 @@ async fn main() -> Result<()> {
     );
     tracing::info!("   Artifact store at: {}", artifact_store_path.display());
 
+    // --- Job Store Initialization ---
+    tracing::info!("⚙️  Initializing shared Job Store...");
+    let job_store = Arc::new(job_system::JobStore::new());
+    tracing::info!("   Job store ready (shared across connections)");
+
     let addr = format!("0.0.0.0:{}", cli.port);
 
     tracing::info!("🎵 Event Duality Server starting on http://{}", addr);
@@ -152,7 +157,7 @@ async fn main() -> Result<()> {
         sse_path: "/sse".to_string(),
         post_path: "/message".to_string(),
         ct: CancellationToken::new(),
-        sse_keep_alive: Some(Duration::from_secs(15)),
+        sse_keep_alive: Some(Duration::from_secs(10)),
     };
 
     let (sse_server, sse_router) = SseServer::new(sse_config);
@@ -170,11 +175,13 @@ async fn main() -> Result<()> {
     tracing::info!("Setting up SSE server with EventDualityServer service.");
     let local_models_clone = local_models.clone();
     let artifact_store_clone = artifact_store.clone();
+    let job_store_clone = job_store.clone();
     let ct = sse_server.with_service(move || {
         EventDualityServer::new_with_state(
             shared_state.clone(),
             local_models_clone.clone(),
-            artifact_store_clone.clone()
+            artifact_store_clone.clone(),
+            job_store_clone.clone()
         )
     });
 
