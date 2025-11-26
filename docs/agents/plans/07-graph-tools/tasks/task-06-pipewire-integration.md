@@ -17,6 +17,34 @@ Add PipeWire as a live data source to see audio/MIDI routing through the softwar
 
 ## 📋 Context
 
+### ⚠️ The ALSA/PipeWire Double Vision Problem (Gemini Review)
+
+PipeWire often acts as a bridge for ALSA MIDI devices. The **same hardware synth** may appear as:
+1. An `AlsaMidiDevice` (via ALSA Sequencer)
+2. A `PipeWireNode` with `media.class = Midi/Bridge`
+
+**Risk**: Agent confusion about which entity to reference. "The JD-Xi" shows up twice!
+
+**Solution**: Link PipeWire nodes to their underlying ALSA devices via `api.alsa.card` or `api.alsa.path` properties:
+
+```json
+// pw-dump excerpt for a MIDI bridge node
+{
+  "id": 42,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+    "props": {
+      "node.name": "JD-Xi",
+      "media.class": "Midi/Bridge",
+      "api.alsa.card": "2",           // <-- Links to ALSA card 2!
+      "api.alsa.path": "hw:2,0,0"     // <-- Exact ALSA device path
+    }
+  }
+}
+```
+
+**Implementation**: Add `PipewireAlsaPath` hint kind (already in Task 01). In the Trustfall adapter, resolve `PipeWireNode.alsa_device` edge using this property.
+
 ### PipeWire Architecture
 
 ```

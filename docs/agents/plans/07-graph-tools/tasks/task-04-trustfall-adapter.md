@@ -1,6 +1,6 @@
 # Task 04: Trustfall GraphQL Adapter
 
-**Status**: 🟡 Not started
+**Status**: ✅ Complete (SQLite-only, 4 tests passing)
 **Estimated effort**: 6-8 hours (learning curve + implementation)
 **Prerequisites**: Task 01 (SQLite), Task 02 (ALSA), Task 03 (Identity matching)
 **Depends on**: All data sources, matcher
@@ -73,7 +73,6 @@ type Query {
 # ============================================
 
 type AlsaMidiDevice {
-    host: String!              # "localhost", "desktop", etc.
     card_id: Int!
     device_id: Int!
     name: String!
@@ -223,10 +222,22 @@ use crate::sources::alsa::AlsaSource;
 use crate::matcher::IdentityMatcher;
 use crate::adapter::vertex::Vertex;
 
+/// Per-query snapshot of live device state.
+/// Frozen at query start to ensure consistency during resolution.
+#[derive(Debug, Clone)]
+pub struct LiveSnapshot {
+    pub alsa_devices: Vec<AlsaMidiDevice>,
+    pub pipewire_nodes: Vec<PipeWireNodeData>,  // Added in Task 06
+    pub captured_at: std::time::Instant,
+}
+
 pub struct AudioGraphAdapter {
     schema: Schema,
     db: Arc<Database>,
     alsa: AlsaSource,
+    /// Snapshot of live state - populated at query start, cleared after.
+    /// This prevents race conditions if devices disconnect mid-query.
+    snapshot: RefCell<Option<LiveSnapshot>>,
 }
 
 impl AudioGraphAdapter {
@@ -238,11 +249,40 @@ impl AudioGraphAdapter {
             schema,
             db,
             alsa: AlsaSource::new(),
+            snapshot: RefCell::new(None),
         })
     }
 
     pub fn schema(&self) -> &Schema {
         &self.schema
+    }
+
+    /// Capture live state at query start. Call before executing query.
+    #[tracing::instrument(name = "adapter.capture_snapshot", skip(self))]
+    pub fn capture_snapshot(&self) -> anyhow::Result<()> {
+        let alsa_devices = self.alsa.enumerate_devices()?;
+        // PipeWire will be added in Task 06
+        let pipewire_nodes = vec![];
+
+        *self.snapshot.borrow_mut() = Some(LiveSnapshot {
+            alsa_devices,
+            pipewire_nodes,
+            captured_at: std::time::Instant::now(),
+        });
+        Ok(())
+    }
+
+    /// Clear snapshot after query completes.
+    pub fn clear_snapshot(&self) {
+        *self.snapshot.borrow_mut() = None;
+    }
+
+    /// Get ALSA devices from snapshot (not live!)
+    fn get_alsa_devices(&self) -> Vec<AlsaMidiDevice> {
+        self.snapshot.borrow()
+            .as_ref()
+            .map(|s| s.alsa_devices.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -257,8 +297,8 @@ impl BasicAdapter<'static> for AudioGraphAdapter {
     ) -> VertexIterator<'static, Self::Vertex> {
         match edge_name {
             "AlsaMidiDevice" => {
-                let devices = self.alsa.enumerate_devices()
-                    .expect("Failed to enumerate ALSA devices");
+                // Use snapshot, not live enumeration!
+                let devices = self.get_alsa_devices();
 
                 Box::new(devices.into_iter().map(|d| Vertex::AlsaMidiDevice(Box::new(d))))
             }

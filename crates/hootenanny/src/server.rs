@@ -193,7 +193,7 @@ pub struct WaitForJobRequest {
     #[schemars(description = "Job ID to wait for")]
     pub job_id: String,
 
-    #[schemars(description = "Timeout in seconds (default: 300)")]
+    #[schemars(description = "Timeout in seconds (default: 86400 = 24 hours)")]
     pub timeout_seconds: Option<u64>,
 }
 
@@ -205,7 +205,7 @@ pub struct CancelJobRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PollRequest {
-    #[schemars(description = "Timeout in milliseconds (max 300000 = 5 minutes)")]
+    #[schemars(description = "Timeout in milliseconds (capped at 10000ms to prevent SSE disconnects)")]
     pub timeout_ms: u64,
 
     #[schemars(description = "Job IDs to poll (empty = just timeout/sleep)")]
@@ -982,7 +982,7 @@ Default timeout is 300 seconds (5 minutes).")]
         skip(self, request),
         fields(
             job.id = %request.job_id,
-            job.timeout_seconds = request.timeout_seconds.unwrap_or(300),
+            job.timeout_seconds = request.timeout_seconds.unwrap_or(86400),
             job.final_status = tracing::field::Empty,
         )
     )]
@@ -991,7 +991,7 @@ Default timeout is 300 seconds (5 minutes).")]
         Parameters(request): Parameters<WaitForJobRequest>,
     ) -> Result<CallToolResult, McpError> {
         let job_id = JobId::from(request.job_id);
-        let timeout = std::time::Duration::from_secs(request.timeout_seconds.unwrap_or(300));
+        let timeout = std::time::Duration::from_secs(request.timeout_seconds.unwrap_or(86400)); // 24 hours
 
         let job_info = self.job_store.wait_for_job(&job_id, Some(timeout))
             .await
@@ -1058,7 +1058,7 @@ Attempts to abort the job's execution. Returns success if cancelled.")]
 Wait for jobs to complete or timeout to expire. Returns immediately when:
 - mode='any': First job completes (default)
 - mode='all': All jobs complete
-- timeout expires (MAX 8 seconds to prevent SSE disconnects)
+- timeout expires (MAX 10 seconds to prevent SSE disconnects)
 - no jobs provided: acts as sleep
 
 **IMPORTANT for Claude Code agents:**
@@ -1066,13 +1066,14 @@ Use TodoWrite to track long-running jobs instead of long polls!
 Pattern:
 1. Start job, get job_id
 2. TodoWrite: Add 'Waiting for job {job_id}' with in_progress status
-3. Poll with 2-3 second timeout
+3. Poll with 3-5 second timeout
 4. If still pending, poll again (cheap: ~100 tokens per call)
 5. When complete: TodoWrite mark completed, process result
 
 This prevents SSE timeouts and gives visibility into progress.
+The 10-second cap ensures frequent returns to keep SSE alive (30s timeout).
 
-Example: {timeout_ms: 3000, job_ids: ['abc-123'], mode: 'any'}
+Example: {timeout_ms: 5000, job_ids: ['abc-123'], mode: 'any'}
 
 Returns: {
   completed: ['abc-123'],
@@ -1099,8 +1100,9 @@ Returns: {
         use std::time::{Duration, Instant};
         use crate::job_system::JobStatus;
 
-        // Cap timeout at 8 seconds (less than 10s SSE keep-alive to prevent disconnects)
-        let timeout_ms = request.timeout_ms.min(8000);
+        // Cap timeout at 10 seconds (less than 30s SSE keep-alive to prevent disconnects)
+        // This ensures we return frequently enough to keep SSE connection alive
+        let timeout_ms = request.timeout_ms.min(10000);
         let timeout = Duration::from_millis(timeout_ms);
         let mode = request.mode.as_deref().unwrap_or("any");
 
@@ -1119,6 +1121,10 @@ Returns: {
 
         let start = Instant::now();
         let poll_interval = Duration::from_millis(500);
+
+        // SSE keepalive: Always return within 10s to prevent SSE timeout
+        // Even if jobs aren't complete, we return with current status
+        // Caller can poll() again to continue waiting
 
         loop {
             let mut completed = Vec::new();
@@ -1157,6 +1163,8 @@ Returns: {
                 pending.is_empty()
             };
 
+            // ALWAYS return on timeout to prevent SSE disconnects
+            // Caller should poll again if jobs still pending
             let reason = if should_return && (!completed.is_empty() || !failed.is_empty()) {
                 "job_complete"
             } else if elapsed >= timeout {

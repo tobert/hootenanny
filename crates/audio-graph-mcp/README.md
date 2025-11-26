@@ -99,7 +99,10 @@ query ConnectedMidi {
         }
         identity {
             name @output
-            tags { namespace @output, value @output }
+            tags {
+                namespace @output
+                value @output
+            }
         }
     }
 }
@@ -174,19 +177,28 @@ crates/audio-graph-mcp/
 
 ## 🗂️ Implementation Plan
 
-See `docs/agents/plans/graph-mcp/tasks/` for detailed task breakdowns:
+See `docs/agents/plans/07-graph-tools/tasks/` for detailed task breakdowns.
 
-1. **[Task 01](../../docs/agents/plans/graph-mcp/tasks/task-01-sqlite-foundation.md)**: SQLite foundation and schema
-2. **[Task 02](../../docs/agents/plans/graph-mcp/tasks/task-02-alsa-enumeration.md)**: ALSA MIDI enumeration
-3. **[Task 03](../../docs/agents/plans/graph-mcp/tasks/task-03-identity-matching.md)**: Identity hint matching system
-4. **[Task 04](../../docs/agents/plans/graph-mcp/tasks/task-04-trustfall-adapter.md)**: Trustfall GraphQL adapter
-5. **[Task 05](../../docs/agents/plans/graph-mcp/tasks/task-05-mcp-tools.md)**: MCP tool interface
-6. **[Task 06](../../docs/agents/plans/graph-mcp/tasks/task-06-pipewire-integration.md)**: PipeWire audio routing
-7. **[Task 07](../../docs/agents/plans/graph-mcp/tasks/task-07-manual-connections.md)**: Manual connection tracking
-8. **[Task 08](../../docs/agents/plans/graph-mcp/tasks/task-08-testing-fixtures.md)**: Virtual device testing
-9. **[Task 09](../../docs/agents/plans/graph-mcp/tasks/task-09-ensemble-integration.md)**: Hootenanny integration
+### Graph MVP (prove Trustfall on SQLite first)
 
-Each task is self-contained with context, goals, technical approach, and acceptance criteria.
+| Order | Task | Description |
+|-------|------|-------------|
+| 1 | **[Task 01](../../docs/agents/plans/07-graph-tools/tasks/task-01-sqlite-foundation.md)** | SQLite foundation and schema |
+| 2 | **[Task 04](../../docs/agents/plans/07-graph-tools/tasks/task-04-trustfall-adapter.md)** | Trustfall adapter (SQLite only) |
+| 3 | **[Task 08](../../docs/agents/plans/07-graph-tools/tasks/task-08-testing-fixtures.md)** | Testing fixtures |
+| 4 | **[Task 05](../../docs/agents/plans/07-graph-tools/tasks/task-05-mcp-tools.md)** | MCP tool interface |
+
+### Live Sources (add incrementally)
+
+| Order | Task | Description |
+|-------|------|-------------|
+| 5 | **[Task 02](../../docs/agents/plans/07-graph-tools/tasks/task-02-alsa-enumeration.md)** | ALSA MIDI enumeration |
+| 6 | **[Task 03](../../docs/agents/plans/07-graph-tools/tasks/task-03-identity-matching.md)** | Identity matching / joins |
+| 7 | **[Task 06](../../docs/agents/plans/07-graph-tools/tasks/task-06-pipewire-integration.md)** | PipeWire audio routing |
+| 8 | **[Task 07](../../docs/agents/plans/07-graph-tools/tasks/task-07-manual-connections.md)** | Manual connection tracking |
+| 9 | **[Task 09](../../docs/agents/plans/07-graph-tools/tasks/task-09-ensemble-integration.md)** | Hootenanny integration |
+
+**OTEL**: Added incrementally as we build each component.
 
 ## 🔧 Hardware Context
 
@@ -230,6 +242,6 @@ This project embodies:
 
 ---
 
-**Status**: 📝 Planning phase complete. Ready for implementation.
+**Status**: ✅ Graph MVP complete (23 tests). Ready for PipeWire integration.
 
 **Next**: Pick a task from `docs/agents/plans/graph-mcp/tasks/` and start building!

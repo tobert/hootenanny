@@ -2,9 +2,11 @@
 
 **Status**: 🟡 Not started
 **Estimated effort**: 2-3 hours
-**Prerequisites**: Tasks 01-05 (core functionality)
-**Depends on**: ALSA enumeration, database
+**Prerequisites**: Task 01 (SQLite), Task 02 (ALSA), Task 03 (Matching)
+**Depends on**: ALSA enumeration, database, identity matcher
 **Enables**: CI/CD testing without hardware
+
+> **Note**: Moved earlier in sequence. Testing infrastructure is critical for validating identity matching (Task 03) before building the Trustfall adapter (Task 04). Do this BEFORE Task 04.
 
 ## 🎯 Goal
 
@@ -36,6 +38,47 @@ aplaymidi -l
 1. **Virtual MIDI devices** (via snd-virmidi)
 2. **Pre-populated database** (identities, hints, tags)
 3. **Test scenarios** (enumeration, matching, queries)
+4. **Mock DataProvider** (Gemini review feedback) - JSON fixtures for PipeWire
+
+### Mock DataProvider Pattern (Gemini Recommendation)
+
+Don't call `pw-dump` in tests. Instead, use a trait-based abstraction:
+
+```rust
+/// Trait for PipeWire data source - enables mocking
+pub trait PipeWireDataProvider: Send + Sync {
+    fn get_dump(&self) -> anyhow::Result<Vec<PipeWireObject>>;
+}
+
+/// Real implementation - calls pw-dump binary
+pub struct RealPipeWireProvider;
+
+impl PipeWireDataProvider for RealPipeWireProvider {
+    fn get_dump(&self) -> anyhow::Result<Vec<PipeWireObject>> {
+        let output = std::process::Command::new("pw-dump").output()?;
+        let dump: Vec<PipeWireObject> = serde_json::from_slice(&output.stdout)?;
+        Ok(dump)
+    }
+}
+
+/// Mock implementation - reads from fixture file
+pub struct MockPipeWireProvider {
+    fixture_path: PathBuf,
+}
+
+impl PipeWireDataProvider for MockPipeWireProvider {
+    fn get_dump(&self) -> anyhow::Result<Vec<PipeWireObject>> {
+        let content = std::fs::read_to_string(&self.fixture_path)?;
+        let dump: Vec<PipeWireObject> = serde_json::from_str(&content)?;
+        Ok(dump)
+    }
+}
+```
+
+**Benefits**:
+- Snapshot your real studio setup into `fixtures/pipewire-studio.json`
+- Use as regression test: "Ensure JD-Xi is always found in this dump"
+- No dependency on running PipeWire in CI
 
 ## 🔨 Test Fixture Setup (tests/fixtures/mod.rs)
 

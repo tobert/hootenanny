@@ -1,0 +1,56 @@
+schema {
+    query: Query
+}
+
+type Query {
+    Identity(id: String, name: String): [Identity!]!
+    PipeWireNode(media_class: String): [PipeWireNode!]!
+}
+
+type Identity {
+    id: String!
+    name: String!
+    created_at: String!
+
+    hints: [IdentityHint!]!
+    tags: [Tag!]!
+}
+
+type IdentityHint {
+    kind: String!
+    value: String!
+    confidence: Float!
+}
+
+type Tag {
+    namespace: String!
+    value: String!
+}
+
+type PipeWireNode {
+    id: Int!
+    name: String!
+    description: String
+    media_class: String
+    device_bus_path: String
+    alsa_card: String
+
+    identity: Identity
+    ports: [PipeWirePort!]!
+}
+
+type PipeWirePort {
+    id: Int!
+    node_id: Int!
+    name: String!
+    direction: String!
+    media_type: String
+}
+
+type PipeWireLink {
+    id: Int!
+    output_node_id: Int!
+    output_port_id: Int!
+    input_node_id: Int!
+    input_port_id: Int!
+}

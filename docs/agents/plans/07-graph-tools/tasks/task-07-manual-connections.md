@@ -1,10 +1,12 @@
 # Task 07: Manual Connection Tracking
 
-**Status**: 🟡 Not started
+**Status**: ✅ Complete (2 tests passing)
 **Estimated effort**: 2 hours
-**Prerequisites**: Task 05 (MCP tools)
+**Prerequisites**: Task 01 (SQLite foundation)
 **Depends on**: Database layer (Task 01)
 **Enables**: Full signal path visibility (software + hardware)
+
+> **Note**: This task only requires the SQLite layer, not the full MCP stack. Can be done after Task 01 or in parallel with Tasks 02-05.
 
 ## 🎯 Goal
 

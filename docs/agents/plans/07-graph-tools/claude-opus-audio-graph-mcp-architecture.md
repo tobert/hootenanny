@@ -1032,15 +1032,22 @@ tracing = "0.1"
 
 ## Implementation Order
 
-1. **SQLite schema + basic CRUD** - Get persistence working first
-2. **Trustfall schema** - Define the GraphQL types
-3. **SqliteAdapter** - Query persisted data via Trustfall
-4. **AlsaAdapter** - Live MIDI enumeration
-5. **Identity joins** - The federation magic
-6. **MCP tools** - `graph_query`, `graph_bind`, etc.
-7. **PipeWireAdapter** - Live audio nodes
-8. **Caching** - Performance optimization
-9. **UsbAdapter** - Additional identity hints
+**Graph MVP** (prove Trustfall on SQLite first):
+1. SQLite schema + CRUD (Task 01)
+2. Trustfall adapter - SQLite only (Task 04, simplified)
+3. Test fixtures for graph queries (Task 08)
+4. MCP tools - basic query interface (Task 05)
+
+**Live Sources** (add incrementally):
+5. ALSA enumeration (Task 02)
+6. Identity matching / joins (Task 03)
+7. PipeWire source (Task 06)
+8. Manual connections (Task 07)
+
+**Capstone**:
+9. Hootenanny integration (Task 09)
+
+**OTEL**: Add instrumentation incrementally as we build each component.
 
 ## References
 

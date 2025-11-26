@@ -1,6 +1,6 @@
 [workspace]
 members = [
     "crates/hootenanny", "crates/hrcli",
-    "crates/resonode",
+    "crates/resonode", "crates/audio-graph-mcp",
 ]
 resolver = "2"

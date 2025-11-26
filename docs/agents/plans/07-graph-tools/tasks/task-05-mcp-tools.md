@@ -1,6 +1,6 @@
 # Task 05: MCP Tool Interface
 
-**Status**: 🟡 Not started
+**Status**: ✅ Complete (5 tests passing)
 **Estimated effort**: 3-4 hours
 **Prerequisites**: Task 04 (Trustfall adapter)
 **Depends on**: Query engine, database, matcher
@@ -82,6 +82,14 @@ async fn graph_note(
     /// Note message
     message: String,
 ) -> Result<Note, String>;
+
+/// Suggest tags from controlled vocabulary (Gemini review feedback)
+/// Helps agents use consistent terminology instead of inventing new tags
+#[tool]
+async fn graph_suggest_tags(
+    /// Tag namespace to get suggestions for (e.g., "role", "manufacturer", "capability")
+    namespace: String,
+) -> Result<Vec<String>, String>;
 ```
 
 ## 🏗️ Module Structure

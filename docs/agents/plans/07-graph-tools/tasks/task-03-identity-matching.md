@@ -1,6 +1,6 @@
 # Task 03: Identity Hint Matching System
 
-**Status**: 🟡 Not started
+**Status**: ✅ Complete (5 tests passing)
 **Estimated effort**: 2-3 hours
 **Prerequisites**: Task 01 (SQLite), Task 02 (ALSA enumeration)
 **Depends on**: Database layer, device fingerprints
@@ -186,14 +186,21 @@ impl<'a> IdentityMatcher<'a> {
     }
 
     /// Weight hints by strength (higher = more reliable)
+    ///
+    /// Hierarchy for twin device disambiguation:
+    /// 1. UsbSerial (gold standard - unique per device)
+    /// 2. UsbPath (topology-based - "Keystep on port 3.2")
+    /// 3. UsbDeviceId (VID:PID - same for identical devices!)
     fn hint_weight(&self, kind: HintKind) -> f64 {
         match kind {
-            HintKind::UsbDeviceId => 2.0,    // Strongest (VID:PID)
-            HintKind::UsbSerial => 1.8,      // Very strong (unique serial)
-            HintKind::MidiName => 1.0,       // Medium (can be generic)
-            HintKind::AlsaCard => 0.8,       // Weaker (can change)
-            HintKind::AlsaHw => 0.5,         // Weakest (changes between boots)
+            HintKind::UsbSerial => 2.5,           // Gold standard (unique per device)
+            HintKind::UsbPath => 2.2,             // Topology fallback for twin devices
+            HintKind::UsbDeviceId => 2.0,         // VID:PID (same for identical devices!)
+            HintKind::PipewireAlsaPath => 1.5,    // Links PipeWire to ALSA
+            HintKind::MidiName => 1.0,            // Medium (can be generic)
             HintKind::PipewireName => 0.9,
+            HintKind::AlsaCard => 0.8,            // Weaker (can change)
+            HintKind::AlsaHw => 0.5,              // Weakest (changes between boots)
         }
     }
 
@@ -319,6 +326,61 @@ fn test_multiple_candidates_sorted_by_score() {
     assert_eq!(matches[0].identity.id, "jdxi");  // Higher score
     assert!(matches[0].score > matches[1].score);
 }
+
+#[test]
+fn test_twin_devices_distinguished_by_usb_path() {
+    let db = Database::in_memory().unwrap();
+
+    // Two identical Keystep Pros - same VID:PID, different USB ports
+    db.create_identity("keystep_left", "Keystep Pro (Left)", json!({})).unwrap();
+    db.add_hint("keystep_left", HintKind::UsbDeviceId, "1c75:0263", 1.0).unwrap();
+    db.add_hint("keystep_left", HintKind::UsbPath, "usb-0000:00:14.0-3.1", 1.0).unwrap();
+
+    db.create_identity("keystep_right", "Keystep Pro (Right)", json!({})).unwrap();
+    db.add_hint("keystep_right", HintKind::UsbDeviceId, "1c75:0263", 1.0).unwrap();
+    db.add_hint("keystep_right", HintKind::UsbPath, "usb-0000:00:14.0-3.2", 1.0).unwrap();
+
+    // Device on port 3.2 should match "keystep_right"
+    let fingerprints = vec![
+        DeviceFingerprint { kind: HintKind::UsbDeviceId, value: "1c75:0263".into() },
+        DeviceFingerprint { kind: HintKind::UsbPath, value: "usb-0000:00:14.0-3.2".into() },
+    ];
+
+    let matcher = IdentityMatcher::new(&db);
+    let best = matcher.best_match(&fingerprints).unwrap().unwrap();
+
+    assert_eq!(best.identity.id, "keystep_right");
+    assert_eq!(best.confidence, MatchConfidence::High);
+}
+```
+
+## ⚠️ The Twin Device Problem
+
+**Scenario**: Two identical devices (e.g., two Arturia Keystep Pros).
+
+| Hint Type | Device 1 | Device 2 | Unique? |
+|-----------|----------|----------|---------|
+| `UsbDeviceId` | 1c75:0263 | 1c75:0263 | ❌ Same |
+| `UsbSerial` | (none) | (none) | ❌ Many devices lack serial |
+| `UsbPath` | usb-0000:00:14.0-3.1 | usb-0000:00:14.0-3.2 | ✅ Different ports! |
+
+**Solution hierarchy**:
+1. **UsbSerial** - If the device has a unique serial, use it (gold standard)
+2. **UsbPath** - USB topology distinguishes "Keystep on port 3.1" vs "port 3.2"
+3. **UsbDeviceId** - Same for identical devices, but still useful for matching type
+
+**Caveat**: `UsbPath` changes if you move the device to a different USB port. The user must re-bind when rearranging hardware. This is unavoidable without a serial number.
+
+**UnboundDevice exposure**: When showing unbound devices, always include `usb_path` so the user can distinguish twins:
+```
+UnboundDevice {
+    raw_name: "Keystep Pro",
+    fingerprints: [
+        { kind: "usb_device_id", value: "1c75:0263" },
+        { kind: "usb_path", value: "usb-0000:00:14.0-3.2" },  // <-- Show this!
+    ],
+    ...
+}
 ```
 
 ## ✅ Acceptance Criteria
@@ -332,6 +394,8 @@ When this task is complete:
 5. ✅ No matches → Returns empty list
 6. ✅ Ambiguous matches → Sorted by score
 7. ✅ `MatchConfidence` enum correctly categorizes scores
+8. ✅ **Twin devices** distinguished by `UsbPath` hint
+9. ✅ `UsbSerial` has highest weight when available
 
 ## 🔍 Database Extension
 

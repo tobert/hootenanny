@@ -157,7 +157,7 @@ async fn main() -> Result<()> {
         sse_path: "/sse".to_string(),
         post_path: "/message".to_string(),
         ct: CancellationToken::new(),
-        sse_keep_alive: Some(Duration::from_secs(10)),
+        sse_keep_alive: Some(Duration::from_secs(30)),
     };
 
     let (sse_server, sse_router) = SseServer::new(sse_config);

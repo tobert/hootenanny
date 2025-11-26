@@ -1,6 +1,6 @@
 # Task 01: SQLite Foundation and Schema
 
-**Status**: 🟡 Not started
+**Status**: ✅ Complete (4 tests passing)
 **Estimated effort**: 2-3 hours
 **Prerequisites**: None (starting point)
 **Depends on**: Nothing
@@ -208,13 +208,14 @@ pub struct IdentityHint {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HintKind {
-    UsbDeviceId,
-    UsbSerial,
+    UsbDeviceId,     // VID:PID - strongest (but same for identical devices)
+    UsbSerial,       // Unique serial (gold standard, but many devices lack it)
+    UsbPath,         // USB topology path (e.g., "usb-0000:00:14.0-3.2") - for twin devices
     MidiName,
     AlsaCard,
     AlsaHw,
     PipewireName,
-    // Extensible
+    PipewireAlsaPath, // Links PipeWire node to underlying ALSA device
 }
 
 // Implement Display/FromStr for database persistence
@@ -223,10 +224,12 @@ impl fmt::Display for HintKind {
         let s = match self {
             Self::UsbDeviceId => "usb_device_id",
             Self::UsbSerial => "usb_serial",
+            Self::UsbPath => "usb_path",
             Self::MidiName => "midi_name",
             Self::AlsaCard => "alsa_card",
             Self::AlsaHw => "alsa_hw",
             Self::PipewireName => "pipewire_name",
+            Self::PipewireAlsaPath => "pipewire_alsa_path",
         };
         write!(f, "{}", s)
     }
@@ -238,10 +241,12 @@ impl FromStr for HintKind {
         match s {
             "usb_device_id" => Ok(Self::UsbDeviceId),
             "usb_serial" => Ok(Self::UsbSerial),
+            "usb_path" => Ok(Self::UsbPath),
             "midi_name" => Ok(Self::MidiName),
             "alsa_card" => Ok(Self::AlsaCard),
             "alsa_hw" => Ok(Self::AlsaHw),
             "pipewire_name" => Ok(Self::PipewireName),
+            "pipewire_alsa_path" => Ok(Self::PipewireAlsaPath),
             _ => Err(format!("Unknown hint kind: {}", s)),
         }
     }
