@@ -1,0 +1,2 @@
+# Ignore directories that change during development but don't affect the build
+ignore = [".jj", ".claude"]

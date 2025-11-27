@@ -1,20 +1,11 @@
 //! An example of a two-agent jam session.
 
-use hootenanny::server::EventDualityServer;
 use hootenanny::domain::EmotionalVector;
 use hootenanny::domain::AbstractEvent;
 use hootenanny::domain::IntentionEvent;
 use hootenanny::domain::Event;
-use std::sync::{Arc, Mutex};
-use hootenanny::server::ConversationState;
 
 fn main() {
-    let state_dir = std::env::temp_dir().join("two_agent_jam");
-    std::fs::create_dir_all(&state_dir).expect("Failed to create temp dir");
-
-    let state = ConversationState::new(state_dir).expect("Failed to create conversation state");
-    let server = EventDualityServer::new_with_state(Arc::new(Mutex::new(state)));
-
     println!("Two-agent jam session example");
 
     // 1. Two agents starting a conversation

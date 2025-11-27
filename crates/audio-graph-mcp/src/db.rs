@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
-use std::path::Path;
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
 
 use crate::types::*;
 
@@ -66,45 +65,60 @@ CREATE INDEX IF NOT EXISTS idx_changelog_target ON changelog(target_kind, target
 CREATE INDEX IF NOT EXISTS idx_changelog_time ON changelog(timestamp DESC);
 "#;
 
+/// Database with connection-per-call for concurrent access.
+/// Each method creates a fresh connection with WAL mode enabled.
 pub struct Database {
-    conn: Mutex<Connection>,
+    path: PathBuf,
 }
 
 impl Database {
+    /// Open a file-based database with WAL mode for concurrent access.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let conn = Connection::open(path).context("Failed to open database")?;
-        let db = Self { conn: Mutex::new(conn) };
-        db.init()?;
-        Ok(db)
-    }
-
-    pub fn in_memory() -> Result<Self> {
-        let conn = Connection::open_in_memory().context("Failed to open in-memory database")?;
-        let db = Self { conn: Mutex::new(conn) };
-        db.init()?;
-        Ok(db)
-    }
-
-    fn init(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        let path = path.as_ref().to_path_buf();
+        let db = Self { path };
+        // Initialize schema with first connection
+        let conn = db.conn()?;
         conn.execute_batch(SCHEMA)?;
-        Ok(())
+        Ok(db)
+    }
+
+    /// Create a temporary database file with a unique name.
+    /// Each call creates a new database - suitable for tests.
+    pub fn in_memory() -> Result<Self> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let temp_dir = std::env::temp_dir();
+        let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let db_name = format!("audio_graph_{}_{}.db", std::process::id(), unique_id);
+        let path = temp_dir.join(db_name);
+        Self::open(path)
+    }
+
+    /// Create a new connection with WAL mode and busy timeout.
+    fn conn(&self) -> Result<Connection> {
+        let conn = Connection::open(&self.path)
+            .with_context(|| format!("Failed to open database: {:?}", self.path))?;
+        conn.execute_batch("
+            PRAGMA journal_mode = WAL;
+            PRAGMA busy_timeout = 5000;
+            PRAGMA foreign_keys = ON;
+        ")?;
+        Ok(conn)
     }
 
     // Identity CRUD
     pub fn create_identity(&self, id: &str, name: &str, data: serde_json::Value) -> Result<Identity> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute(
             "INSERT INTO identities (id, name, data) VALUES (?1, ?2, ?3)",
             params![id, name, data.to_string()],
         )?;
-        drop(conn);
         self.get_identity(id)?.ok_or_else(|| anyhow::anyhow!("Failed to retrieve created identity"))
     }
 
     pub fn get_identity(&self, id: &str) -> Result<Option<Identity>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn.prepare("SELECT id, name, created_at, data FROM identities WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
@@ -120,7 +134,7 @@ impl Database {
     }
 
     pub fn list_identities(&self) -> Result<Vec<Identity>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn.prepare("SELECT id, name, created_at, data FROM identities")?;
         let rows = stmt.query_map([], |row| {
             Ok(Identity {
@@ -134,14 +148,14 @@ impl Database {
     }
 
     pub fn delete_identity(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute("DELETE FROM identities WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     // Hints
     pub fn add_hint(&self, identity_id: &str, kind: HintKind, value: &str, confidence: f64) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute(
             "INSERT OR REPLACE INTO identity_hints (identity_id, hint_kind, hint_value, confidence) VALUES (?1, ?2, ?3, ?4)",
             params![identity_id, kind.as_str(), value, confidence],
@@ -150,7 +164,7 @@ impl Database {
     }
 
     pub fn get_hints(&self, identity_id: &str) -> Result<Vec<IdentityHint>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn.prepare("SELECT identity_id, hint_kind, hint_value, confidence FROM identity_hints WHERE identity_id = ?1")?;
         let rows = stmt.query_map(params![identity_id], |row| {
             Ok(IdentityHint {
@@ -164,7 +178,7 @@ impl Database {
     }
 
     pub fn find_identity_by_hint(&self, kind: HintKind, value: &str) -> Result<Option<Identity>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn.prepare("SELECT identity_id FROM identity_hints WHERE hint_kind = ?1 AND hint_value = ?2")?;
         let mut rows = stmt.query(params![kind.as_str(), value])?;
         if let Some(row) = rows.next()? {
@@ -180,7 +194,7 @@ impl Database {
 
     // Tags
     pub fn add_tag(&self, identity_id: &str, namespace: &str, value: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute(
             "INSERT OR IGNORE INTO tags (identity_id, namespace, value) VALUES (?1, ?2, ?3)",
             params![identity_id, namespace, value],
@@ -189,7 +203,7 @@ impl Database {
     }
 
     pub fn remove_tag(&self, identity_id: &str, namespace: &str, value: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute(
             "DELETE FROM tags WHERE identity_id = ?1 AND namespace = ?2 AND value = ?3",
             params![identity_id, namespace, value],
@@ -198,7 +212,7 @@ impl Database {
     }
 
     pub fn get_tags(&self, identity_id: &str) -> Result<Vec<Tag>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn.prepare("SELECT identity_id, namespace, value FROM tags WHERE identity_id = ?1")?;
         let rows = stmt.query_map(params![identity_id], |row| {
             Ok(Tag {
@@ -211,7 +225,7 @@ impl Database {
     }
 
     pub fn find_identities_by_tag(&self, namespace: &str, value: &str) -> Result<Vec<Identity>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT i.id, i.name, i.created_at, i.data FROM identities i
              JOIN tags t ON i.id = t.identity_id
@@ -230,7 +244,7 @@ impl Database {
 
     // Changelog
     pub fn log_event(&self, source: &str, operation: &str, target_kind: &str, target_id: &str, details: serde_json::Value) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute(
             "INSERT INTO changelog (source, operation, target_kind, target_id, details) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![source, operation, target_kind, target_id, details.to_string()],
@@ -249,18 +263,17 @@ impl Database {
         transport_kind: Option<&str>,
         created_by: &str,
     ) -> Result<ManualConnection> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute(
             "INSERT INTO manual_connections (id, from_identity, from_port, to_identity, to_port, transport_kind, signal_direction, created_by)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'forward', ?7)",
             params![id, from_identity, from_port, to_identity, to_port, transport_kind, created_by],
         )?;
-        drop(conn);
         self.get_connection(id)?.ok_or_else(|| anyhow::anyhow!("Failed to retrieve created connection"))
     }
 
     pub fn get_connection(&self, id: &str) -> Result<Option<ManualConnection>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT id, from_identity, from_port, to_identity, to_port, transport_kind, signal_direction, created_at, created_by
              FROM manual_connections WHERE id = ?1"
@@ -284,7 +297,7 @@ impl Database {
     }
 
     pub fn list_connections(&self, identity_id: Option<&str>) -> Result<Vec<ManualConnection>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let query = if let Some(id) = identity_id {
             format!(
                 "SELECT id, from_identity, from_port, to_identity, to_port, transport_kind, signal_direction, created_at, created_by
@@ -312,7 +325,7 @@ impl Database {
     }
 
     pub fn remove_connection(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute("DELETE FROM manual_connections WHERE id = ?1", params![id])?;
         Ok(())
     }

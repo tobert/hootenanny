@@ -1,0 +1,55 @@
+X:1
+T:Mars Drums - Dramatic Build
+C:Claude + Amy
+M:4/4
+L:1/8
+Q:1/4=60
+%%MIDI channel 10
+K:C clef=perc
+%
+% GM Drum Map reference:
+% B,, = 35 = Acoustic Bass Drum
+% C,  = 36 = Bass Drum 1 (the whomp)
+% D,  = 38 = Acoustic Snare
+% ^D, = 40 = Electric Snare
+% ^F, = 42 = Closed Hi-Hat
+% ^A, = 46 = Open Hi-Hat
+% ^C  = 49 = Crash Cymbal 1
+% E   = 52 = Chinese Cymbal
+% ^F  = 54 = Tambourine
+% D   = 50 = High Tom
+% G,  = 43 = Low Tom
+%
+% === SECTION 1: Bars 1-8 - Silence/Tension (let orchestra breathe) ===
+z8|z8|z8|z8|z8|z8|z8|z8|
+%
+% === SECTION 2: Bars 9-16 - Whomp kick on 1 and 3 (half-time menace) ===
+C,4z2C,2|z8|C,4z2C,2|z8|C,4z2C,2|z8|C,4z2C,2|z8|
+%
+% === SECTION 3: Bars 17-24 - Layer in closed hi-hat, building ===
+% Bar 17-18: kick + sparse hat
+C,4z2C,2|^F,2^F,2^F,2^F,2|
+% Bar 19-20: kick + steady hat
+C,4z2C,2|^F,2^F,2^F,2^F,2|
+% Bar 21-22: add snare on 2 and 4
+[C,^F,]2z2[D,^F,]2[C,^F,]2|^F,2z2[D,^F,]2^F,2|
+% Bar 23-24: intensify - snare rolls building
+[C,^F,]2D,2[D,^F,]2[C,^F,]2|^F,2D,D,[D,^F,]2D,D,|
+%
+% === SECTION 4: Bars 25-28 - PEAK (four on the floor + crash) ===
+% Bar 25: CRASH! Full intensity
+[^CC,^F,]2[C,^F,]2[D,C,^F,]2[C,^F,]2|
+% Bar 26-28: driving beat
+[C,^F,]2[C,^F,]2[D,C,^F,]2[C,^F,]2|
+[C,^F,]2[C,^F,]2[D,C,^F,]2[C,^F,]2|
+[C,^F,]2[C,^F,]2[D,C,^F,]2[C,^F,]D,D,|
+%
+% === SECTION 5: Bars 29-32 - DROP (strip back, tension) ===
+C,4z4|z8|C,4z2C,2|z4D,4|
+%
+% === SECTION 6: Bars 33-40 - GROOVE (dance floor) ===
+% Four on the floor with hat and snare
+[C,^F,]2^F,2[D,^F,]2^F,2|[C,^F,]2^F,2[D,^F,]2^F,2|
+[C,^F,]2^F,2[D,^F,]2^F,2|[C,^F,]2^F,2[D,^F,]2^F,2|
+[C,^F,]2^F,2[D,^F,]2^F,2|[C,^F,]2^F,2[D,^F,]2^F,2|
+[C,^F,]2^F,2[D,^F,]2^F,2|[C,^F,]2^F,2[D,^F,]2[^CD,^F,]2|

@@ -1,27 +1,26 @@
+mod api;
 mod artifact_store;
+mod cas;
 mod conversation;
 mod domain;
+mod job_system;
+mod mcp_tools;
+mod persistence;
 mod realization;
-mod server;
 mod telemetry;
-pub mod persistence;
-pub mod cas;
-pub mod mcp_tools;
-pub mod web;
-pub mod job_system;
+mod web;
 
 use anyhow::{Context, Result};
+use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use clap::Parser;
 use persistence::journal::{Journal, SessionEvent};
-use rmcp::transport::sse_server::{SseServer, SseServerConfig};
-use server::{ConversationState, EventDualityServer};
+use api::service::{ConversationState, EventDualityServer};
 use cas::Cas;
 use mcp_tools::local_models::LocalModels;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 use tokio_util::sync::CancellationToken;
-use tracing_subscriber::EnvFilter;
 
 /// The Hootenanny MCP Server
 #[derive(Parser, Debug)]
@@ -59,7 +58,6 @@ async fn main() -> Result<()> {
 
     // Determine state directory - default to persistent location
     let state_dir = cli.state_dir.unwrap_or_else(|| {
-        // Default to a persistent location in user's home or /tank
         let default_base = if let Ok(home) = std::env::var("HOME") {
             PathBuf::from(home).join(".local/share/hrmcp")
         } else {
@@ -71,7 +69,7 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(&state_dir).context("Failed to create state directory")?;
     tracing::info!("Using state directory: {}", state_dir.display());
 
-    // --- Persistence Test ---
+    // --- Persistence / Journal ---
     tracing::info!("🗄️  Initializing sled journal...");
     let journal_dir = state_dir.join("journal");
     std::fs::create_dir_all(&journal_dir)?;
@@ -102,7 +100,6 @@ async fn main() -> Result<()> {
 
     journal.flush()?;
     tracing::info!("💾 Journal flushed to disk");
-    // --- End Persistence Test ---
 
     // --- CAS Initialization ---
     tracing::info!("📦 Initializing Content Addressable Storage (CAS)...");
@@ -135,16 +132,24 @@ async fn main() -> Result<()> {
     let job_store = Arc::new(job_system::JobStore::new());
     tracing::info!("   Job store ready (shared across connections)");
 
+    // --- Audio Graph Initialization ---
+    tracing::info!("🎛️  Initializing Audio Graph...");
+    let audio_graph_db = Arc::new(AudioGraphDb::in_memory().context("Failed to create audio graph db")?);
+    let audio_graph_adapter = Arc::new(
+        AudioGraphAdapter::new_without_pipewire(audio_graph_db.clone())
+            .context("Failed to create audio graph adapter")?
+    );
+    tracing::info!("   Audio graph ready (in-memory)");
+
     let addr = format!("0.0.0.0:{}", cli.port);
 
     tracing::info!("🎵 Event Duality Server starting on http://{}", addr);
-    tracing::info!("   Connect via: GET http://{}/sse", addr);
-    tracing::info!("   Send messages: POST http://{}/message?sessionId=<id>", addr);
+    tracing::info!("   MCP SSE: GET http://{}/mcp/sse", addr);
+    tracing::info!("   MCP Message: POST http://{}/mcp/message", addr);
     tracing::info!("   CAS Upload: POST http://{}/cas", addr);
     tracing::info!("   CAS Download: GET http://{}/cas/:hash", addr);
 
-
-    // Create shared conversation state FIRST
+    // Create shared conversation state
     tracing::info!("🌳 Initializing conversation tree...");
     let conversation_dir = state_dir.join("conversation");
     std::fs::create_dir_all(&conversation_dir)?;
@@ -152,53 +157,61 @@ async fn main() -> Result<()> {
         .context("Failed to initialize conversation state")?;
     let shared_state = Arc::new(Mutex::new(conversation_state));
 
+    // Create the EventDualityServer
+    let event_duality_server = Arc::new(EventDualityServer::new_with_state(
+        shared_state.clone(),
+        local_models.clone(),
+        artifact_store.clone(),
+        job_store.clone(),
+        audio_graph_adapter.clone(),
+        audio_graph_db.clone(),
+    ));
+
+    // Create AppState for web handlers
+    let app_state = Arc::new(web::state::AppState::new(
+        event_duality_server,
+        Arc::new(journal),
+    ));
+
     let shutdown_token = CancellationToken::new();
 
-    let sse_config = SseServerConfig {
-        bind: addr.parse().context("Failed to parse bind address")?,
-        sse_path: "/sse".to_string(),
-        post_path: "/message".to_string(),
-        ct: shutdown_token.clone(),
-        sse_keep_alive: Some(Duration::from_secs(30)),
-    };
+    // Create routers with their respective state types
+    let cas_router = web::router(cas.clone());
+    let mcp_router = web::mcp::router().with_state(app_state.clone());
 
-    let (sse_server, sse_router) = SseServer::new(sse_config);
-
-    // Create WEB Router for CAS
-    let web_router = web::router(cas.clone());
-    
-    // Merge routers: WEB + SSE
-    let app_router = sse_router.merge(web_router);
-
-    // Save bind address before sse_server is moved
-    let bind_addr = sse_server.config.bind;
-
-    // Register the service BEFORE starting the server
-    tracing::info!("Setting up SSE server with EventDualityServer service.");
-    let local_models_clone = local_models.clone();
-    let artifact_store_clone = artifact_store.clone();
-    let job_store_clone = job_store.clone();
-    let ct = sse_server.with_service(move || {
-        EventDualityServer::new_with_state(
-            shared_state.clone(),
-            local_models_clone.clone(),
-            artifact_store_clone.clone(),
-            job_store_clone.clone()
+    // Handler for OAuth discovery - return 404 with JSON to indicate no OAuth required
+    async fn no_oauth() -> impl axum::response::IntoResponse {
+        (
+            axum::http::StatusCode::NOT_FOUND,
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            r#"{"error": "not_found", "error_description": "This MCP server does not require authentication"}"#
         )
-    });
+    }
 
+    // Build the main application router
+    // Each sub-router has its own state type, so we use nest() for CAS
+    let app_router = axum::Router::new()
+        .route("/mcp/.well-known/oauth-authorization-server", axum::routing::get(no_oauth))
+        .route("/mcp/.well-known/oauth-protected-resource", axum::routing::get(no_oauth))
+        .route("/.well-known/oauth-authorization-server", axum::routing::get(no_oauth))
+        .route("/.well-known/oauth-protected-resource", axum::routing::get(no_oauth))
+        .nest("/mcp", mcp_router)
+        .merge(cas_router);
+
+    let bind_addr: std::net::SocketAddr = addr.parse().context("Failed to parse bind address")?;
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
 
-    tracing::info!("Router created: {:?}", app_router);
+    tracing::info!("🌐 Router created, starting server...");
 
+    let shutdown_token_srv = shutdown_token.clone();
     let server = axum::serve(listener, app_router).with_graceful_shutdown(async move {
-        ct.cancelled().await;
-        tracing::info!("SSE server cancelled");
+        shutdown_token_srv.cancelled().await;
+        tracing::info!("Server shutdown signal received");
     });
 
     tokio::spawn(async move {
         if let Err(e) = server.await {
-            tracing::error!("SSE server shutdown with error: {:?}", e);
+            tracing::error!("Server shutdown with error: {:?}", e);
         }
     });
 
@@ -253,7 +266,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    // ConversationStore will flush via Drop trait
     tracing::info!("Shutdown complete");
 
     // Shutdown OpenTelemetry and flush remaining spans
