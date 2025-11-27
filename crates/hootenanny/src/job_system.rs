@@ -124,6 +124,17 @@ impl JobInfo {
     }
 }
 
+/// Statistics about job store state
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct JobStoreStats {
+    pub total: usize,
+    pub pending: usize,
+    pub running: usize,
+    pub completed: usize,
+    pub failed: usize,
+    pub cancelled: usize,
+}
+
 /// Storage for background jobs
 #[derive(Clone)]
 pub struct JobStore {
@@ -142,10 +153,16 @@ impl JobStore {
     /// Create a new job and return its ID
     pub fn create_job(&self, tool_name: String) -> JobId {
         let job_id = JobId::new();
-        let job_info = JobInfo::new(job_id.clone(), tool_name);
+        let job_info = JobInfo::new(job_id.clone(), tool_name.clone());
 
         let mut jobs = self.jobs.lock().unwrap();
         jobs.insert(job_id.0.clone(), job_info);
+
+        tracing::info!(
+            job.id = %job_id,
+            job.tool = %tool_name,
+            "Job created"
+        );
 
         job_id
     }
@@ -155,7 +172,16 @@ impl JobStore {
         let mut jobs = self.jobs.lock().unwrap();
         let job = jobs.get_mut(job_id.as_str())
             .ok_or_else(|| anyhow::anyhow!("Job not found: {}", job_id))?;
+
+        let tool_name = job.tool_name.clone();
         job.mark_running();
+
+        tracing::info!(
+            job.id = %job_id,
+            job.tool = %tool_name,
+            "Job started"
+        );
+
         Ok(())
     }
 
@@ -164,7 +190,24 @@ impl JobStore {
         let mut jobs = self.jobs.lock().unwrap();
         let job = jobs.get_mut(job_id.as_str())
             .ok_or_else(|| anyhow::anyhow!("Job not found: {}", job_id))?;
+
+        let tool_name = job.tool_name.clone();
+        let duration = job.started_at.map(|started| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() - started
+        });
+
         job.mark_complete(result);
+
+        tracing::info!(
+            job.id = %job_id,
+            job.tool = %tool_name,
+            job.duration_secs = ?duration,
+            "Job completed successfully"
+        );
+
         Ok(())
     }
 
@@ -173,7 +216,25 @@ impl JobStore {
         let mut jobs = self.jobs.lock().unwrap();
         let job = jobs.get_mut(job_id.as_str())
             .ok_or_else(|| anyhow::anyhow!("Job not found: {}", job_id))?;
-        job.mark_failed(error);
+
+        let tool_name = job.tool_name.clone();
+        let duration = job.started_at.map(|started| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() - started
+        });
+
+        job.mark_failed(error.clone());
+
+        tracing::error!(
+            job.id = %job_id,
+            job.tool = %tool_name,
+            job.duration_secs = ?duration,
+            job.error = %error,
+            "Job failed"
+        );
+
         Ok(())
     }
 
@@ -208,12 +269,19 @@ impl JobStore {
         // Mark as cancelled
         let mut jobs = self.jobs.lock().unwrap();
         if let Some(job) = jobs.get_mut(job_id.as_str()) {
+            let tool_name = job.tool_name.clone();
             job.status = JobStatus::Cancelled;
             job.completed_at = Some(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_secs()
+            );
+
+            tracing::warn!(
+                job.id = %job_id,
+                job.tool = %tool_name,
+                "Job cancelled"
             );
         }
 
@@ -253,6 +321,8 @@ impl JobStore {
         let mut jobs = self.jobs.lock().unwrap();
         let mut handles = self.handles.lock().unwrap();
 
+        let mut removed_count = 0;
+
         jobs.retain(|job_id, job| {
             let should_keep = if let Some(completed_at) = job.completed_at {
                 now - completed_at < max_age.as_secs()
@@ -262,10 +332,39 @@ impl JobStore {
 
             if !should_keep {
                 handles.remove(job_id);
+                removed_count += 1;
             }
 
             should_keep
         });
+
+        if removed_count > 0 {
+            tracing::info!(
+                jobs.removed = removed_count,
+                jobs.remaining = jobs.len(),
+                jobs.max_age_secs = max_age.as_secs(),
+                "Cleaned up old jobs"
+            );
+        }
+    }
+
+    /// Get job store statistics for monitoring
+    pub fn stats(&self) -> JobStoreStats {
+        let jobs = self.jobs.lock().unwrap();
+        let mut stats = JobStoreStats::default();
+
+        for job in jobs.values() {
+            stats.total += 1;
+            match job.status {
+                JobStatus::Pending => stats.pending += 1,
+                JobStatus::Running => stats.running += 1,
+                JobStatus::Complete => stats.completed += 1,
+                JobStatus::Failed => stats.failed += 1,
+                JobStatus::Cancelled => stats.cancelled += 1,
+            }
+        }
+
+        stats
     }
 }
 

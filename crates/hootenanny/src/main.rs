@@ -152,11 +152,13 @@ async fn main() -> Result<()> {
         .context("Failed to initialize conversation state")?;
     let shared_state = Arc::new(Mutex::new(conversation_state));
 
+    let shutdown_token = CancellationToken::new();
+
     let sse_config = SseServerConfig {
         bind: addr.parse().context("Failed to parse bind address")?,
         sse_path: "/sse".to_string(),
         post_path: "/message".to_string(),
-        ct: CancellationToken::new(),
+        ct: shutdown_token.clone(),
         sse_keep_alive: Some(Duration::from_secs(30)),
     };
 
@@ -202,10 +204,37 @@ async fn main() -> Result<()> {
 
     tracing::info!("🎵 Server ready. Let's dance!");
 
+    // Spawn background task for periodic statistics logging
+    let stats_job_store = job_store.clone();
+    let stats_ct = shutdown_token.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let stats = stats_job_store.stats();
+                    tracing::info!(
+                        jobs.total = stats.total,
+                        jobs.pending = stats.pending,
+                        jobs.running = stats.running,
+                        jobs.completed = stats.completed,
+                        jobs.failed = stats.failed,
+                        jobs.cancelled = stats.cancelled,
+                        "Job store statistics"
+                    );
+                }
+                _ = stats_ct.cancelled() => {
+                    break;
+                }
+            }
+        }
+    });
+
     // Handle both SIGINT (Ctrl+C) and SIGTERM (cargo-watch, systemd, etc.)
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("Received SIGINT (Ctrl+C), shutting down gracefully...");
+            shutdown_token.cancel();
         }
         _ = async {
             #[cfg(unix)]
@@ -220,6 +249,7 @@ async fn main() -> Result<()> {
             }
         } => {
             tracing::info!("Received SIGTERM, shutting down gracefully...");
+            shutdown_token.cancel();
         }
     }
 

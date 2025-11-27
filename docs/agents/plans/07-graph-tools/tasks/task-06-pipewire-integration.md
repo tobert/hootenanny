@@ -1,10 +1,19 @@
 # Task 06: PipeWire Integration
 
-**Status**: 🟡 Not started
+**Status**: ✅ Complete (2025-11-27)
 **Estimated effort**: 4-5 hours
 **Prerequisites**: Task 04 (Trustfall adapter)
 **Depends on**: Adapter infrastructure
 **Enables**: Audio routing visibility, connection tracing
+
+## Implementation Notes
+
+Used native `pipewire-rs` bindings instead of shelling out to `pw-dump`. Key changes:
+- `PipeWireSource::snapshot()` returns `PipeWireSnapshot` with nodes, ports, links
+- Trustfall adapter extended with `PipeWireNode` query entry point
+- Per-query snapshotting addresses Gemini's performance/consistency concern
+- Thread-safe initialization via `std::sync::Once`
+- 3 mock fixture tests validate adapter behavior without live PipeWire
 
 ## 🎯 Goal
 

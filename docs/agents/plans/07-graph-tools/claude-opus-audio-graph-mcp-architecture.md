@@ -1,5 +1,19 @@
 # Audio Graph MCP Architecture
 
+## Status (2025-11-27)
+
+| Task | Status | Notes |
+|------|--------|-------|
+| 01 - SQLite Foundation | ✅ Complete | Identity, Hints, Tags, Connections |
+| 02 - ALSA Enumeration | ✅ Complete | alsa-rs bindings |
+| 03 - Identity Matching | ✅ Complete | Confidence scoring |
+| 04 - Trustfall Adapter | ✅ Complete | GraphQL queries working |
+| 05 - MCP Tools | ✅ Complete | graph_query, graph_find, etc. |
+| 06 - PipeWire Integration | ✅ Complete | Native pipewire-rs bindings |
+| 07 - Manual Connections | ✅ Complete | Patch cable tracking |
+| 08 - Testing Fixtures | ✅ Complete | 41 tests (29 unit + 12 integration) |
+| 09 - Hootenanny Integration | 🟡 Not started | Next up |
+
 ## Overview
 
 An MCP server that provides agents with a queryable view of audio/MIDI infrastructure. Think of it as an "agentic DAW" where Claude acts as producer, with visibility into the full signal flow across hardware synths, Eurorack modules, software plugins, and network-connected compute.
