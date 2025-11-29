@@ -18,7 +18,15 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
-use crate::domain::CasReference; // Assuming CasReference is defined in domain.rs
+
+/// Reference to content in the CAS.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CasReference {
+    pub hash: String,
+    pub mime_type: String,
+    pub size_bytes: u64,
+    pub local_path: Option<String>,
+}
 
 /// Metadata stored alongside CAS objects.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +38,7 @@ pub struct CasMetadata {
 /// Content Addressable Storage manager.
 #[derive(Debug, Clone)]
 pub struct Cas {
+    #[allow(dead_code)]
     root: PathBuf,
     objects_dir: PathBuf,
     metadata_dir: PathBuf,
@@ -56,6 +65,7 @@ impl Cas {
     /// Initialize a CAS at the default location for the project.
     ///
     /// Usually `.hootenanny/cas`.
+    #[allow(dead_code)]
     pub fn default_at(project_root: &Path) -> Result<Self> {
         let cas_root = project_root.join(".hootenanny").join("cas");
         Self::new(&cas_root)

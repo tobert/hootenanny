@@ -1,12 +1,10 @@
 use anyhow::{Context, Result};
-use std::time::Duration;
 use serde_json::{json, Value};
 use super::schema::*;
 use crate::mcp_client::McpClient;
 
 pub struct DiscoveryClient {
     pub server_url: String,
-    pub timeout: Duration,
     pub capabilities: Vec<String>,
 }
 
@@ -14,7 +12,6 @@ impl DiscoveryClient {
     pub fn new(server_url: String) -> Self {
         Self {
             server_url,
-            timeout: Duration::from_secs(5),
             capabilities: vec![
                 "extended_schemas".to_string(),
                 "parameter_handlers".to_string(),
@@ -314,7 +311,7 @@ use std::collections::HashMap;
 // Extension trait for McpClient to support custom methods
 impl McpClient {
     /// Call a custom MCP method (for extended protocol)
-    pub async fn call_custom(&self, method: &str, params: Value) -> Result<Value> {
+    pub async fn call_custom(&self, _method: &str, _params: Value) -> Result<Value> {
         // This would need to be implemented in mcp_client.rs
         // For now, return an error to trigger fallback
         Err(anyhow::anyhow!("Custom methods not yet implemented"))

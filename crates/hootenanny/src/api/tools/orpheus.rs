@@ -2,7 +2,7 @@ use crate::api::schema::{OrpheusGenerateRequest, OrpheusGenerateSeededRequest, O
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::mcp_tools::local_models::OrpheusGenerateParams;
-use rmcp::{ErrorData as McpError, model::{CallToolResult, Content}};
+use baton::{ErrorData as McpError, CallToolResult, Content};
 use std::sync::Arc;
 use tracing;
 
@@ -12,16 +12,14 @@ impl EventDualityServer {
         if let Some(temp) = temperature {
             if temp < 0.0 || temp > 2.0 {
                 return Err(McpError::invalid_params(
-                    format!("temperature must be 0.0-2.0, got {}", temp),
-                    None
+                    format!("temperature must be 0.0-2.0, got {}", temp)
                 ));
             }
         }
         if let Some(p) = top_p {
             if p < 0.0 || p > 1.0 {
                 return Err(McpError::invalid_params(
-                    format!("top_p must be 0.0-1.0, got {}", p),
-                    None
+                    format!("top_p must be 0.0-1.0, got {}", p)
                 ));
             }
         }

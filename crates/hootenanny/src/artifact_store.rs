@@ -70,6 +70,7 @@ impl Artifact {
     }
 
     /// Builder: add tag
+    #[allow(dead_code)]
     pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
         self.tags.push(tag.into());
         self
@@ -87,11 +88,13 @@ impl Artifact {
     }
 
     /// Check if artifact has any of these tags
+    #[allow(dead_code)]
     pub fn has_any_tag(&self, tags: &[&str]) -> bool {
         self.tags.iter().any(|t| tags.contains(&t.as_str()))
     }
 
     /// Check if artifact has all of these tags
+    #[allow(dead_code)]
     pub fn has_all_tags(&self, tags: &[&str]) -> bool {
         tags.iter().all(|tag| self.has_tag(tag))
     }
@@ -106,11 +109,13 @@ impl Artifact {
     }
 
     /// Helper: get the role tag (first "role:*" tag)
+    #[allow(dead_code)]
     pub fn role(&self) -> Option<&str> {
         self.tags_with_prefix("role:").first().copied()
     }
 
     /// Helper: get the type tag (first "type:*" tag)
+    #[allow(dead_code)]
     pub fn artifact_type(&self) -> Option<&str> {
         self.tags_with_prefix("type:").first().copied()
     }
@@ -122,6 +127,7 @@ impl Artifact {
 }
 
 /// Trait for artifact storage backends
+#[allow(dead_code)]
 pub trait ArtifactStore: Send + Sync {
     /// Get artifact by ID
     fn get(&self, id: &str) -> Result<Option<Artifact>>;

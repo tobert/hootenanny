@@ -1,7 +1,7 @@
 use crate::api::service::EventDualityServer;
-use crate::api::schema::{GetJobStatusRequest, WaitForJobRequest, CancelJobRequest, PollRequest, SleepRequest};
+use crate::api::schema::{GetJobStatusRequest, CancelJobRequest, PollRequest, SleepRequest};
 use crate::job_system::{JobId, JobStatus};
-use rmcp::{ErrorData as McpError, model::{CallToolResult, Content}};
+use baton::{ErrorData as McpError, CallToolResult, Content};
 use tracing;
 
 impl EventDualityServer {
@@ -20,40 +20,12 @@ impl EventDualityServer {
         let job_id = JobId::from(request.job_id);
 
         let job_info = self.job_store.get_job(&job_id)
-            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+            .map_err(|e| McpError::invalid_params(e.to_string()))?;
 
         tracing::Span::current().record("job.status", format!("{:?}", job_info.status));
 
         let json = serde_json::to_string(&job_info)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize job info: {}", e), None))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)]))
-    }
-
-    #[tracing::instrument(
-        name = "mcp.tool.wait_for_job",
-        skip(self, request),
-        fields(
-            job.id = %request.job_id,
-            job.timeout_seconds = request.timeout_seconds.unwrap_or(86400),
-            job.final_status = tracing::field::Empty,
-        )
-    )]
-    pub async fn wait_for_job(
-        &self,
-        request: WaitForJobRequest,
-    ) -> Result<CallToolResult, McpError> {
-        let job_id = JobId::from(request.job_id);
-        let timeout = std::time::Duration::from_secs(request.timeout_seconds.unwrap_or(86400)); // 24 hours
-
-        let job_info = self.job_store.wait_for_job(&job_id, Some(timeout))
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        tracing::Span::current().record("job.final_status", format!("{:?}", job_info.status));
-
-        let json = serde_json::to_string(&job_info)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize job info: {}", e), None))?;
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize job info: {}", e)))?;
 
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
@@ -71,7 +43,7 @@ impl EventDualityServer {
         tracing::Span::current().record("jobs.count", jobs.len());
 
         let json = serde_json::to_string(&jobs)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize jobs: {}", e), None))?;
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize jobs: {}", e)))?;
 
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
@@ -90,7 +62,7 @@ impl EventDualityServer {
         let job_id = JobId::from(request.job_id);
 
         self.job_store.cancel_job(&job_id)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            .map_err(|e| McpError::internal_error(e.to_string()))?;
 
         let response = serde_json::json!({
             "status": "cancelled",
@@ -126,8 +98,7 @@ impl EventDualityServer {
         // Validate mode
         if mode != "any" && mode != "all" {
             return Err(McpError::invalid_params(
-                format!("mode must be 'any' or 'all', got '{}'", mode),
-                None
+                format!("mode must be 'any' or 'all', got '{}'", mode)
             ));
         }
 

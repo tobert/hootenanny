@@ -11,7 +11,8 @@ An MCP server for collaborative human-AI music creation. We're building an ensem
 cargo watch -x 'run -p hootenanny'
 
 # Connect from Claude Code, Gemini CLI, or any MCP client
-# Server runs on http://127.0.0.1:8080/sse
+# Streamable HTTP (recommended): http://127.0.0.1:8080/mcp
+# SSE (legacy):                  http://127.0.0.1:8080/mcp/sse
 ```
 
 ## 🎭 What We Built
@@ -113,12 +114,20 @@ cargo run -p hootenanny
 
 **Claude CLI:**
 ```bash
-claude mcp add --transport sse hrmcp http://127.0.0.1:8080/sse
+# Streamable HTTP (recommended)
+claude mcp add -t http hrmcp http://127.0.0.1:8080/mcp
+
+# SSE (legacy)
+claude mcp add -t sse hrmcp http://127.0.0.1:8080/mcp/sse
 ```
 
 **Gemini CLI:**
 ```bash
-gemini mcp add hrmcp http://127.0.0.1:8080/sse
+# Streamable HTTP (recommended)
+gemini mcp add -t http hrmcp http://127.0.0.1:8080/mcp
+
+# SSE (legacy)
+gemini mcp add -t sse hrmcp http://127.0.0.1:8080/mcp/sse
 ```
 
 ## 🎯 Real-World Examples

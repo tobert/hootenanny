@@ -1,5 +1,4 @@
-
-pub mod musical;
 pub mod cas;
-pub mod orpheus;
+pub mod deepseek;
 pub mod jobs;
+pub mod orpheus;

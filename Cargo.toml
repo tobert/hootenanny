@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/baton",
     "crates/hootenanny", "crates/hrcli",
     "crates/resonode", "crates/audio-graph-mcp",
 ]

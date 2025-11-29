@@ -340,12 +340,53 @@ impl McpClient {
 
 /// Extract session ID from the initial SSE "endpoint" event
 fn extract_session_id(text: &str) -> Option<String> {
+    eprintln!("[EXTRACT] Attempting to extract from: {:?}", text);
     for line in text.lines() {
+        eprintln!("[EXTRACT] Checking line: {:?}", line);
+        // Handle raw URI format
         if line.starts_with("data: /mcp/message?sessionId=") || line.starts_with("data: /message?sessionId=") {
-            return Some(line.split("sessionId=").nth(1)?.trim().to_string());
+            let session_id = line.split("sessionId=").nth(1)?.trim().to_string();
+            eprintln!("[EXTRACT] Found raw format session ID: {}", session_id);
+            return Some(session_id);
+        }
+        // Handle JSON format: data: {"uri":"/mcp/message?sessionId=..."}
+        if line.starts_with("data: {") {
+            eprintln!("[EXTRACT] Found JSON data line");
+            let json_str = line.strip_prefix("data: ")?;
+            eprintln!("[EXTRACT] JSON string: {:?}", json_str);
+            if let Ok(value) = serde_json::from_str::<Value>(json_str) {
+                eprintln!("[EXTRACT] Parsed JSON: {:?}", value);
+                if let Some(uri) = value.get("uri").and_then(|v| v.as_str()) {
+                    eprintln!("[EXTRACT] Found URI: {}", uri);
+                    if let Some(session_id) = uri.split("sessionId=").nth(1) {
+                        eprintln!("[EXTRACT] Found JSON format session ID: {}", session_id);
+                        return Some(session_id.trim().to_string());
+                    }
+                }
+            }
         }
     }
+    eprintln!("[EXTRACT] No session ID found");
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_session_id_json_format() {
+        let text = "event: endpoint\ndata: {\"uri\":\"/mcp/message?sessionId=747c3a2c-a487-4db2-a06b-f9746e8ecf73\"}\n\n";
+        let result = extract_session_id(text);
+        assert_eq!(result, Some("747c3a2c-a487-4db2-a06b-f9746e8ecf73".to_string()));
+    }
+
+    #[test]
+    fn test_extract_session_id_raw_format() {
+        let text = "event: endpoint\ndata: /mcp/message?sessionId=abc-123\n\n";
+        let result = extract_session_id(text);
+        assert_eq!(result, Some("abc-123".to_string()));
+    }
 }
 
 /// Background task to listen for SSE messages and dispatch them
@@ -355,6 +396,8 @@ async fn listen_for_responses(
     session_sender: oneshot::Sender<String>,
 ) {
     let mut current_event_type: Option<String> = None;
+    let mut current_data = String::new();
+    let mut buffer = String::new();
     let mut chunk_count = 0;
     let mut session_sender = Some(session_sender);
 
@@ -365,54 +408,71 @@ async fn listen_for_responses(
                 let text = String::from_utf8_lossy(&chunk);
                 eprintln!("[MCP-LISTENER] Chunk {}: {:?}", chunk_count, &text[..text.len().min(100)]);
 
-                for line in text.lines() {
+                // Append to buffer and process complete lines
+                buffer.push_str(&text);
+
+                // Process lines from the buffer
+                while let Some(newline_pos) = buffer.find('\n') {
+                    let line = buffer[..newline_pos].to_string();
+                    buffer = buffer[newline_pos + 1..].to_string();
+
                     let trimmed = line.trim();
+
+                    // Blank line marks end of SSE event - process accumulated data
                     if trimmed.is_empty() {
+                        if !current_data.is_empty() {
+                            // Extract session ID from endpoint event if we haven't sent it yet
+                            if let Some(sender) = session_sender.take() {
+                                if current_event_type.as_deref() == Some("endpoint") {
+                                    if let Some(session_id) = extract_session_id_from_data(&current_data) {
+                                        eprintln!("[MCP-LISTENER] Extracted session ID: {}", session_id);
+                                        let _ = sender.send(session_id);
+                                        current_data.clear();
+                                        current_event_type = None;
+                                        continue;
+                                    }
+                                }
+                                // Put it back if we didn't extract session ID
+                                session_sender = Some(sender);
+                            }
+
+                            // Process message events
+                            if current_event_type.as_deref() == Some("message") {
+                                match serde_json::from_str::<Value>(&current_data) {
+                                    Ok(value) => {
+                                        eprintln!("[MCP-LISTENER] Parsed message (len={})", current_data.len());
+                                        if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
+                                            let mut resp_map = responses.lock().await;
+                                            if let Some(sender) = resp_map.remove(&id) {
+                                                eprintln!("[MCP-LISTENER] Dispatching response for id: {}", id);
+                                                let _ = sender.send(value);
+                                            } else {
+                                                eprintln!("[MCP-LISTENER] No waiting receiver for id: {}", id);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("[MCP-LISTENER] Failed to parse JSON (len={}): {}", current_data.len(), e);
+                                    }
+                                }
+                            }
+
+                            current_data.clear();
+                        }
+                        current_event_type = None;
                         continue;
                     }
 
                     // Track event type
-                    if line.starts_with("event:") {
-                        current_event_type = Some(line[6..].trim().to_string());
+                    if trimmed.starts_with("event:") {
+                        current_event_type = Some(trimmed[6..].trim().to_string());
                         continue;
                     }
 
-                    // Process data lines
-                    if line.starts_with("data:") {
-                        let data = line[5..].trim();
-
-                        // Extract session ID from endpoint event if we haven't sent it yet
-                        if let Some(sender) = session_sender.take() {
-                            if let Some(session_id) = extract_session_id(&text) {
-                                eprintln!("[MCP-LISTENER] Extracted session ID: {}", session_id);
-                                let _ = sender.send(session_id);
-                                continue;
-                            } else {
-                                // Put it back if we didn't find the session ID yet
-                                session_sender = Some(sender);
-                            }
-                        }
-
-                        // Only try to parse JSON for "message" events
-                        if current_event_type.as_deref() == Some("message") {
-                            match serde_json::from_str::<Value>(data) {
-                                Ok(value) => {
-                                    eprintln!("[MCP-LISTENER] Parsed message: {:?}", value);
-                                    if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
-                                        let mut resp_map = responses.lock().await;
-                                        if let Some(sender) = resp_map.remove(&id) {
-                                            eprintln!("[MCP-LISTENER] Dispatching response for id: {}", id);
-                                            let _ = sender.send(value);
-                                        } else {
-                                            eprintln!("[MCP-LISTENER] No waiting receiver for id: {}", id);
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("[MCP-LISTENER] Failed to parse JSON: {}", e);
-                                }
-                            }
-                        }
+                    // Accumulate data lines
+                    if trimmed.starts_with("data:") {
+                        let data = trimmed[5..].trim();
+                        current_data.push_str(data);
                     }
                 }
             }
@@ -422,4 +482,16 @@ async fn listen_for_responses(
             }
         }
     }
+}
+
+/// Extract session ID from accumulated data (for endpoint events)
+fn extract_session_id_from_data(data: &str) -> Option<String> {
+    if let Ok(parsed) = serde_json::from_str::<Value>(data) {
+        if let Some(uri) = parsed.get("uri").and_then(|v| v.as_str()) {
+            if let Some(pos) = uri.find("sessionId=") {
+                return Some(uri[pos + 10..].to_string());
+            }
+        }
+    }
+    None
 }

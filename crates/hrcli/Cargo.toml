@@ -37,7 +37,8 @@ insta = { version = "1", features = ["json", "redactions"] }
 tokio-test = "0.4"
 serial_test = "3"
 hootenanny = { path = "../hootenanny" }
-rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", features = ["server", "transport-sse-server"] }
+baton = { path = "../baton" }
+audio-graph-mcp = { path = "../audio-graph-mcp" }
 tokio-util = "0.7"
 axum = "0.8"
 tracing = "0.1"

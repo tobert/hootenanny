@@ -354,7 +354,7 @@ fn color_helper(
     out: &mut dyn handlebars::Output
 ) -> handlebars::HelperResult {
     if let (Some(text), Some(color)) = (h.param(0), h.param(1)) {
-        if let (Some(text_str), Some(color_str)) = (text.value().as_str(), color.value().as_str()) {
+        if let (Some(text_str), Some(_color_str)) = (text.value().as_str(), color.value().as_str()) {
             // In real implementation, apply color
             out.write(text_str)?;
         }

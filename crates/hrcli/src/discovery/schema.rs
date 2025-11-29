@@ -260,13 +260,6 @@ pub struct ServerExample {
     pub output: Option<String>,
 }
 
-/// MCP Extension: Request extended schemas
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ExtendedSchemaRequest {
-    pub version: String,
-    pub capabilities: Vec<String>,
-}
-
 /// MCP Extension: Response with extended schemas
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExtendedSchemaResponse {
@@ -296,17 +289,6 @@ pub struct ServerCapabilities {
 
     /// Custom capabilities
     pub custom: HashMap<String, Value>,
-}
-
-/// Cache for dynamic schemas
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CachedDynamicSchemas {
-    pub version: String,
-    pub timestamp: std::time::SystemTime,
-    pub server_url: String,
-    pub schemas: Vec<DynamicToolSchema>,
-    pub capabilities: ServerCapabilities,
-    pub cache_key: String, // Hash of server version + capabilities
 }
 
 impl DynamicToolSchema {
@@ -343,7 +325,7 @@ impl DynamicToolSchema {
         params
     }
 
-    fn infer_handler(name: &str, spec: &Value) -> ParameterHandler {
+    fn infer_handler(_name: &str, spec: &Value) -> ParameterHandler {
         // Basic inference if server doesn't provide handler
         if let Some(type_str) = spec.get("type").and_then(|t| t.as_str()) {
             match type_str {

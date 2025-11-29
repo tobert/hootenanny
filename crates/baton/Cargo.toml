@@ -1,0 +1,36 @@
+[package]
+name = "baton"
+version = "0.1.0"
+edition = "2021"
+description = "MCP (Model Context Protocol) server library for Rust"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# Web framework
+axum = "0.8"
+tokio = { version = "1", features = ["sync", "time"] }
+tokio-stream = "0.1"
+futures = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Session management
+dashmap = "6"
+uuid = { version = "1", features = ["v4"] }
+
+# Async trait support
+async-trait = "0.1"
+
+# Telemetry
+tracing = "0.1"
+
+# Error handling
+thiserror = "2"
+
+# Utilities
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

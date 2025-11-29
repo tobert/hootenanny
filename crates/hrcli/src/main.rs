@@ -12,9 +12,9 @@ use execution::DynamicFormatter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Get server URL from env or use default
+    // Get server URL from env or use default (includes /mcp path)
     let server_url = std::env::var("HRCLI_SERVER")
-        .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+        .unwrap_or_else(|_| "http://127.0.0.1:8080/mcp".to_string());
 
     // Always discover fresh from server - no caching
     let schemas = match discover_tools(&server_url).await {

@@ -1,26 +1,15 @@
 //! Sled-based persistence for HalfRemembered.
 //!
-//! Stores:
-//! - Musical events (sequential log)
-//! - Conversation nodes (graph structure)
-//! - Musical contexts (evolving state)
+//! Stores session events in a sequential log.
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Simple event structure for testing persistence.
-/// Will be expanded with full Event Duality later.
+/// Simple event structure for session persistence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionEvent {
     pub timestamp: u64,
     pub event_type: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmotionalVector {
-    pub valence: f32,
-    pub arousal: f32,
-    pub agency: f32,
 }
 
 /// Sled-based journal for events.

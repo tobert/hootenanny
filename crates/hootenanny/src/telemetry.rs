@@ -119,6 +119,7 @@ pub fn shutdown() -> Result<()> {
 /// Helper to get the current trace ID as a hex string.
 ///
 /// Returns None if called outside a tracing span.
+#[allow(dead_code)]
 pub fn current_trace_id() -> Option<String> {
     use opentelemetry::trace::TraceContextExt;
     use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -137,6 +138,7 @@ pub fn current_trace_id() -> Option<String> {
 /// Helper to get the current span ID as a hex string.
 ///
 /// Returns None if called outside a tracing span.
+#[allow(dead_code)]
 pub fn current_span_id() -> Option<String> {
     use opentelemetry::trace::TraceContextExt;
     use tracing_opentelemetry::OpenTelemetrySpanExt;

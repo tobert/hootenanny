@@ -3,16 +3,19 @@
 //! This module provides helpers for setting up ephemeral MCP servers
 //! for integration testing.
 
-use anyhow::{anyhow, Context, Result};
-use hootenanny::persistence::conversation_store::ConversationStore;
-use hootenanny::server::{ConversationState, EventDualityServer};
-use rmcp::transport::sse_server::{SseServer, SseServerConfig};
-use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use anyhow::{Context, Result};
+use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
+
+use audio_graph_mcp::Database as AudioGraphDb;
+use hootenanny::api::handler::HootHandler;
+use hootenanny::api::service::EventDualityServer;
+use hootenanny::artifact_store::FileStore;
+use hootenanny::cas::Cas;
+use hootenanny::job_system::JobStore;
+use hootenanny::mcp_tools::local_models::LocalModels;
 
 /// A test MCP server that runs on an ephemeral port
 pub struct TestMcpServer {
@@ -27,83 +30,33 @@ pub struct TestMcpServer {
 }
 
 impl TestMcpServer {
-    /// Wait for the MCP service to be ready by performing an actual MCP handshake
+    /// Wait for the MCP service to be ready by checking SSE endpoint
     async fn wait_for_mcp_ready(port: u16) -> Result<()> {
-        use futures::StreamExt;
-        use serde_json::json;
-
         let start = std::time::Instant::now();
-        let max_wait = Duration::from_secs(10);
+        let max_wait = Duration::from_secs(5);
 
         loop {
             let client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(2))
                 .build()?;
 
-            // Try to connect to SSE endpoint and get session ID
+            // Just check that SSE endpoint responds
             let sse_url = format!("http://127.0.0.1:{}/sse", port);
-            let sse_result = client.get(&sse_url).send().await;
-
-            match sse_result {
-                Ok(response) if response.status().is_success() => {
-                    // Read the SSE stream to extract session ID
-                    let mut stream = response.bytes_stream();
-                    if let Some(Ok(chunk)) = stream.next().await {
-                        let text = String::from_utf8_lossy(&chunk);
-
-                        // Look for session ID in the endpoint event
-                        for line in text.lines() {
-                            if line.starts_with("data: /message?sessionId=") {
-                                let session_id = &line[25..];
-
-                                // Try to send a test initialize request
-                                let message_url = format!(
-                                    "http://127.0.0.1:{}/message?sessionId={}",
-                                    port, session_id
-                                );
-
-                                let init_request = json!({
-                                    "jsonrpc": "2.0",
-                                    "id": 1,
-                                    "method": "initialize",
-                                    "params": {
-                                        "protocolVersion": "2025-06-18",
-                                        "capabilities": {},
-                                        "clientInfo": {
-                                            "name": "test-client",
-                                            "version": "0.1.0"
-                                        }
-                                    }
-                                });
-
-                                let post_result = client
-                                    .post(&message_url)
-                                    .header("Content-Type", "application/json")
-                                    .body(init_request.to_string())
-                                    .send()
-                                    .await;
-
-                                if let Ok(resp) = post_result {
-                                    if resp.status() == reqwest::StatusCode::ACCEPTED {
-                                        // Server accepted the message, it's ready!
-                                        return Ok(());
-                                    }
-                                }
-                            }
-                        }
-                    }
+            if let Ok(response) = client.get(&sse_url).send().await {
+                if response.status().is_success() {
+                    // Server is ready
+                    return Ok(());
                 }
-                _ => {}
             }
 
             if start.elapsed() > max_wait {
-                return Err(anyhow!(
+                anyhow::bail!(
                     "MCP service did not become ready within {:?}",
                     max_wait
-                ));
+                );
             }
 
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
 
@@ -118,86 +71,65 @@ impl TestMcpServer {
         let temp_dir = TempDir::new().context("Failed to create temp dir")?;
         let state_dir = temp_dir.path().to_path_buf();
 
-        // Initialize conversation state
-        let conversation_dir = state_dir.join("conversation");
-        std::fs::create_dir_all(&conversation_dir)
-            .context("Failed to create conversation dir")?;
-        let conversation_state = ConversationState::new(conversation_dir)
-            .context("Failed to initialize conversation state")?;
-        let shared_state = Arc::new(Mutex::new(conversation_state));
+        // Initialize CAS
+        let cas_dir = state_dir.join("cas");
+        std::fs::create_dir_all(&cas_dir)?;
+        let cas = Cas::new(&cas_dir)?;
 
-        // Create SSE server configuration
-        let bind_addr: SocketAddr = format!("127.0.0.1:{}", port)
-            .parse()
-            .context("Failed to parse bind address")?;
+        // Initialize LocalModels (with dummy ports - tests won't call Orpheus/DeepSeek)
+        let local_models = Arc::new(LocalModels::new(cas.clone(), 9999, 9998));
+
+        // Initialize artifact store
+        let artifact_store_path = state_dir.join("artifacts.json");
+        let artifact_store = Arc::new(FileStore::new(&artifact_store_path)?);
+
+        // Initialize job store
+        let job_store = Arc::new(JobStore::new());
+
+        // Initialize audio graph
+        let audio_graph_db = Arc::new(AudioGraphDb::in_memory()?);
+
+        // Create the EventDualityServer
+        let event_duality_server = Arc::new(EventDualityServer::new(
+            local_models,
+            artifact_store,
+            job_store,
+            audio_graph_db,
+        ));
+
+        // Create baton MCP handler and state
+        let hoot_handler = HootHandler::new(event_duality_server);
+        let mcp_state = Arc::new(baton::McpState::new(
+            hoot_handler,
+            "hootenanny-test",
+            "0.1.0-test",
+        ));
 
         let shutdown_token = CancellationToken::new();
-        let sse_config = SseServerConfig {
-            bind: bind_addr,
-            sse_path: "/sse".to_string(),
-            post_path: "/message".to_string(),
-            ct: shutdown_token.clone(),
-            sse_keep_alive: Some(Duration::from_secs(15)),
-        };
 
-        let (sse_server, router) = SseServer::new(sse_config);
+        // Create the MCP router (supports both Streamable HTTP and SSE)
+        // Don't nest - hrcli expects /sse at root
+        let app_router = baton::dual_router(mcp_state.clone());
 
-        // Get actual port by pre-binding
-        let actual_port = if port == 0 {
-            // For ephemeral ports, bind temporarily to get the port
-            let temp_listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
-            let port = temp_listener.local_addr()?.port();
-            drop(temp_listener);
-            port
-        } else {
-            port
-        };
+        // Bind to get actual port
+        let bind_addr = format!("127.0.0.1:{}", port);
+        let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+        let actual_port = listener.local_addr()?.port();
 
-        let bind_str = format!("127.0.0.1:{}", actual_port);
+        let shutdown_token_clone = shutdown_token.clone();
 
-        // Create channel to signal when MCP service is ready
-        use tokio::sync::oneshot;
-        let (ready_tx, ready_rx) = oneshot::channel();
-
-        // Run server in a dedicated thread with its own runtime
-        // This is critical for subprocess connections to work!
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async move {
-                // Register the service INSIDE the server thread's runtime
-                // This ensures the service handler is registered in the correct runtime context
-                let ct = sse_server.with_service(move || {
-                    EventDualityServer::new_with_state(shared_state.clone())
-                });
-
-                let listener = match tokio::net::TcpListener::bind(&bind_str).await {
-                    Ok(l) => l,
-                    Err(e) => {
-                        eprintln!("Failed to bind test server: {}", e);
-                        let _ = ready_tx.send(Err(anyhow!("Failed to bind: {}", e)));
-                        return;
-                    }
-                };
-
-                // Signal that server is bound and service is registered
-                let _ = ready_tx.send(Ok(()));
-
-                let server = axum::serve(listener, router).with_graceful_shutdown(async move {
-                    ct.cancelled().await;
-                });
-
-                if let Err(e) = server.await {
-                    eprintln!("Test MCP server error: {:?}", e);
-                }
+        // Spawn the server
+        tokio::spawn(async move {
+            let server = axum::serve(listener, app_router).with_graceful_shutdown(async move {
+                shutdown_token_clone.cancelled().await;
             });
+
+            if let Err(e) = server.await {
+                eprintln!("Test MCP server error: {:?}", e);
+            }
         });
 
-        // Wait for server to signal readiness
-        ready_rx
-            .await
-            .context("Server thread dropped before signaling ready")??;
-
-        // Wait for MCP service to be fully functional with handshake test
+        // Wait for MCP service to be fully functional
         Self::wait_for_mcp_ready(actual_port).await?;
 
         let url = format!("http://127.0.0.1:{}", actual_port);
@@ -218,6 +150,11 @@ impl TestMcpServer {
     /// Get the message endpoint URL
     pub fn message_url(&self) -> String {
         format!("{}/message", self.url)
+    }
+
+    /// Get the streamable HTTP endpoint URL (POST /)
+    pub fn streamable_url(&self) -> String {
+        self.url.clone()
     }
 
     /// Shutdown the server gracefully
@@ -247,7 +184,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_responds_to_health_check() {
+    async fn test_server_responds_to_sse() {
         let server = TestMcpServer::start().await.unwrap();
 
         // Try to connect to the SSE endpoint

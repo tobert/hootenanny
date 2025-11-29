@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", features = ["server", "transport-streamable-http-server", "macros"] }
+baton = { path = "../baton" }
+async-trait = "0.1"
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
 tokio-stream = "0.1"
@@ -39,10 +40,6 @@ rustysynth = "1.3.0"
 hound = "3.5"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 dashmap = "6.0"
-
-[[example]]
-name = "two_agent_jam"
-path = "examples/two_agent_jam.rs"
 
 [dev-dependencies]
 bytes = "1"

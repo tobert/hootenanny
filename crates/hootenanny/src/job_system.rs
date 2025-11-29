@@ -7,7 +7,6 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -286,66 +285,6 @@ impl JobStore {
         }
 
         Ok(())
-    }
-
-    /// Wait for a job to complete with timeout
-    pub async fn wait_for_job(&self, job_id: &JobId, timeout: Option<Duration>) -> Result<JobInfo> {
-        let start = Instant::now();
-        let timeout = timeout.unwrap_or(Duration::from_secs(300)); // 5 minute default
-
-        loop {
-            let job = self.get_job(job_id)?;
-
-            match job.status {
-                JobStatus::Complete | JobStatus::Failed | JobStatus::Cancelled => {
-                    return Ok(job);
-                }
-                JobStatus::Pending | JobStatus::Running => {
-                    if start.elapsed() > timeout {
-                        anyhow::bail!("Job {} timed out after {:?}", job_id, timeout);
-                    }
-                    // Poll every 500ms
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                }
-            }
-        }
-    }
-
-    /// Clean up old completed jobs
-    pub fn cleanup_old_jobs(&self, max_age: Duration) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let mut jobs = self.jobs.lock().unwrap();
-        let mut handles = self.handles.lock().unwrap();
-
-        let mut removed_count = 0;
-
-        jobs.retain(|job_id, job| {
-            let should_keep = if let Some(completed_at) = job.completed_at {
-                now - completed_at < max_age.as_secs()
-            } else {
-                true // Keep running/pending jobs
-            };
-
-            if !should_keep {
-                handles.remove(job_id);
-                removed_count += 1;
-            }
-
-            should_keep
-        });
-
-        if removed_count > 0 {
-            tracing::info!(
-                jobs.removed = removed_count,
-                jobs.remaining = jobs.len(),
-                jobs.max_age_secs = max_age.as_secs(),
-                "Cleaned up old jobs"
-            );
-        }
     }
 
     /// Get job store statistics for monitoring

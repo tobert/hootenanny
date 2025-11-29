@@ -1,6 +1,8 @@
 //! Web endpoints for Hootenanny.
 //!
 //! Provides HTTP access to CAS and other resources.
+//!
+//! Note: MCP handlers have migrated to the baton crate.
 
 use crate::cas::Cas;
 use axum::{
@@ -13,9 +15,6 @@ use axum::{
 };
 use std::sync::Arc;
 use tokio_util::io::ReaderStream;
-
-pub mod mcp;
-pub mod state;
 
 pub fn router(cas: Cas) -> Router {
     Router::new()

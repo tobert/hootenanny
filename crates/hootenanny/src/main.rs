@@ -1,25 +1,23 @@
 mod api;
 mod artifact_store;
 mod cas;
-mod conversation;
-mod domain;
 mod job_system;
 mod mcp_tools;
 mod persistence;
-mod realization;
 mod telemetry;
 mod web;
 
 use anyhow::{Context, Result};
-use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
+use audio_graph_mcp::Database as AudioGraphDb;
 use clap::Parser;
 use persistence::journal::{Journal, SessionEvent};
-use api::service::{ConversationState, EventDualityServer};
-use cas::Cas;
+use api::handler::HootHandler;
+use api::service::EventDualityServer;
 use mcp_tools::local_models::LocalModels;
+use cas::Cas;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 use tokio_util::sync::CancellationToken;
 
 /// The Hootenanny MCP Server
@@ -40,7 +38,7 @@ struct Cli {
     orpheus_port: u16,
 
     /// DeepSeek Model Port
-    #[arg(long, default_value = "2001")]
+    #[arg(long, default_value = "2020")]
     deepseek_port: u16,
 
     /// OTLP gRPC endpoint for OpenTelemetry (e.g., "127.0.0.1:35991")
@@ -135,49 +133,42 @@ async fn main() -> Result<()> {
     // --- Audio Graph Initialization ---
     tracing::info!("🎛️  Initializing Audio Graph...");
     let audio_graph_db = Arc::new(AudioGraphDb::in_memory().context("Failed to create audio graph db")?);
-    let audio_graph_adapter = Arc::new(
-        AudioGraphAdapter::new_without_pipewire(audio_graph_db.clone())
-            .context("Failed to create audio graph adapter")?
-    );
     tracing::info!("   Audio graph ready (in-memory)");
 
     let addr = format!("0.0.0.0:{}", cli.port);
 
     tracing::info!("🎵 Event Duality Server starting on http://{}", addr);
-    tracing::info!("   MCP SSE: GET http://{}/mcp/sse", addr);
-    tracing::info!("   MCP Message: POST http://{}/mcp/message", addr);
+    tracing::info!("   MCP Streamable HTTP: POST http://{}/mcp (recommended)", addr);
+    tracing::info!("   MCP SSE (legacy): GET http://{}/mcp/sse", addr);
     tracing::info!("   CAS Upload: POST http://{}/cas", addr);
     tracing::info!("   CAS Download: GET http://{}/cas/:hash", addr);
-
-    // Create shared conversation state
-    tracing::info!("🌳 Initializing conversation tree...");
-    let conversation_dir = state_dir.join("conversation");
-    std::fs::create_dir_all(&conversation_dir)?;
-    let conversation_state = ConversationState::new(conversation_dir)
-        .context("Failed to initialize conversation state")?;
-    let shared_state = Arc::new(Mutex::new(conversation_state));
+    tracing::info!("   Health: GET http://{}/health", addr);
 
     // Create the EventDualityServer
-    let event_duality_server = Arc::new(EventDualityServer::new_with_state(
-        shared_state.clone(),
+    let event_duality_server = Arc::new(EventDualityServer::new(
         local_models.clone(),
         artifact_store.clone(),
         job_store.clone(),
-        audio_graph_adapter.clone(),
         audio_graph_db.clone(),
     ));
 
-    // Create AppState for web handlers
-    let app_state = Arc::new(web::state::AppState::new(
-        event_duality_server,
-        Arc::new(journal),
+    // Create baton MCP handler and state
+    let hoot_handler = HootHandler::new(event_duality_server.clone());
+    let mcp_state = Arc::new(baton::McpState::new(
+        hoot_handler,
+        "hootenanny",
+        env!("CARGO_PKG_VERSION"),
     ));
 
     let shutdown_token = CancellationToken::new();
 
     // Create routers with their respective state types
     let cas_router = web::router(cas.clone());
-    let mcp_router = web::mcp::router().with_state(app_state.clone());
+    // dual_router supports both Streamable HTTP (POST /) and SSE (GET /sse + POST /message)
+    let mcp_router = baton::dual_router(mcp_state.clone());
+
+    // Track server start time for uptime
+    let server_start = Instant::now();
 
     // Handler for OAuth discovery - return 404 with JSON to indicate no OAuth required
     async fn no_oauth() -> impl axum::response::IntoResponse {
@@ -188,9 +179,50 @@ async fn main() -> Result<()> {
         )
     }
 
+    // Health endpoint state
+    #[derive(Clone)]
+    struct HealthState {
+        job_store: Arc<job_system::JobStore>,
+        sessions: Arc<dyn baton::SessionStore>,
+        start_time: Instant,
+    }
+
+    async fn health_handler(
+        axum::extract::State(state): axum::extract::State<HealthState>,
+    ) -> axum::Json<serde_json::Value> {
+        let job_stats = state.job_store.stats();
+        let session_stats = state.sessions.stats();
+        let uptime = state.start_time.elapsed();
+
+        axum::Json(serde_json::json!({
+            "status": "healthy",
+            "uptime_secs": uptime.as_secs(),
+            "version": env!("CARGO_PKG_VERSION"),
+            "sessions": {
+                "total": session_stats.total,
+                "connected": session_stats.connected,
+            },
+            "jobs": {
+                "pending": job_stats.pending,
+                "running": job_stats.running,
+            }
+        }))
+    }
+
+    let health_state = HealthState {
+        job_store: job_store.clone(),
+        sessions: mcp_state.sessions.clone(),
+        start_time: server_start,
+    };
+
     // Build the main application router
     // Each sub-router has its own state type, so we use nest() for CAS
+    let health_router = axum::Router::new()
+        .route("/health", axum::routing::get(health_handler))
+        .with_state(health_state);
+
     let app_router = axum::Router::new()
+        .merge(health_router)
         .route("/mcp/.well-known/oauth-authorization-server", axum::routing::get(no_oauth))
         .route("/mcp/.well-known/oauth-protected-resource", axum::routing::get(no_oauth))
         .route("/.well-known/oauth-authorization-server", axum::routing::get(no_oauth))
@@ -219,21 +251,26 @@ async fn main() -> Result<()> {
 
     // Spawn background task for periodic statistics logging
     let stats_job_store = job_store.clone();
+    let stats_sessions = mcp_state.sessions.clone();
     let stats_ct = shutdown_token.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    let stats = stats_job_store.stats();
+                    let job_stats = stats_job_store.stats();
+                    let session_stats = stats_sessions.stats();
                     tracing::info!(
-                        jobs.total = stats.total,
-                        jobs.pending = stats.pending,
-                        jobs.running = stats.running,
-                        jobs.completed = stats.completed,
-                        jobs.failed = stats.failed,
-                        jobs.cancelled = stats.cancelled,
-                        "Job store statistics"
+                        jobs.total = job_stats.total,
+                        jobs.pending = job_stats.pending,
+                        jobs.running = job_stats.running,
+                        jobs.completed = job_stats.completed,
+                        jobs.failed = job_stats.failed,
+                        jobs.cancelled = job_stats.cancelled,
+                        sessions.total = session_stats.total,
+                        sessions.connected = session_stats.connected,
+                        sessions.disconnected = session_stats.disconnected,
+                        "Server statistics"
                     );
                 }
                 _ = stats_ct.cancelled() => {
@@ -242,6 +279,14 @@ async fn main() -> Result<()> {
             }
         }
     });
+
+    // Spawn background task for session cleanup
+    baton::spawn_cleanup_task(
+        mcp_state.sessions.clone(),
+        Duration::from_secs(30),   // cleanup interval
+        Duration::from_secs(1800), // 30 min max idle
+        shutdown_token.clone(),
+    );
 
     // Handle both SIGINT (Ctrl+C) and SIGTERM (cargo-watch, systemd, etc.)
     tokio::select! {

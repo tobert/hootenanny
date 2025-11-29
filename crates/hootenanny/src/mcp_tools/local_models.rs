@@ -4,7 +4,7 @@
 //! Handles CAS integration automatically.
 
 use crate::cas::Cas;
-use crate::domain::CasReference;
+use crate::cas::CasReference;
 use anyhow::{Context, Result};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -28,13 +28,6 @@ pub struct OrpheusGenerateResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct OrpheusClassifyResult {
-    pub is_human: bool,
-    pub confidence: f32,
-    pub probabilities: std::collections::HashMap<String, f32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DeepSeekQueryResult {
     pub text: String,
     pub finish_reason: Option<String>,
@@ -49,6 +42,7 @@ pub struct Message {
 // --- Tool Interface ---
 
 // #[rmcp::macros::rpc] // Commenting out until I confirm the path
+#[allow(dead_code, async_fn_in_trait)]
 pub trait LocalModelTools {
     /// Generate or transform music using Orpheus.
     async fn orpheus_generate(
@@ -58,13 +52,6 @@ pub trait LocalModelTools {
         input_hash: Option<String>,
         params: OrpheusGenerateParams,
     ) -> anyhow::Result<OrpheusGenerateResult>;
-
-    /// Analyze MIDI content using Orpheus.
-    async fn orpheus_classify(
-        &self,
-        model: Option<String>,
-        input_hash: String,
-    ) -> anyhow::Result<OrpheusClassifyResult>;
 
     /// Query the local DeepSeek Coder model.
     async fn deepseek_query(
@@ -162,6 +149,7 @@ impl LocalModels {
             .ok_or_else(|| anyhow::anyhow!("CAS object with hash {} not found", hash))
     }
 
+    #[allow(dead_code)]
     pub async fn read_cas_content(
         &self,
         hash: &str,
@@ -277,56 +265,6 @@ impl LocalModels {
             })
         } else {
             anyhow::bail!("No variations array in response (expected new API format)");
-        }
-    }
-
-     pub async fn run_orpheus_classify(
-        &self,
-        model: Option<String>,
-        input_hash: String,
-    ) -> Result<OrpheusClassifyResult> {
-        let midi_bytes = self.resolve_cas(&input_hash)?;
-        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-        let b64_midi = BASE64.encode(midi_bytes);
-
-        let request_body = serde_json::json!({
-            "model": model.unwrap_or_else(|| "classifier".to_string()),
-            "task": "classify",
-            "midi_input": b64_midi
-        });
-
-        let builder = self.client.post(format!("{}/predict", self.orpheus_url))
-            .json(&request_body);
-        let builder = self.inject_trace_context(builder);
-        let resp = builder.send()
-            .await
-            .context("Failed to call Orpheus API")?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let error_body = resp.text().await.unwrap_or_else(|_| "<failed to read error body>".to_string());
-            anyhow::bail!("Orpheus API error {}: {}", status, error_body);
-        }
-
-        let resp_json: serde_json::Value = resp.json().await
-            .context("Failed to parse Orpheus response as JSON")?;
-
-        if let Some(classification) = resp_json.get("classification") {
-             let is_human = classification.get("is_human").and_then(|v| v.as_bool()).unwrap_or(false);
-             let confidence = classification.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-
-             let probabilities = classification.get("probabilities")
-                .ok_or_else(|| anyhow::anyhow!("Missing 'probabilities' field in classification"))?;
-             let probs: std::collections::HashMap<String, f32> = serde_json::from_value(probabilities.clone())
-                .context("Failed to parse probabilities map")?;
-
-             Ok(OrpheusClassifyResult {
-                 is_human,
-                 confidence,
-                 probabilities: probs,
-             })
-        } else {
-            anyhow::bail!("Invalid classification response");
         }
     }
 
