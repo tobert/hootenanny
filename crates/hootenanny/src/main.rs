@@ -5,20 +5,25 @@ mod job_system;
 mod mcp_tools;
 mod persistence;
 mod telemetry;
+mod types;
 mod web;
 
 use anyhow::{Context, Result};
 use audio_graph_mcp::Database as AudioGraphDb;
 use clap::Parser;
 use persistence::journal::{Journal, SessionEvent};
+use api::composite::CompositeHandler;
 use api::handler::HootHandler;
 use api::service::EventDualityServer;
 use mcp_tools::local_models::LocalModels;
 use cas::Cas;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 use tokio_util::sync::CancellationToken;
+
+use llm_mcp_bridge::{AgentChatHandler, AgentManager, BackendConfig, BridgeConfig};
+use llmchat::ConversationDb;
 
 /// The Hootenanny MCP Server
 #[derive(Parser, Debug)]
@@ -37,9 +42,9 @@ struct Cli {
     #[arg(long, default_value = "2000")]
     orpheus_port: u16,
 
-    /// DeepSeek Model Port
+    /// LLM Model Port (vLLM OpenAI-compatible API, e.g. Qwen)
     #[arg(long, default_value = "2020")]
-    deepseek_port: u16,
+    llm_port: u16,
 
     /// OTLP gRPC endpoint for OpenTelemetry (e.g., "127.0.0.1:35991")
     #[arg(long, default_value = "127.0.0.1:35991")]
@@ -111,18 +116,16 @@ async fn main() -> Result<()> {
     let local_models = Arc::new(LocalModels::new(
         cas.clone(),
         cli.orpheus_port,
-        cli.deepseek_port
     ));
     tracing::info!("   Orpheus: port {}", cli.orpheus_port);
-    tracing::info!("   DeepSeek: port {}", cli.deepseek_port);
 
     // --- Artifact Store Initialization ---
     tracing::info!("📚 Initializing Artifact Store...");
     let artifact_store_path = state_dir.join("artifacts.json");
-    let artifact_store = Arc::new(
+    let artifact_store = Arc::new(RwLock::new(
         artifact_store::FileStore::new(&artifact_store_path)
             .context("Failed to initialize artifact store")?
-    );
+    ));
     tracing::info!("   Artifact store at: {}", artifact_store_path.display());
 
     // --- Job Store Initialization ---
@@ -140,8 +143,10 @@ async fn main() -> Result<()> {
     tracing::info!("🎵 Event Duality Server starting on http://{}", addr);
     tracing::info!("   MCP Streamable HTTP: POST http://{}/mcp (recommended)", addr);
     tracing::info!("   MCP SSE (legacy): GET http://{}/mcp/sse", addr);
-    tracing::info!("   CAS Upload: POST http://{}/cas", addr);
-    tracing::info!("   CAS Download: GET http://{}/cas/:hash", addr);
+    tracing::info!("   Agent Chat: agent_chat_* tools via MCP");
+    tracing::info!("   Artifact Content: GET http://{}/artifact/:id", addr);
+    tracing::info!("   Artifact Meta: GET http://{}/artifact/:id/meta", addr);
+    tracing::info!("   Artifacts List: GET http://{}/artifacts", addr);
     tracing::info!("   Health: GET http://{}/health", addr);
 
     // Create the EventDualityServer
@@ -152,10 +157,42 @@ async fn main() -> Result<()> {
         audio_graph_db.clone(),
     ));
 
-    // Create baton MCP handler and state
+    // --- LLM Agent Bridge Initialization ---
+    tracing::info!("🤖 Initializing LLM Agent Bridge...");
+    let conversations_db_path = state_dir.join("conversations.db");
+    let conversations_db = ConversationDb::open(&conversations_db_path)
+        .context("Failed to open conversations database")?;
+    tracing::info!("   Conversations DB: {}", conversations_db_path.display());
+
+    let bridge_config = BridgeConfig {
+        mcp_url: format!("http://127.0.0.1:{}/mcp", cli.port),
+        backends: vec![
+            BackendConfig {
+                id: "qwen".to_string(),
+                display_name: "Qwen 2.5 Instruct".to_string(),
+                base_url: format!("http://127.0.0.1:{}/v1", cli.llm_port),
+                api_key: None,
+                default_model: "Qwen2.5-7B-Instruct".to_string(),
+                summary_model: None,
+                supports_tools: true,
+                max_tokens: Some(4096),
+                default_temperature: Some(0.7),
+            },
+        ],
+    };
+    tracing::info!("   Qwen backend: http://127.0.0.1:{}/v1", cli.llm_port);
+
+    let agent_manager = Arc::new(
+        AgentManager::new(bridge_config, conversations_db)
+            .context("Failed to create agent manager")?
+    );
+    let agent_handler = AgentChatHandler::new(agent_manager);
+
+    // Create baton MCP handler and state (composite of Hoot + Agent)
     let hoot_handler = HootHandler::new(event_duality_server.clone());
+    let composite_handler = CompositeHandler::new(hoot_handler, agent_handler);
     let mcp_state = Arc::new(baton::McpState::new(
-        hoot_handler,
+        composite_handler,
         "hootenanny",
         env!("CARGO_PKG_VERSION"),
     ));
@@ -163,7 +200,11 @@ async fn main() -> Result<()> {
     let shutdown_token = CancellationToken::new();
 
     // Create routers with their respective state types
-    let cas_router = web::router(cas.clone());
+    let web_state = web::WebState {
+        artifact_store: artifact_store.clone(),
+        cas: Arc::new(cas.clone()),
+    };
+    let artifact_router = web::router(web_state);
     // dual_router supports both Streamable HTTP (POST /) and SSE (GET /sse + POST /message)
     let mcp_router = baton::dual_router(mcp_state.clone());
 
@@ -228,7 +269,7 @@ async fn main() -> Result<()> {
         .route("/.well-known/oauth-authorization-server", axum::routing::get(no_oauth))
         .route("/.well-known/oauth-protected-resource", axum::routing::get(no_oauth))
         .nest("/mcp", mcp_router)
-        .merge(cas_router);
+        .merge(artifact_router);
 
     let bind_addr: std::net::SocketAddr = addr.parse().context("Failed to parse bind address")?;
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;

@@ -9,4 +9,5 @@ pub mod job_system;
 pub mod mcp_tools;
 pub mod persistence;
 pub mod telemetry;
+pub mod types;
 pub mod web;

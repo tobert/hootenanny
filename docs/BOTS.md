@@ -1,6 +1,6 @@
-# BOTS.md - Coding Agent Context for HalfRemembered MCP
+# BOTS.md - Coding Agent Context for Hootenanny
 
-HalfRemembered MCP is an ensemble performance space for large language model agents, music models, and humans to create
+Hootenanny is an ensemble performance space for large language model agents, music models, and humans to create
 music interactively.
 
 ## 📜 Project Philosophy
@@ -188,4 +188,62 @@ echo "WebSocket transport enables multi-agent ensemble" >> docs/agents/NOW.md
 - **jj**: Historical record, reasoning trace
 - **Memory**: Current state, reusable patterns
 - **Together**: Complete cognitive system
+
+## 🛠️ MCP Tool Reference
+
+### Tool Naming Conventions
+
+All tools use consistent prefixes for discoverability:
+
+| Prefix | Domain | Examples |
+|--------|--------|----------|
+| `cas_*` | Content storage | `cas_store`, `cas_inspect`, `cas_upload_file` |
+| `orpheus_*` | MIDI generation | `orpheus_generate`, `orpheus_continue` |
+| `abc_*` | ABC notation | `abc_parse`, `abc_to_midi`, `abc_validate` |
+| `convert_*` | Format conversion | `convert_midi_to_wav` |
+| `soundfont_*` | SoundFont inspection | `soundfont_inspect`, `soundfont_preset_inspect` |
+| `beatthis_*` | BeatThis model | `beatthis_analyze` |
+| `job_*` | Job management | `job_status`, `job_poll`, `job_list` |
+| `graph_*` | Audio routing | `graph_bind`, `graph_connect`, `graph_find` |
+| `agent_chat_*` | LLM sub-agents | `agent_chat_new`, `agent_chat_send` |
+
+### Artifact-Centric Access
+
+**Share artifacts, not raw hashes.** Artifacts have identity, context, and access tracking.
+
+```
+# HTTP endpoints for artifacts
+GET /artifact/{id}        → Stream content with MIME type
+GET /artifact/{id}/meta   → JSON metadata + lineage
+GET /artifacts            → List all (filterable by tag, creator)
+
+# MCP resources
+artifacts://summary       → Counts by type/phase
+artifacts://recent        → Latest 10 artifacts
+artifacts://by-tag/{tag}  → Filter by tag
+artifacts://lineage/{id}  → Parent chain
+```
+
+### Async Pattern
+
+All slow operations return `job_id` immediately:
+
+```javascript
+// 1. Launch job
+job = orpheus_generate({temperature: 1.0})
+
+// 2. Poll for completion
+result = job_poll({job_ids: [job.job_id], timeout_ms: 60000})
+
+// 3. Access artifact
+// http://localhost:8080/artifact/{result.artifact_id}
+```
+
+### Rich Types
+
+We avoid primitive obsession. Key domain types:
+
+- `ContentHash` - BLAKE3 hash addressing CAS content
+- `ArtifactId` - Identifies artifacts with context
+- `VariationSetId` - Groups related variations
 

@@ -27,18 +27,6 @@ pub struct OrpheusGenerateResult {
     pub summary: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct DeepSeekQueryResult {
-    pub text: String,
-    pub finish_reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct Message {
-    pub role: String,
-    pub content: String,
-}
-
 // --- Tool Interface ---
 
 // #[rmcp::macros::rpc] // Commenting out until I confirm the path
@@ -52,14 +40,6 @@ pub trait LocalModelTools {
         input_hash: Option<String>,
         params: OrpheusGenerateParams,
     ) -> anyhow::Result<OrpheusGenerateResult>;
-
-    /// Query the local DeepSeek Coder model.
-    async fn deepseek_query(
-        &self,
-        model: Option<String>,
-        messages: Vec<Message>,
-        stream: Option<bool>,
-    ) -> anyhow::Result<DeepSeekQueryResult>;
 
     /// Store a file in CAS manually.
     async fn cas_store(
@@ -80,16 +60,14 @@ pub trait LocalModelTools {
 pub struct LocalModels {
     cas: Cas,
     orpheus_url: String,
-    deepseek_url: String,
     client: reqwest::Client,
 }
 
 impl LocalModels {
-    pub fn new(cas: Cas, orpheus_port: u16, deepseek_port: u16) -> Self {
+    pub fn new(cas: Cas, orpheus_port: u16) -> Self {
         Self {
             cas,
             orpheus_url: format!("http://127.0.0.1:{}", orpheus_port),
-            deepseek_url: format!("http://127.0.0.1:{}", deepseek_port),
             client: reqwest::Client::new(),
         }
     }
@@ -268,44 +246,104 @@ impl LocalModels {
         }
     }
 
-    pub async fn run_deepseek_query(
+    /// Call the Orpheus bridge service (port 2002) to create transitions between MIDI sections.
+    pub async fn run_orpheus_bridge(
         &self,
-        model: Option<String>,
-        messages: Vec<Message>,
-        stream: Option<bool>,
-    ) -> Result<DeepSeekQueryResult> {
-         let request_body = serde_json::json!({
-            "messages": messages,
-            "model": model.unwrap_or_else(|| "deepseek-coder-v2-lite".to_string()),
-            "stream": stream.unwrap_or(false)
-        });
+        section_a_hash: String,
+        section_b_hash: Option<String>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        max_tokens: Option<u32>,
+        client_job_id: Option<String>,
+    ) -> Result<OrpheusGenerateResult> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
-        // Note: For PoC we only handle non-streaming /predict endpoint even if stream is requested
-        // as implementing SSE client here is complex.
-        let builder = self.client.post(format!("{}/predict", self.deepseek_url))
+        let section_a_bytes = self.resolve_cas(&section_a_hash)?;
+
+        let mut request_body = serde_json::Map::new();
+        request_body.insert("section_a".to_string(), serde_json::json!(BASE64.encode(&section_a_bytes)));
+
+        if let Some(ref hash) = section_b_hash {
+            let section_b_bytes = self.resolve_cas(hash)?;
+            request_body.insert("section_b".to_string(), serde_json::json!(BASE64.encode(&section_b_bytes)));
+        }
+
+        request_body.insert("temperature".to_string(), serde_json::json!(temperature.unwrap_or(1.0)));
+        request_body.insert("top_p".to_string(), serde_json::json!(top_p.unwrap_or(0.95)));
+        request_body.insert("max_tokens".to_string(), serde_json::json!(max_tokens.unwrap_or(1024)));
+
+        if let Some(job_id) = client_job_id {
+            request_body.insert("client_job_id".to_string(), serde_json::json!(job_id));
+        }
+
+        let builder = self.client.post("http://127.0.0.1:2002/predict")
             .json(&request_body);
         let builder = self.inject_trace_context(builder);
-        let resp = builder.send()
-            .await
-            .context("Failed to call DeepSeek API")?;
+
+        let resp = match builder.send().await {
+            Ok(r) => r,
+            Err(e) if e.is_connect() => {
+                anyhow::bail!("Bridge service unavailable at port 2002 - is it running? Error: {}", e)
+            }
+            Err(e) if e.is_timeout() => {
+                anyhow::bail!("Bridge service timeout")
+            }
+            Err(e) => anyhow::bail!("HTTP error calling bridge service: {}", e),
+        };
 
         let status = resp.status();
+
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = resp.headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(5);
+
+            anyhow::bail!("GPU busy, retry after {}s", retry_after);
+        }
+
         if !status.is_success() {
-            let error_body = resp.text().await.unwrap_or_else(|_| "<failed to read error body>".to_string());
-            anyhow::bail!("DeepSeek API error {}: {}", status, error_body);
+            let error_body = resp.text().await
+                .unwrap_or_else(|_| "<failed to read error body>".to_string());
+            anyhow::bail!("Bridge API error {}: {}", status, error_body);
         }
 
         let resp_json: serde_json::Value = resp.json().await
-            .context("Failed to parse DeepSeek response as JSON")?;
+            .context("Failed to parse bridge response as JSON")?;
 
-        let text = resp_json.get("text")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'text' field in DeepSeek response"))?
-            .to_string();
+        if let Some(variations) = resp_json.get("variations").and_then(|v| v.as_array()) {
+            let mut output_hashes = Vec::new();
+            let mut num_tokens_list = Vec::new();
 
-        Ok(DeepSeekQueryResult {
-            text,
-            finish_reason: Some("stop".to_string()),
-        })
+            for variation in variations {
+                if let Some(midi_b64) = variation.get("midi_base64").and_then(|v| v.as_str()) {
+                    let midi_bytes = BASE64.decode(midi_b64)
+                        .context("Failed to decode bridge MIDI")?;
+
+                    let hash = self.store_cas(&midi_bytes, "audio/midi")?;
+                    output_hashes.push(hash);
+
+                    let tokens = variation.get("num_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    num_tokens_list.push(tokens);
+                } else {
+                    anyhow::bail!("Variation missing midi_base64 field");
+                }
+            }
+
+            let total_tokens: u64 = num_tokens_list.iter().sum();
+            let summary = format!("Generated bridge ({} tokens)", total_tokens);
+
+            Ok(OrpheusGenerateResult {
+                status: "success".to_string(),
+                output_hashes,
+                num_tokens: num_tokens_list,
+                summary,
+            })
+        } else {
+            anyhow::bail!("No variations array in bridge response");
+        }
     }
 }

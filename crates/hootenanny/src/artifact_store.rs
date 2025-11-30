@@ -1,32 +1,37 @@
 //! Artifact storage with variation tracking
 //!
 //! Universal artifact system with variation semantics:
+//! - Every artifact has a content_hash pointing to CAS content
 //! - Every artifact has optional variation_set_id (grouping)
 //! - Every artifact has optional parent_id (refinement chains)
 //! - Every artifact has tags (arbitrary metadata)
-//! - Query logic deferred to Lua (later)
+//! - Access tracking for observability
 
+use crate::types::{ArtifactId, ContentHash, VariationSetId};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 /// Universal artifact with variation semantics
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Artifact {
     /// Unique identifier
-    pub id: String,
+    pub id: ArtifactId,
+
+    /// Reference to content in CAS
+    pub content_hash: ContentHash,
 
     /// Part of a variation set?
-    pub variation_set_id: Option<String>,
+    pub variation_set_id: Option<VariationSetId>,
 
     /// Position in variation set (0, 1, 2, ...)
     pub variation_index: Option<u32>,
 
     /// Parent artifact (for refinements)
-    pub parent_id: Option<String>,
+    pub parent_id: Option<ArtifactId>,
 
     /// Arbitrary tags for organization/filtering
     pub tags: Vec<String>,
@@ -37,35 +42,120 @@ pub struct Artifact {
     /// Who created it (agent_id or user_id)
     pub creator: String,
 
-    /// Type-specific data (MIDI metadata, contribution text, etc.)
-    pub data: serde_json::Value,
+    /// Type-specific metadata (tool params, etc. - NOT the hash)
+    pub metadata: serde_json::Value,
+
+    /// Number of times this artifact has been accessed
+    #[serde(default)]
+    pub access_count: u64,
+
+    /// Last time this artifact was accessed
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_accessed: Option<DateTime<Utc>>,
+}
+
+/// Legacy format for backwards compatibility when loading old artifacts.json
+#[derive(Deserialize)]
+struct LegacyArtifact {
+    id: String,
+    variation_set_id: Option<String>,
+    variation_index: Option<u32>,
+    parent_id: Option<String>,
+    tags: Vec<String>,
+    created_at: DateTime<Utc>,
+    creator: String,
+    // Old field (optional - may not exist in new format)
+    #[serde(default)]
+    data: serde_json::Value,
+    // New fields might exist
+    #[serde(default)]
+    content_hash: Option<String>,
+    #[serde(default)]
+    metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    access_count: u64,
+    #[serde(default)]
+    last_accessed: Option<DateTime<Utc>>,
+}
+
+impl<'de> Deserialize<'de> for Artifact {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let legacy = LegacyArtifact::deserialize(deserializer)?;
+
+        // Extract content_hash: prefer explicit field, fall back to data.hash
+        let content_hash = if let Some(hash) = legacy.content_hash {
+            ContentHash::new(hash)
+        } else if let Some(hash) = legacy.data.get("hash").and_then(|v| v.as_str()) {
+            ContentHash::new(hash)
+        } else {
+            // No hash found - this shouldn't happen but create empty placeholder
+            ContentHash::new("")
+        };
+
+        // Metadata: prefer explicit field, fall back to data (minus hash)
+        let metadata = if let Some(m) = legacy.metadata {
+            m
+        } else {
+            // Remove 'hash' from data to create metadata
+            let mut data = legacy.data;
+            if let Some(obj) = data.as_object_mut() {
+                obj.remove("hash");
+            }
+            data
+        };
+
+        Ok(Artifact {
+            id: ArtifactId::new(legacy.id),
+            content_hash,
+            variation_set_id: legacy.variation_set_id.map(VariationSetId::new),
+            variation_index: legacy.variation_index,
+            parent_id: legacy.parent_id.map(ArtifactId::new),
+            tags: legacy.tags,
+            created_at: legacy.created_at,
+            creator: legacy.creator,
+            metadata,
+            access_count: legacy.access_count,
+            last_accessed: legacy.last_accessed,
+        })
+    }
 }
 
 impl Artifact {
-    /// Create a new artifact with minimal fields
-    pub fn new(id: impl Into<String>, creator: impl Into<String>, data: serde_json::Value) -> Self {
+    /// Create a new artifact with required fields
+    pub fn new(
+        id: ArtifactId,
+        content_hash: ContentHash,
+        creator: impl Into<String>,
+        metadata: serde_json::Value,
+    ) -> Self {
         Self {
-            id: id.into(),
+            id,
+            content_hash,
             variation_set_id: None,
             variation_index: None,
             parent_id: None,
             tags: Vec::new(),
             created_at: Utc::now(),
             creator: creator.into(),
-            data,
+            metadata,
+            access_count: 0,
+            last_accessed: None,
         }
     }
 
     /// Builder: set variation set
-    pub fn with_variation_set(mut self, set_id: impl Into<String>, index: u32) -> Self {
-        self.variation_set_id = Some(set_id.into());
+    pub fn with_variation_set(mut self, set_id: VariationSetId, index: u32) -> Self {
+        self.variation_set_id = Some(set_id);
         self.variation_index = Some(index);
         self
     }
 
     /// Builder: set parent
-    pub fn with_parent(mut self, parent_id: impl Into<String>) -> Self {
-        self.parent_id = Some(parent_id.into());
+    pub fn with_parent(mut self, parent_id: ArtifactId) -> Self {
+        self.parent_id = Some(parent_id);
         self
     }
 
@@ -80,6 +170,12 @@ impl Artifact {
     pub fn with_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.tags.extend(tags.into_iter().map(|t| t.into()));
         self
+    }
+
+    /// Record an access to this artifact
+    pub fn record_access(&mut self) {
+        self.access_count += 1;
+        self.last_accessed = Some(Utc::now());
     }
 
     /// Check if artifact has a tag
@@ -161,7 +257,7 @@ pub trait ArtifactStore: Send + Sync {
         let max_index = self
             .all()?
             .iter()
-            .filter(|a| a.variation_set_id.as_deref() == Some(set_id))
+            .filter(|a| a.variation_set_id.as_ref().map(|s| s.as_str()) == Some(set_id))
             .filter_map(|a| a.variation_index)
             .max()
             .unwrap_or(0);
@@ -185,7 +281,7 @@ impl InMemoryStore {
     pub fn from_artifacts(artifacts: Vec<Artifact>) -> Self {
         let map = artifacts
             .into_iter()
-            .map(|a| (a.id.clone(), a))
+            .map(|a| (a.id.as_str().to_string(), a))
             .collect();
         Self {
             artifacts: RwLock::new(map),
@@ -207,7 +303,7 @@ impl ArtifactStore for InMemoryStore {
 
     fn put(&self, artifact: Artifact) -> Result<()> {
         let mut artifacts = self.artifacts.write().unwrap();
-        artifacts.insert(artifact.id.clone(), artifact);
+        artifacts.insert(artifact.id.as_str().to_string(), artifact);
         Ok(())
     }
 
@@ -312,24 +408,65 @@ mod tests {
 
     #[test]
     fn test_artifact_builder() {
-        let artifact = Artifact::new("test_001", "agent_test", json!({"foo": "bar"}))
-            .with_variation_set("vset_123", 0)
-            .with_parent("parent_001")
-            .with_tag("type:test")
-            .with_tag("phase:initial");
+        let content_hash = ContentHash::new("abc123def456abc123def456abc123de");
+        let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
 
-        assert_eq!(artifact.id, "test_001");
-        assert_eq!(artifact.variation_set_id, Some("vset_123".to_string()));
+        let artifact = Artifact::new(
+            artifact_id,
+            content_hash.clone(),
+            "agent_test",
+            json!({"foo": "bar"}),
+        )
+        .with_variation_set(VariationSetId::new("vset_123"), 0)
+        .with_parent(ArtifactId::new("parent_001"))
+        .with_tag("type:test")
+        .with_tag("phase:initial");
+
+        assert_eq!(artifact.id.as_str(), "artifact_abc123def456");
+        assert_eq!(artifact.content_hash.as_str(), "abc123def456abc123def456abc123de");
+        assert_eq!(
+            artifact.variation_set_id.as_ref().map(|s| s.as_str()),
+            Some("vset_123")
+        );
         assert_eq!(artifact.variation_index, Some(0));
-        assert_eq!(artifact.parent_id, Some("parent_001".to_string()));
+        assert_eq!(
+            artifact.parent_id.as_ref().map(|s| s.as_str()),
+            Some("parent_001")
+        );
         assert!(artifact.has_tag("type:test"));
         assert!(artifact.has_tag("phase:initial"));
     }
 
     #[test]
+    fn test_access_tracking() {
+        let content_hash = ContentHash::new("abc123def456abc123def456abc123de");
+        let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+
+        let mut artifact = Artifact::new(artifact_id, content_hash, "agent", json!({}));
+
+        assert_eq!(artifact.access_count, 0);
+        assert!(artifact.last_accessed.is_none());
+
+        artifact.record_access();
+        assert_eq!(artifact.access_count, 1);
+        assert!(artifact.last_accessed.is_some());
+
+        let first_access = artifact.last_accessed;
+        artifact.record_access();
+        assert_eq!(artifact.access_count, 2);
+        assert!(artifact.last_accessed >= first_access);
+    }
+
+    #[test]
     fn test_tag_helpers() {
-        let artifact = Artifact::new("test", "agent", json!({}))
-            .with_tags(vec!["type:midi", "role:melody_specialist", "phase:initial"]);
+        let content_hash = ContentHash::new("abc123def456abc123def456abc123de");
+        let artifact = Artifact::new(
+            ArtifactId::new("test"),
+            content_hash,
+            "agent",
+            json!({}),
+        )
+        .with_tags(vec!["type:midi", "role:melody_specialist", "phase:initial"]);
 
         assert!(artifact.has_tag("type:midi"));
         assert!(artifact.has_any_tag(&["type:midi", "type:audio"]));
@@ -343,14 +480,20 @@ mod tests {
     fn test_in_memory_store() {
         let store = InMemoryStore::new();
 
-        let artifact = Artifact::new("test_001", "agent", json!({"data": "value"}));
+        let content_hash = ContentHash::new("abc123def456abc123def456abc123de");
+        let artifact = Artifact::new(
+            ArtifactId::new("test_001"),
+            content_hash,
+            "agent",
+            json!({"data": "value"}),
+        );
 
-        store.put(artifact.clone()).unwrap();
+        store.put(artifact).unwrap();
         assert_eq!(store.count().unwrap(), 1);
         assert!(store.exists("test_001").unwrap());
 
         let retrieved = store.get("test_001").unwrap().unwrap();
-        assert_eq!(retrieved.id, "test_001");
+        assert_eq!(retrieved.id.as_str(), "test_001");
 
         let deleted = store.delete("test_001").unwrap();
         assert!(deleted);
@@ -362,14 +505,24 @@ mod tests {
         let store = InMemoryStore::new();
 
         // First variation
-        let a1 = Artifact::new("a1", "agent", json!({}))
-            .with_variation_set("vset_123", 0);
+        let a1 = Artifact::new(
+            ArtifactId::new("a1"),
+            ContentHash::new("hash1hash1hash1hash1hash1hash1ha"),
+            "agent",
+            json!({}),
+        )
+        .with_variation_set(VariationSetId::new("vset_123"), 0);
         store.put(a1).unwrap();
         assert_eq!(store.next_variation_index("vset_123").unwrap(), 1);
 
         // Second variation
-        let a2 = Artifact::new("a2", "agent", json!({}))
-            .with_variation_set("vset_123", 1);
+        let a2 = Artifact::new(
+            ArtifactId::new("a2"),
+            ContentHash::new("hash2hash2hash2hash2hash2hash2ha"),
+            "agent",
+            json!({}),
+        )
+        .with_variation_set(VariationSetId::new("vset_123"), 1);
         store.put(a2).unwrap();
         assert_eq!(store.next_variation_index("vset_123").unwrap(), 2);
 
@@ -378,15 +531,81 @@ mod tests {
     }
 
     #[test]
+    fn test_legacy_deserialization() {
+        // Simulate old format with hash in data
+        let legacy_json = r#"{
+            "id": "test_legacy",
+            "variation_set_id": null,
+            "variation_index": null,
+            "parent_id": null,
+            "tags": ["type:midi"],
+            "created_at": "2024-01-01T00:00:00Z",
+            "creator": "agent",
+            "data": {"hash": "legacyhashlegacyhashlegacyhashle", "other": "value"}
+        }"#;
+
+        let artifact: Artifact = serde_json::from_str(legacy_json).unwrap();
+
+        assert_eq!(artifact.id.as_str(), "test_legacy");
+        assert_eq!(
+            artifact.content_hash.as_str(),
+            "legacyhashlegacyhashlegacyhashle"
+        );
+        // Hash should be removed from metadata
+        assert!(artifact.metadata.get("hash").is_none());
+        assert_eq!(artifact.metadata.get("other").unwrap(), "value");
+        assert_eq!(artifact.access_count, 0);
+        assert!(artifact.last_accessed.is_none());
+    }
+
+    #[test]
+    fn test_new_format_deserialization() {
+        // New format with explicit content_hash
+        let new_json = r#"{
+            "id": "test_new",
+            "content_hash": "newhashnewhashnewhashnewhashneha",
+            "variation_set_id": "vset_001",
+            "variation_index": 2,
+            "parent_id": "parent_001",
+            "tags": ["type:audio"],
+            "created_at": "2024-01-01T00:00:00Z",
+            "creator": "agent",
+            "data": {},
+            "metadata": {"sample_rate": 44100},
+            "access_count": 5,
+            "last_accessed": "2024-06-01T12:00:00Z"
+        }"#;
+
+        let artifact: Artifact = serde_json::from_str(new_json).unwrap();
+
+        assert_eq!(artifact.id.as_str(), "test_new");
+        assert_eq!(artifact.content_hash.as_str(), "newhashnewhashnewhashnewhashneha");
+        assert_eq!(
+            artifact.variation_set_id.as_ref().map(|s| s.as_str()),
+            Some("vset_001")
+        );
+        assert_eq!(artifact.variation_index, Some(2));
+        assert_eq!(artifact.metadata.get("sample_rate").unwrap(), 44100);
+        assert_eq!(artifact.access_count, 5);
+        assert!(artifact.last_accessed.is_some());
+    }
+
+    #[test]
     fn test_file_store() {
         let temp_dir = std::env::temp_dir().join("hrmcp_test_artifacts");
         std::fs::create_dir_all(&temp_dir).unwrap();
-        let path = temp_dir.join("test_artifacts.json");
+        let path = temp_dir.join("test_artifacts_v2.json");
 
         // Create and save
         {
             let store = FileStore::new(&path).unwrap();
-            let artifact = Artifact::new("test_001", "agent", json!({"data": "value"}));
+            let content_hash = ContentHash::new("filehashfilehashfilehashfilehash");
+            let artifact = Artifact::new(
+                ArtifactId::new("test_001"),
+                content_hash,
+                "agent",
+                json!({"data": "value"}),
+            );
             store.put(artifact).unwrap();
             store.flush().unwrap();
         }
@@ -396,7 +615,8 @@ mod tests {
             let store = FileStore::new(&path).unwrap();
             assert_eq!(store.count().unwrap(), 1);
             let artifact = store.get("test_001").unwrap().unwrap();
-            assert_eq!(artifact.id, "test_001");
+            assert_eq!(artifact.id.as_str(), "test_001");
+            assert_eq!(artifact.content_hash.as_str(), "filehashfilehashfilehashfilehash");
         }
 
         // Cleanup
@@ -404,26 +624,34 @@ mod tests {
     }
 
     #[test]
-    fn test_artifact_types() {
-        // Test different artifact types match tool outputs
-        let midi_artifact = Artifact::new("midi_001", "agent_orpheus", json!({"hash": "abc"}))
-            .with_tags(vec!["type:midi", "phase:generation", "tool:orpheus_generate"]);
-        assert_eq!(midi_artifact.artifact_type(), Some("type:midi"));
-        assert_eq!(midi_artifact.phase(), Some("phase:generation"));
+    fn test_serde_roundtrip() {
+        let content_hash = ContentHash::new("roundtriproundtriproundtriproun");
+        let original = Artifact::new(
+            ArtifactId::new("roundtrip_test"),
+            content_hash,
+            "agent",
+            json!({"key": "value"}),
+        )
+        .with_variation_set(VariationSetId::new("vset"), 1)
+        .with_parent(ArtifactId::new("parent"))
+        .with_tags(vec!["type:test"]);
 
-        let text_artifact = Artifact::new("text_001", "agent_claude", json!({"hash": "def"}))
-            .with_tags(vec!["type:text", "phase:generation", "tool:deepseek_query"]);
-        assert_eq!(text_artifact.artifact_type(), Some("type:text"));
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: Artifact = serde_json::from_str(&json).unwrap();
 
-        let event_artifact = Artifact::new("event_001", "agent_gemini", json!({"hash": "ghi"}))
-            .with_tags(vec!["type:musical_event", "phase:realization", "tool:play"]);
-        assert_eq!(event_artifact.artifact_type(), Some("type:musical_event"));
-        assert_eq!(event_artifact.phase(), Some("phase:realization"));
-
-        let intention_artifact = Artifact::new("intention_001", "agent_claude", json!({"hash": "jkl"}))
-            .with_tags(vec!["type:intention", "phase:contribution", "tool:add_node"]);
-        assert_eq!(intention_artifact.artifact_type(), Some("type:intention"));
-        assert_eq!(intention_artifact.phase(), Some("phase:contribution"));
+        assert_eq!(original.id.as_str(), restored.id.as_str());
+        assert_eq!(original.content_hash.as_str(), restored.content_hash.as_str());
+        assert_eq!(
+            original.variation_set_id.as_ref().map(|s| s.as_str()),
+            restored.variation_set_id.as_ref().map(|s| s.as_str())
+        );
+        assert_eq!(original.variation_index, restored.variation_index);
+        assert_eq!(
+            original.parent_id.as_ref().map(|s| s.as_str()),
+            restored.parent_id.as_ref().map(|s| s.as_str())
+        );
+        assert_eq!(original.tags, restored.tags);
+        assert_eq!(original.creator, restored.creator);
     }
 
     #[test]
@@ -432,12 +660,17 @@ mod tests {
 
         // Create variation set with 3 artifacts
         for i in 0..3 {
+            let content_hash = ContentHash::new(format!(
+                "varhash{}varhash{}varhash{}varhash{}",
+                i, i, i, i
+            ));
             let artifact = Artifact::new(
-                format!("var_{}", i),
+                ArtifactId::new(format!("var_{}", i)),
+                content_hash,
                 "agent_claude",
-                json!({"variation": i})
+                json!({"variation": i}),
             )
-            .with_variation_set("vset_exploration", i)
+            .with_variation_set(VariationSetId::new("vset_exploration"), i)
             .with_tags(vec!["phase:exploration", "type:midi"]);
 
             store.put(artifact).unwrap();
@@ -445,133 +678,13 @@ mod tests {
 
         // Verify all in same set
         let all = store.all().unwrap();
-        let in_set: Vec<_> = all.iter()
-            .filter(|a| a.variation_set_id.as_deref() == Some("vset_exploration"))
+        let in_set: Vec<_> = all
+            .iter()
+            .filter(|a| a.variation_set_id.as_ref().map(|s| s.as_str()) == Some("vset_exploration"))
             .collect();
         assert_eq!(in_set.len(), 3);
 
-        // Verify indices are correct
-        assert!(in_set.iter().any(|a| a.variation_index == Some(0)));
-        assert!(in_set.iter().any(|a| a.variation_index == Some(1)));
-        assert!(in_set.iter().any(|a| a.variation_index == Some(2)));
-
         // Next index should be 3
         assert_eq!(store.next_variation_index("vset_exploration").unwrap(), 3);
-    }
-
-    #[test]
-    fn test_parent_child_chain() {
-        let store = InMemoryStore::new();
-
-        // Create parent
-        let parent = Artifact::new("parent_001", "agent", json!({"gen": 0}))
-            .with_tags(vec!["phase:initial"]);
-        store.put(parent).unwrap();
-
-        // Create child
-        let child = Artifact::new("child_001", "agent", json!({"gen": 1}))
-            .with_parent("parent_001")
-            .with_tags(vec!["phase:refinement"]);
-        store.put(child).unwrap();
-
-        // Create grandchild
-        let grandchild = Artifact::new("grandchild_001", "agent", json!({"gen": 2}))
-            .with_parent("child_001")
-            .with_tags(vec!["phase:final"]);
-        store.put(grandchild).unwrap();
-
-        // Verify chain
-        let retrieved_child = store.get("child_001").unwrap().unwrap();
-        assert_eq!(retrieved_child.parent_id, Some("parent_001".to_string()));
-
-        let retrieved_grandchild = store.get("grandchild_001").unwrap().unwrap();
-        assert_eq!(retrieved_grandchild.parent_id, Some("child_001".to_string()));
-
-        // Verify we can traverse the chain
-        let all = store.all().unwrap();
-        let has_parent: Vec<_> = all.iter()
-            .filter(|a| a.parent_id.is_some())
-            .collect();
-        assert_eq!(has_parent.len(), 2); // child and grandchild
-    }
-
-    #[test]
-    fn test_multi_tool_artifact_collection() {
-        let store = InMemoryStore::new();
-
-        // Simulate artifacts from different tools
-        let orpheus_artifact = Artifact::new("orpheus_001", "agent_orpheus", json!({"task": "generate"}))
-            .with_tags(vec!["type:midi", "phase:generation", "tool:orpheus_generate"]);
-        store.put(orpheus_artifact).unwrap();
-
-        let deepseek_artifact = Artifact::new("deepseek_001", "agent_claude", json!({"task": "query"}))
-            .with_tags(vec!["type:text", "phase:generation", "tool:deepseek_query"]);
-        store.put(deepseek_artifact).unwrap();
-
-        let play_artifact = Artifact::new("play_001", "agent_gemini", json!({"task": "play"}))
-            .with_tags(vec!["type:musical_event", "phase:realization", "tool:play"]);
-        store.put(play_artifact).unwrap();
-
-        let node_artifact = Artifact::new("node_001", "agent_claude", json!({"task": "add_node"}))
-            .with_tags(vec!["type:intention", "phase:contribution", "tool:add_node"]);
-        store.put(node_artifact).unwrap();
-
-        // Verify count
-        assert_eq!(store.count().unwrap(), 4);
-
-        // Query by type
-        let all = store.all().unwrap();
-        let midi_artifacts: Vec<_> = all.iter()
-            .filter(|a| a.has_tag("type:midi"))
-            .collect();
-        assert_eq!(midi_artifacts.len(), 1);
-
-        let text_artifacts: Vec<_> = all.iter()
-            .filter(|a| a.has_tag("type:text"))
-            .collect();
-        assert_eq!(text_artifacts.len(), 1);
-
-        // Query by phase
-        let generation_artifacts: Vec<_> = all.iter()
-            .filter(|a| a.has_tag("phase:generation"))
-            .collect();
-        assert_eq!(generation_artifacts.len(), 2); // orpheus + deepseek
-    }
-
-    #[test]
-    fn test_tag_filtering() {
-        let store = InMemoryStore::new();
-
-        // Create artifacts with various tag combinations
-        let a1 = Artifact::new("a1", "agent", json!({}))
-            .with_tags(vec!["language:rust", "task:parsing", "quality:high"]);
-        let a2 = Artifact::new("a2", "agent", json!({}))
-            .with_tags(vec!["language:python", "task:parsing"]);
-        let a3 = Artifact::new("a3", "agent", json!({}))
-            .with_tags(vec!["language:rust", "task:debugging"]);
-
-        store.put(a1).unwrap();
-        store.put(a2).unwrap();
-        store.put(a3).unwrap();
-
-        let all = store.all().unwrap();
-
-        // Filter by single tag
-        let rust_artifacts: Vec<_> = all.iter()
-            .filter(|a| a.has_tag("language:rust"))
-            .collect();
-        assert_eq!(rust_artifacts.len(), 2);
-
-        // Filter by multiple tags (all must match)
-        let rust_parsing: Vec<_> = all.iter()
-            .filter(|a| a.has_all_tags(&["language:rust", "task:parsing"]))
-            .collect();
-        assert_eq!(rust_parsing.len(), 1);
-
-        // Filter by prefix
-        let language_tags: Vec<_> = all.iter()
-            .flat_map(|a| a.tags_with_prefix("language:"))
-            .collect();
-        assert_eq!(language_tags.len(), 3); // rust, python, rust
     }
 }

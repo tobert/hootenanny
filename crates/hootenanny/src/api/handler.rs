@@ -52,7 +52,7 @@ impl Handler for HootHandler {
             Tool::new("cas_inspect", "Inspect content in the CAS by hash")
                 .with_input_schema(schema_for::<CasInspectRequest>())
                 .read_only(),
-            Tool::new("upload_file", "Upload a file to the CAS")
+            Tool::new("cas_upload_file", "Upload a file to the CAS")
                 .with_input_schema(schema_for::<UploadFileRequest>()),
 
             // Orpheus tools
@@ -66,24 +66,32 @@ impl Handler for HootHandler {
                 .with_input_schema(schema_for::<OrpheusBridgeRequest>()),
 
             // Job tools
-            Tool::new("get_job_status", "Get the status of an async job")
+            Tool::new("job_status", "Get the status of an async job")
                 .with_input_schema(schema_for::<GetJobStatusRequest>())
                 .read_only(),
-            Tool::new("list_jobs", "List all jobs")
+            Tool::new("job_list", "List all jobs")
                 .read_only(),
-            Tool::new("cancel_job", "Cancel a running job")
+            Tool::new("job_cancel", "Cancel a running job")
                 .with_input_schema(schema_for::<CancelJobRequest>()),
-            Tool::new("poll", "Poll for job completion")
+            Tool::new("job_poll", "Poll for job completion")
                 .with_input_schema(schema_for::<PollRequest>())
                 .read_only(),
-            Tool::new("sleep", "Sleep for a specified duration")
+            Tool::new("job_sleep", "Sleep for a specified duration")
                 .with_input_schema(schema_for::<SleepRequest>())
                 .read_only()
                 .idempotent(),
 
-            // Graph tools
-            Tool::new("midi_to_wav", "Render MIDI to WAV using a SoundFont")
+            // Conversion tools
+            Tool::new("convert_midi_to_wav", "Render MIDI to WAV using a SoundFont")
                 .with_input_schema(schema_for::<MidiToWavRequest>()),
+
+            // SoundFont tools
+            Tool::new("soundfont_inspect", "Inspect SoundFont presets and drum mappings")
+                .with_input_schema(schema_for::<SoundfontInspectRequest>())
+                .read_only(),
+            Tool::new("soundfont_preset_inspect", "Inspect a specific preset by bank/program")
+                .with_input_schema(schema_for::<SoundfontPresetInspectRequest>())
+                .read_only(),
 
             Tool::new("graph_bind", "Bind an identity in the audio graph")
                 .with_input_schema(schema_for::<GraphBindRequest>()),
@@ -95,9 +103,22 @@ impl Handler for HootHandler {
                 .with_input_schema(schema_for::<GraphFindRequest>())
                 .read_only(),
 
-            // DeepSeek tools
-            Tool::new("deepseek_query", "Query the local DeepSeek Coder model")
-                .with_input_schema(schema_for::<DeepSeekQueryRequest>()),
+            // ABC notation tools
+            Tool::new("abc_parse", "Parse ABC notation into a structured AST")
+                .with_input_schema(schema_for::<AbcParseRequest>())
+                .read_only(),
+            Tool::new("abc_to_midi", "Convert ABC notation to MIDI")
+                .with_input_schema(schema_for::<AbcToMidiRequest>()),
+            Tool::new("abc_validate", "Validate ABC notation and return feedback")
+                .with_input_schema(schema_for::<AbcValidateRequest>())
+                .read_only(),
+            Tool::new("abc_transpose", "Transpose ABC notation by semitones or to a target key")
+                .with_input_schema(schema_for::<AbcTransposeRequest>()),
+
+            // Beat detection tools (BeatThis model)
+            Tool::new("beatthis_analyze", "Detect beats and downbeats in audio. Returns beat times in seconds, estimated BPM, and optionally frame-level probabilities.")
+                .with_input_schema(schema_for::<AnalyzeBeatsRequest>())
+                .read_only(),
         ]
     }
 
@@ -114,15 +135,25 @@ impl Handler for HootHandler {
                     .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
                 self.server.cas_inspect(request).await
             }
-            "upload_file" => {
+            "cas_upload_file" => {
                 let request: UploadFileRequest = serde_json::from_value(args)
                     .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
                 self.server.upload_file(request).await
             }
-            "midi_to_wav" => {
+            "convert_midi_to_wav" => {
                 let request: MidiToWavRequest = serde_json::from_value(args)
                     .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
                 self.server.midi_to_wav(request).await
+            }
+            "soundfont_inspect" => {
+                let request: SoundfontInspectRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.soundfont_inspect(request).await
+            }
+            "soundfont_preset_inspect" => {
+                let request: SoundfontPresetInspectRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.soundfont_preset_inspect(request).await
             }
 
             // Orpheus tools
@@ -148,25 +179,25 @@ impl Handler for HootHandler {
             }
 
             // Job tools
-            "get_job_status" => {
+            "job_status" => {
                 let request: GetJobStatusRequest = serde_json::from_value(args)
                     .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
                 self.server.get_job_status(request).await
             }
-            "list_jobs" => {
+            "job_list" => {
                 self.server.list_jobs().await
             }
-            "cancel_job" => {
+            "job_cancel" => {
                 let request: CancelJobRequest = serde_json::from_value(args)
                     .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
                 self.server.cancel_job(request).await
             }
-            "poll" => {
+            "job_poll" => {
                 let request: PollRequest = serde_json::from_value(args)
                     .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
                 self.server.poll(request).await
             }
-            "sleep" => {
+            "job_sleep" => {
                 let request: SleepRequest = serde_json::from_value(args)
                     .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
                 self.server.sleep(request).await
@@ -270,11 +301,33 @@ impl Handler for HootHandler {
                 }
             }
 
-            // DeepSeek tools
-            "deepseek_query" => {
-                let request: DeepSeekQueryRequest = serde_json::from_value(args)
+            // ABC notation tools
+            "abc_parse" => {
+                let request: AbcParseRequest = serde_json::from_value(args)
                     .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
-                self.server.deepseek_query(request).await
+                self.server.abc_parse(request).await
+            }
+            "abc_to_midi" => {
+                let request: AbcToMidiRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.abc_to_midi(request).await
+            }
+            "abc_validate" => {
+                let request: AbcValidateRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.abc_validate(request).await
+            }
+            "abc_transpose" => {
+                let request: AbcTransposeRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.abc_transpose(request).await
+            }
+
+            // Beat detection tools (BeatThis model)
+            "beatthis_analyze" => {
+                let request: AnalyzeBeatsRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.analyze_beats(request).await
             }
 
             _ => Err(ErrorData::tool_not_found(name)),
@@ -516,9 +569,11 @@ impl Handler for HootHandler {
                 let bars = arguments.get("bars").map(|s| s.as_str()).unwrap_or("4");
                 let direction = arguments.get("direction").map(|s| s.as_str()).unwrap_or("develop");
 
-                let artifacts = self.server.artifact_store.all().unwrap_or_default();
+                let store = self.server.artifact_store.read()
+                    .map_err(|_| ErrorData::internal_error("Lock poisoned"))?;
+                let artifacts = store.all().unwrap_or_default();
                 let artifact = artifacts.iter()
-                    .find(|a| a.data.get("hash").and_then(|h| h.as_str()) == Some(hash));
+                    .find(|a| a.content_hash.as_str() == hash);
 
                 let artifact_info = if let Some(a) = artifact {
                     format!(
@@ -556,7 +611,9 @@ impl Handler for HootHandler {
                     .ok_or_else(|| ErrorData::invalid_params("base_hash is required"))?;
                 let roles = arguments.get("roles").map(|s| s.as_str()).unwrap_or("bass, pad");
 
-                let artifacts = self.server.artifact_store.all().unwrap_or_default();
+                let store = self.server.artifact_store.read()
+                    .map_err(|_| ErrorData::internal_error("Lock poisoned"))?;
+                let artifacts = store.all().unwrap_or_default();
                 let existing_parts: HashMap<String, usize> = artifacts.iter()
                     .filter(|a| a.has_tag("type:midi"))
                     .flat_map(|a| a.tags_with_prefix("role:"))
@@ -600,16 +657,18 @@ impl Handler for HootHandler {
                     .ok_or_else(|| ErrorData::invalid_params("hash is required"))?;
                 let intensity = arguments.get("intensity").map(|s| s.as_str()).unwrap_or("moderate");
 
-                let artifacts = self.server.artifact_store.all().unwrap_or_default();
+                let store = self.server.artifact_store.read()
+                    .map_err(|_| ErrorData::internal_error("Lock poisoned"))?;
+                let artifacts = store.all().unwrap_or_default();
                 let artifact = artifacts.iter()
-                    .find(|a| a.data.get("hash").and_then(|h| h.as_str()) == Some(hash));
+                    .find(|a| a.content_hash.as_str() == hash);
 
                 let variation_info = if let Some(a) = artifact {
                     if let Some(set_id) = &a.variation_set_id {
                         let set_count = artifacts.iter()
-                            .filter(|v| v.variation_set_id.as_ref() == Some(set_id))
+                            .filter(|v| v.variation_set_id.as_ref().map(|s| s.as_str()) == Some(set_id.as_str()))
                             .count();
-                        format!("Part of variation set '{}' with {} existing variations.", set_id, set_count)
+                        format!("Part of variation set '{}' with {} existing variations.", set_id.as_str(), set_count)
                     } else {
                         "Not in a variation set yet.".to_string()
                     }
@@ -648,9 +707,11 @@ impl Handler for HootHandler {
                 let hash = arguments.get("hash")
                     .ok_or_else(|| ErrorData::invalid_params("hash is required"))?;
 
-                let artifacts = self.server.artifact_store.all().unwrap_or_default();
+                let store = self.server.artifact_store.read()
+                    .map_err(|_| ErrorData::internal_error("Lock poisoned"))?;
+                let artifacts = store.all().unwrap_or_default();
                 let artifact = artifacts.iter()
-                    .find(|a| a.data.get("hash").and_then(|h| h.as_str()) == Some(hash));
+                    .find(|a| a.content_hash.as_str() == hash);
 
                 let artifact_details = if let Some(a) = artifact {
                     format!(
@@ -658,9 +719,9 @@ impl Handler for HootHandler {
                         a.creator,
                         a.created_at.to_rfc3339(),
                         a.tags.join(", "),
-                        a.data.get("model").and_then(|v| v.as_str()).unwrap_or("unknown"),
-                        a.data.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                        a.data.get("tokens").and_then(|v| v.as_u64()).unwrap_or(0)
+                        a.metadata.get("model").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                        a.metadata.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                        a.metadata.get("tokens").and_then(|v| v.as_u64()).unwrap_or(0)
                     )
                 } else {
                     "No artifact metadata available.".to_string()
@@ -688,7 +749,9 @@ impl Handler for HootHandler {
             "next-in-session" => {
                 use crate::artifact_store::ArtifactStore;
 
-                let artifacts = self.server.artifact_store.all().unwrap_or_default();
+                let store = self.server.artifact_store.read()
+                    .map_err(|_| ErrorData::internal_error("Lock poisoned"))?;
+                let artifacts = store.all().unwrap_or_default();
                 let midi_artifacts: Vec<_> = artifacts.iter()
                     .filter(|a| a.has_tag("type:midi"))
                     .collect();
@@ -837,7 +900,8 @@ impl HootHandler {
         use crate::artifact_store::ArtifactStore;
         use std::collections::HashSet;
 
-        let store = &self.server.artifact_store;
+        let store = self.server.artifact_store.read()
+            .map_err(|_| ErrorData::internal_error("Lock poisoned"))?;
 
         match path {
             "summary" => {
@@ -913,7 +977,7 @@ impl HootHandler {
                 let all = store.all()
                     .map_err(|e| ErrorData::internal_error(e.to_string()))?;
                 let mut filtered: Vec<_> = all.into_iter()
-                    .filter(|a| a.variation_set_id.as_deref() == Some(set_id))
+                    .filter(|a| a.variation_set_id.as_ref().map(|s| s.as_str()) == Some(set_id))
                     .collect();
                 filtered.sort_by_key(|a| a.variation_index);
 
@@ -934,9 +998,9 @@ impl HootHandler {
                 let mut current_id = Some(artifact_id.to_string());
 
                 while let Some(id) = current_id {
-                    if let Some(artifact) = all.iter().find(|a| a.id == id) {
+                    if let Some(artifact) = all.iter().find(|a| a.id.as_str() == id) {
                         chain.push(Self::artifact_to_json(artifact));
-                        current_id = artifact.parent_id.clone();
+                        current_id = artifact.parent_id.as_ref().map(|p| p.as_str().to_string());
                     } else {
                         break;
                     }
@@ -957,11 +1021,11 @@ impl HootHandler {
                     .map_err(|e| ErrorData::internal_error(e.to_string()))?
                     .ok_or_else(|| ErrorData::invalid_params(format!("Artifact not found: {}", artifact_id)))?;
 
-                let cas_info = artifact.data.get("hash").and_then(|h| h.as_str()).map(|hash| {
-                    serde_json::json!({
-                        "hash": hash,
-                        "uri": format!("cas://{}", hash),
-                    })
+                let hash = artifact.content_hash.as_str();
+                let cas_info = serde_json::json!({
+                    "hash": hash,
+                    "uri": format!("cas://{}", hash),
+                    "content_url": format!("/artifact/{}", artifact.id.as_str()),
                 });
 
                 let result = serde_json::json!({
@@ -987,14 +1051,18 @@ impl HootHandler {
 
     fn artifact_to_json(a: &crate::artifact_store::Artifact) -> serde_json::Value {
         serde_json::json!({
-            "id": a.id,
+            "id": a.id.as_str(),
+            "content_hash": a.content_hash.as_str(),
+            "content_url": format!("/artifact/{}", a.id.as_str()),
             "creator": a.creator,
             "created_at": a.created_at.to_rfc3339(),
             "tags": a.tags,
-            "variation_set_id": a.variation_set_id,
+            "variation_set_id": a.variation_set_id.as_ref().map(|s| s.as_str()),
             "variation_index": a.variation_index,
-            "parent_id": a.parent_id,
-            "data": a.data,
+            "parent_id": a.parent_id.as_ref().map(|s| s.as_str()),
+            "metadata": a.metadata,
+            "access_count": a.access_count,
+            "last_accessed": a.last_accessed.map(|t| t.to_rfc3339()),
         })
     }
 }

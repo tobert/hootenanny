@@ -1,13 +1,16 @@
-# HalfRemembered MCP 🎵
+# Hootenanny 🎵
 
 **Where AI agents jam together and make music.**
 
-An MCP server for collaborative human-AI music creation. We're building an ensemble performance space where Claude, Gemini, DeepSeek, and Orpheus create music together through intention, emergence, and a little chaos.
+Hootenanny is an MCP server for collaborative human-AI music creation. We're building an ensemble performance space where Claude, Gemini, and Orpheus create music together through intention, emergence, and a little chaos.
 
 ## ⚡ Quick Start
 
 ```bash
-# Run the server with auto-reload
+# Run the server
+cargo run -p hootenanny
+
+# With auto-reload (recommended for development)
 cargo watch -x 'run -p hootenanny'
 
 # Connect from Claude Code, Gemini CLI, or any MCP client
@@ -17,282 +20,226 @@ cargo watch -x 'run -p hootenanny'
 
 ## 🎭 What We Built
 
-This isn't your typical MCP server. We've got:
+### 🎵 Music Generation (Orpheus Models)
+```
+orpheus_generate          Generate MIDI from scratch
+orpheus_generate_seeded   Generate from a seed MIDI
+orpheus_continue          Continue existing MIDI
+orpheus_bridge            Create bridges between sections
+```
 
-### 🎵 **Music Generation** (Orpheus Models)
-- `orpheus_generate` - Generate MIDI from scratch (async!)
-- `orpheus_loops` - Multi-instrumental loops
-- `orpheus_bridge` - Musical bridges between sections
-- `orpheus_continue` - Continue existing MIDI sequences
-- `orpheus_generate_seeded` - Seed-based variations
-- `orpheus_classify` - Human vs AI music detector
+All async - launch jobs, get `job_id` back instantly, poll when ready.
 
-All async-by-design. Launch jobs, get job_id back instantly, poll when ready.
+### 🎼 ABC Notation
+```
+abc_parse                 Parse ABC notation → AST
+abc_to_midi               Convert ABC → MIDI artifact
+abc_validate              Validate syntax, get feedback
+abc_transpose             Transpose by semitones or to key
+```
 
-### 🔊 **Audio Rendering**
-- `midi_to_wav` - RustySynth rendering (async)
-- SoundFont support
-- HTTP streaming via `http://0.0.0.0:8080/cas/<hash>`
+### 🔊 Audio & Conversion
+```
+convert_midi_to_wav       Render MIDI → WAV with SoundFont
+soundfont_inspect         List SoundFont presets
+soundfont_preset_inspect  Inspect specific preset
+beatthis_analyze          Detect beats/BPM in audio
+```
 
-### 💾 **Content-Addressable Storage**
-- BLAKE3 hashing for all content
-- Store MIDI, audio, text, anything
-- `cas_store`, `cas_inspect`, `upload_file`
-- Automatic deduplication
+### 💾 Content-Addressable Storage (CAS)
+```
+cas_store                 Store base64 content → hash
+cas_inspect               Get metadata for hash
+cas_upload_file           Upload file from disk → hash
+```
 
-### 🤖 **Code Generation**
-- `deepseek_query` - Local DeepSeek Coder (async)
-- Chat-style API
-- Results stored in CAS
+BLAKE3 hashing, automatic deduplication, all content addressable.
 
-### ⚡ **Async Job System**
-All slow operations return job_id immediately:
+### 📦 Artifacts (Shareable Links!)
+
+Artifacts wrap CAS content with context:
+- **HTTP Access**: `GET /artifact/{id}` streams content with MIME type
+- **Metadata**: `GET /artifact/{id}/meta` returns JSON with lineage
+- **Listing**: `GET /artifacts?tag=X&creator=Y` filters artifacts
+- **Tracking**: Access counts, last accessed timestamps
+
+```javascript
+// Generate something
+job = orpheus_generate({temperature: 1.0})
+result = job_poll({job_ids: [job.job_id], timeout_ms: 60000})
+
+// Share via artifact URL (not raw CAS hash!)
+// http://localhost:8080/artifact/artifact_abc123def456
+```
+
+### ⚡ Async Job System
+```
+job_status                Check job state
+job_list                  List all jobs
+job_cancel                Cancel running job
+job_poll                  Wait for completion (any/all modes)
+job_sleep                 Sleep for duration
+```
+
+All slow operations return `job_id` immediately:
 
 ```javascript
 // Launch 3 generations in parallel
-job1 = orpheus_generate({temp: 0.8})
-job2 = orpheus_generate({temp: 1.0})
-job3 = orpheus_generate({temp: 1.2})
+jobs = [
+    orpheus_generate({temperature: 0.8}),
+    orpheus_generate({temperature: 1.0}),
+    orpheus_generate({temperature: 1.2})
+]
 
 // Wait for first one
-result = poll({timeout_ms: 60000, job_ids: [job1, job2, job3], mode: "any"})
+result = job_poll({
+    timeout_ms: 60000,
+    job_ids: jobs.map(j => j.job_id),
+    mode: "any"
+})
 
 // Or wait for all
-result = poll({timeout_ms: 120000, job_ids: [...], mode: "all"})
+result = job_poll({timeout_ms: 120000, job_ids: [...], mode: "all"})
 ```
 
-Job management tools:
-- `poll(timeout, jobs, mode)` - Flexible waiting (any/all modes)
-- `sleep(milliseconds)` - Simple delays
-- `get_job_status(job_id)` - Check one job
-- `wait_for_job(job_id)` - Block until complete
-- `list_jobs()` - See everything running
-- `cancel_job(job_id)` - Abort running job
-
-### 📦 **Artifact Tracking**
-Every generation is tracked with metadata:
-- Variation sets and indices
-- Parent/child lineage
-- Tags for organization
-- Creator attribution
-- Rich type system (no primitive obsession!)
-
-### 🌳 **Conversation Tree** (Musical Intentions)
-Event Duality architecture - intentions become sounds:
-
-```rust
-enum Event {
-    Abstract(Intention),  // "play C softly"
-    Concrete(Sound),      // pitch:60, velocity:40
-}
+### 🎛️ Audio Graph
+```
+graph_bind                Bind identity to device
+graph_tag                 Tag an identity
+graph_connect             Connect nodes
+graph_find                Query identities
 ```
 
-Tools:
-- `play` - Transform intention → sound
-- `add_node` - Add to conversation tree
-- `fork_branch` - Explore alternative directions
-- `merge_branches` - Bring ideas together
-- `get_tree_status` - See the full state
-
-## 🚀 Running the Server
-
-### Development Mode (recommended)
-```bash
-cargo watch -x 'run -p hootenanny'
+### 🤖 Agent Chat (LLM Sub-agents)
+```
+agent_chat_new            Create session with backend
+agent_chat_send           Send message
+agent_chat_poll           Poll for response
+agent_chat_cancel         Cancel session
+agent_chat_status         Get session status
+agent_chat_history        Get message history
+agent_chat_summary        Get AI summary
+agent_chat_list           List sessions
+agent_chat_backends       List available backends
 ```
 
-Auto-rebuilds when you change code. Pairs beautifully with Claude Code's `/mcp` reconnect.
+## 🌐 HTTP Endpoints
 
-### Basic Mode
-```bash
-cargo run -p hootenanny
 ```
+GET  /health                    Server health, uptime, stats
 
-### Connecting from Clients
+GET  /artifact/{id}             Stream artifact content (MIME-typed)
+GET  /artifact/{id}/meta        Artifact metadata as JSON
+GET  /artifacts                 List artifacts (filterable)
 
-**Claude Code:** Just run `/mcp` after starting the server
-
-**Claude CLI:**
-```bash
-# Streamable HTTP (recommended)
-claude mcp add -t http hrmcp http://127.0.0.1:8080/mcp
-
-# SSE (legacy)
-claude mcp add -t sse hrmcp http://127.0.0.1:8080/mcp/sse
-```
-
-**Gemini CLI:**
-```bash
-# Streamable HTTP (recommended)
-gemini mcp add -t http hrmcp http://127.0.0.1:8080/mcp
-
-# SSE (legacy)
-gemini mcp add -t sse hrmcp http://127.0.0.1:8080/mcp/sse
+POST /mcp                       MCP Streamable HTTP (recommended)
+GET  /mcp/sse                   MCP SSE transport (legacy)
 ```
 
 ## 🎯 Real-World Examples
 
-### Generate Music Variations
-```javascript
-// Launch 3 variations with different temperatures
-jobs = []
-for temp in [0.8, 1.0, 1.2]:
-    job = orpheus_generate({
-        temperature: temp,
-        max_tokens: 256,
-        num_variations: 1,
-        variation_set_id: "experiment-1"
-    })
-    jobs.push(job.job_id)
-
-// Wait for all to complete
-result = poll({timeout_ms: 120000, job_ids: jobs, mode: "all"})
-
-// Now all variations are ready with shared variation_set_id
-```
-
-### Render to Audio
+### Generate and Render Music
 ```javascript
 // Generate MIDI
-gen = orpheus_loops({max_tokens: 512})
-result = wait_for_job(gen.job_id)
+gen = orpheus_generate({temperature: 1.0, max_tokens: 512})
+result = job_poll({job_ids: [gen.job_id], timeout_ms: 60000})
 
 // Render to WAV
-wav = midi_to_wav({
-    input_hash: result.output_hashes[0],
+wav = convert_midi_to_wav({
+    input_hash: result.completed[0].result.output_hashes[0],
     soundfont_hash: "<your-soundfont-hash>",
     sample_rate: 44100
 })
-wav_result = wait_for_job(wav.job_id)
+wav_result = job_poll({job_ids: [wav.job_id], timeout_ms: 30000})
 
-// Play in browser: http://0.0.0.0:8080/cas/<wav_result.output_hash>
+// Play via artifact URL
+// http://localhost:8080/artifact/artifact_...
 ```
 
-### Ask DeepSeek for Help
+### ABC Notation to MIDI
 ```javascript
-job = deepseek_query({
-    messages: [{
-        role: "user",
-        content: "Write a Rust function to parse MIDI events"
-    }]
+abc = abc_to_midi({
+    abc: `X:1
+T:Simple Melody
+M:4/4
+K:C
+CDEF|GABc|`,
+    tempo_override: 120
 })
+// Returns artifact_id for the MIDI
+```
 
-result = wait_for_job(job.job_id)
-// Code is in result.text and stored in CAS
+### Parallel Generation
+```javascript
+// Launch multiple jobs
+jobs = []
+for (const temp of [0.8, 1.0, 1.2]) {
+    const job = orpheus_generate({
+        temperature: temp,
+        variation_set_id: "experiment-1"
+    })
+    jobs.push(job.job_id)
+}
+
+// Wait for all
+result = job_poll({timeout_ms: 120000, job_ids: jobs, mode: "all"})
+// All variations tagged with same variation_set_id
 ```
 
 ## 🏗️ Architecture
 
 **Crates:**
-- `hootenanny` - MCP server, job system, tools
-- `resonode` - Musical domain (Event Duality, scales, realization)
+- `hootenanny` - MCP server, tools, job system
+- `baton` - MCP protocol implementation
+- `abc` - ABC notation parser and MIDI converter
+- `resonode` - Musical domain types
+- `audio-graph-mcp` - Audio routing graph
+- `llm-mcp-bridge` - LLM sub-agent support
 
 **Key Patterns:**
-- **Async-by-design:** All slow tools return job_id immediately
-- **Type-rich domain:** No primitive obsession, enums tell stories
-- **Content-addressable:** Everything has a hash, nothing duplicates
-- **Lineage tracking:** Know where every artifact came from
-- **SSE transport:** Multi-client HTTP streaming
-
-## 🧠 For Agent Developers
-
-**Using the async tools:**
-- ALL Orpheus tools are async (return job_id)
-- `midi_to_wav` and `deepseek_query` are async
-- Use `poll()` for flexible waiting
-- Use `sleep()` when you just need a delay
-- Check `CLAUDE.md` / `BOTS.md` for full agent context
-
-**The pattern:**
-1. Launch job → get `job_id`
-2. Do other work (or launch more jobs!)
-3. `poll()` or `wait_for_job()` to get results
-4. Results include artifact_ids with full lineage
-
-**Natural parallelism:**
-```javascript
-// This is the way
-jobs = [
-    orpheus_generate({temp: 0.9}),
-    orpheus_loops({num_variations: 2}),
-    deepseek_query({messages: [...]})
-]
-
-// All running in parallel!
-results = poll({timeout_ms: 120000, job_ids: jobs.map(j => j.job_id), mode: "all"})
-```
-
-## 📊 Current Status
-
-✅ **Async job system** - Background tasks, polling, status tracking
-✅ **Orpheus integration** - 6 model variants, all async
-✅ **Audio rendering** - MIDI→WAV with RustySynth
-✅ **CAS** - BLAKE3 content storage
-✅ **Artifact tracking** - Variations, lineage, metadata
-✅ **DeepSeek** - Local code generation
-✅ **Conversation tree** - Musical intention → sound
-
-## 🎨 The Vision
-
-Building a real-time music generation system that is **fast, weird, and expressive**. An ensemble of AI models (Orpheus for music, DeepSeek for code, Claude/Gemini for reasoning) jamming together through:
-
-- Multi-agent musical dialogue
-- Conversation trees for improvisation
-- Temporal forking (explore alternate takes)
-- Real-time performance
-
-Think: **Git for music improvisation** + **MCP for agent collaboration** + **Actually sounds good**
+- **Async-by-design:** Slow tools return `job_id` immediately
+- **Rich types:** `ContentHash`, `ArtifactId`, `VariationSetId` (no primitive obsession)
+- **Artifact-centric:** Share artifacts, not raw hashes
+- **Content-addressable:** BLAKE3 hashing, automatic dedup
+- **Tool prefixes:** `cas_*`, `job_*`, `orpheus_*`, `abc_*`, `convert_*`, `graph_*`
 
 ## 🛠️ Development
 
-**Tools you'll want:**
 ```bash
-cargo install cargo-watch  # Auto-reload on changes
-```
+cargo install cargo-watch  # Auto-reload
 
-**Workflow:**
-```bash
 # Terminal 1: Server with auto-reload
 cargo watch -x 'run -p hootenanny'
 
 # Terminal 2: Claude Code or other MCP client
-# Just /mcp to reconnect after code changes
+# /mcp to reconnect after changes
 ```
 
 **Using jj (Jujutsu):**
-We use jj for version control. See `CLAUDE.md` for the full workflow. Key commands:
-
 ```bash
 jj new -m "feat: your feature"     # Start new work
-jj describe                         # Update description as you learn
+jj describe                         # Update as you learn
 jj git push -c @                    # Share your work
 ```
 
 ## 📝 Documentation
 
-- `CLAUDE.md` / `BOTS.md` - Agent context (read this if you're an LLM!)
-- `docs/agents/` - Agent memory system (NOW.md, PATTERNS.md, CONTEXT.md)
-- Tool descriptions - Built into MCP (list_tools)
+- `CLAUDE.md` / `docs/BOTS.md` - Agent context
+- `docs/agents/` - Agent memory system
+- Tool descriptions built into MCP (`list_tools`)
 
-## 🎵 Try It
+## 📊 Status
 
-```javascript
-// The original hello world - still works!
-play({what: "C", how: "softly"})
-// → {pitch: 60, velocity: 40}
-
-// But now we can do this:
-job1 = orpheus_loops({temperature: 1.1, max_tokens: 256})
-job2 = orpheus_generate({temperature: 0.9, max_tokens: 128})
-
-results = poll({timeout_ms: 60000, job_ids: [job1, job2], mode: "all"})
-
-// Two pieces of original music, generated in parallel, ready to jam
-```
+✅ Async job system with polling
+✅ Orpheus MIDI generation (4 modes)
+✅ ABC notation → MIDI
+✅ Audio rendering (MIDI → WAV)
+✅ Artifact tracking with access logs
+✅ Audio graph for routing
+✅ LLM sub-agent support
+✅ Beat detection (BeatThis)
 
 ---
 
-**Status**: ✅ Making music
-**Contributors**: Amy Tobey, Claude, Gemini, DeepSeek
-**Vibe**: 🎵 Let's jam
-**Last Updated**: 2025-11-22 (Async job system release)
+**Contributors**: Amy Tobey, Claude, Gemini
+**Last Updated**: 2025-12-02

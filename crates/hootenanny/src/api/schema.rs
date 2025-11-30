@@ -304,22 +304,130 @@ pub struct GraphConnectRequest {
     pub transport: Option<String>,
 }
 
-// --- DeepSeek Requests ---
+// --- ABC Notation Requests ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct DeepSeekMessage {
-    #[schemars(description = "Role: 'system', 'user', or 'assistant'")]
-    pub role: String,
-
-    #[schemars(description = "Message content")]
-    pub content: String,
+pub struct AbcParseRequest {
+    #[schemars(description = "ABC notation string to parse")]
+    pub abc: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct DeepSeekQueryRequest {
-    #[schemars(description = "Chat messages in OpenAI format")]
-    pub messages: Vec<DeepSeekMessage>,
+pub struct AbcToMidiRequest {
+    #[schemars(description = "ABC notation to convert")]
+    pub abc: String,
 
-    #[schemars(description = "Model name (default: 'deepseek-coder-v2-lite')")]
-    pub model: Option<String>,
+    #[schemars(description = "Override tempo (BPM)")]
+    pub tempo_override: Option<u16>,
+
+    #[schemars(description = "Semitones to transpose")]
+    pub transpose: Option<i8>,
+
+    #[schemars(description = "MIDI velocity (1-127)")]
+    pub velocity: Option<u8>,
+
+    #[schemars(description = "MIDI channel (0-15, default 0). Use 9 for GM drums.")]
+    pub channel: Option<u8>,
+
+    // Standard artifact fields
+    #[schemars(description = "Optional variation set ID")]
+    pub variation_set_id: Option<String>,
+
+    #[schemars(description = "Optional parent artifact ID")]
+    pub parent_id: Option<String>,
+
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AbcValidateRequest {
+    #[schemars(description = "ABC notation string to validate")]
+    pub abc: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AbcTransposeRequest {
+    #[schemars(description = "ABC notation to transpose")]
+    pub abc: String,
+
+    #[schemars(description = "Semitones to transpose (positive = up)")]
+    pub semitones: Option<i8>,
+
+    #[schemars(description = "Target key (e.g., 'Am', 'Bb')")]
+    pub target_key: Option<String>,
+}
+
+// --- SoundFont Inspection ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SoundfontInspectRequest {
+    #[schemars(description = "CAS hash of SoundFont file to inspect")]
+    pub soundfont_hash: String,
+
+    #[schemars(description = "Include detailed drum mappings for percussion presets (bank 128)")]
+    #[serde(default)]
+    pub include_drum_map: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SoundfontPresetInspectRequest {
+    #[schemars(description = "CAS hash of SoundFont file")]
+    pub soundfont_hash: String,
+
+    #[schemars(description = "Bank number (0 for melodic, 128 for drums)")]
+    pub bank: i32,
+
+    #[schemars(description = "Program/preset number (0-127)")]
+    pub program: i32,
+}
+
+// --- Beat Detection Requests ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AnalyzeBeatsRequest {
+    #[schemars(description = "Path to audio file (WAV, 22050 Hz mono, ≤30s)")]
+    pub audio_path: Option<String>,
+
+    #[schemars(description = "CAS hash of audio file (alternative to path)")]
+    pub audio_hash: Option<String>,
+
+    #[schemars(description = "Return frame-level probabilities (can be large)")]
+    #[serde(default)]
+    pub include_frames: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BeatThisServiceRequest {
+    pub audio: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_job_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BeatThisServiceResponse {
+    pub beats: Vec<f64>,
+    pub downbeats: Vec<f64>,
+    pub bpm: f64,
+    pub num_beats: usize,
+    pub num_downbeats: usize,
+    pub duration: f64,
+    pub frames: Option<BeatFrames>,
+    pub metadata: Option<BeatMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BeatFrames {
+    pub beat_probs: Vec<f64>,
+    pub downbeat_probs: Vec<f64>,
+    pub fps: u32,
+    pub num_frames: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BeatMetadata {
+    pub client_job_id: Option<String>,
 }

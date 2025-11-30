@@ -1,10 +1,18 @@
 use crate::api::service::EventDualityServer;
-use crate::api::schema::{CasStoreRequest, CasInspectRequest, UploadFileRequest, MidiToWavRequest};
+use crate::api::schema::{CasStoreRequest, CasInspectRequest, UploadFileRequest, MidiToWavRequest, SoundfontInspectRequest, SoundfontPresetInspectRequest};
 use crate::artifact_store::{Artifact, ArtifactStore};
-use crate::mcp_tools::rustysynth::render_midi_to_wav;
+use crate::mcp_tools::rustysynth::{render_midi_to_wav, inspect_soundfont, inspect_preset};
+use crate::types::{ArtifactId, ContentHash, VariationSetId};
 use baton::{ErrorData as McpError, CallToolResult, Content};
 use base64::{Engine as _, engine::general_purpose};
 use tracing;
+
+/// Look up an artifact ID by its content hash
+fn find_artifact_by_hash<S: ArtifactStore>(store: &S, content_hash: &str) -> Option<String> {
+    store.all().ok()?.into_iter()
+        .find(|a| a.content_hash.as_str() == content_hash)
+        .map(|a| a.id.as_str().to_string())
+}
 
 impl EventDualityServer {
     #[tracing::instrument(
@@ -143,6 +151,11 @@ impl EventDualityServer {
             .await
             .map_err(|e| McpError::internal_error(format!("Failed to read SoundFont file: {}", e)))?;
 
+        // Get SoundFont name for metadata (best effort)
+        let soundfont_name = inspect_soundfont(&sf_bytes, false)
+            .map(|info| info.info.name)
+            .ok();
+
         // Render MIDI to WAV
         let wav_bytes = render_midi_to_wav(&midi_bytes, &sf_bytes, sample_rate)
             .map_err(|e| McpError::internal_error(format!("Failed to render MIDI to WAV: {}", e)))?;
@@ -157,41 +170,71 @@ impl EventDualityServer {
 
         tracing::Span::current().record("cas.output_hash", &*wav_hash);
 
+        // Look up source artifact IDs
+        let store = self.artifact_store.read()
+            .map_err(|_| McpError::internal_error("Lock poisoned"))?;
+        let midi_artifact_id = find_artifact_by_hash(&*store, &request.input_hash);
+        let soundfont_artifact_id = find_artifact_by_hash(&*store, &request.soundfont_hash);
+        drop(store);
+
         // Create artifact for tracking
         let mut tags = request.tags.clone();
         tags.push("type:audio".to_string());
+        tags.push("format:wav".to_string());
         tags.push("tool:midi_to_wav".to_string());
 
-        let artifact_id = format!("artifact_{}", &wav_hash[..12]);
-        let data = serde_json::json!({
-            "hash": wav_hash,
-            "input_hash": request.input_hash,
-            "soundfont_hash": request.soundfont_hash,
-            "sample_rate": sample_rate,
-            "duration_secs": duration_secs,
-            "size_bytes": wav_size,
+        let content_hash = ContentHash::new(&wav_hash);
+        let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+        let metadata = serde_json::json!({
+            "type": "wav_render",
+            "source": {
+                "midi_hash": request.input_hash,
+                "midi_artifact_id": midi_artifact_id,
+            },
+            "soundfont": {
+                "hash": request.soundfont_hash,
+                "name": soundfont_name,
+                "artifact_id": soundfont_artifact_id,
+            },
+            "params": {
+                "sample_rate": sample_rate,
+            },
+            "output": {
+                "duration_seconds": duration_secs,
+                "channels": 2,
+                "bit_depth": 16,
+                "size_bytes": wav_size,
+            },
         });
 
         let mut artifact = Artifact::new(
             artifact_id.clone(),
+            content_hash,
             request.creator.unwrap_or_else(|| "unknown".to_string()),
-            data,
+            metadata,
         ).with_tags(tags);
 
+        // Acquire lock for artifact store operations
+        let store = self.artifact_store.write()
+            .map_err(|_| McpError::internal_error("Lock poisoned"))?;
+
         if let Some(set_id) = request.variation_set_id {
-            let next_idx = self.artifact_store.next_variation_index(&set_id)
+            let next_idx = store.next_variation_index(&set_id)
                 .unwrap_or(0);
-            artifact = artifact.with_variation_set(set_id, next_idx);
+            artifact = artifact.with_variation_set(VariationSetId::new(set_id), next_idx);
         }
 
         if let Some(parent_id) = request.parent_id {
-            artifact = artifact.with_parent(parent_id);
+            artifact = artifact.with_parent(ArtifactId::new(parent_id));
         }
-        self.artifact_store.put(artifact)
+
+        store.put(artifact)
             .map_err(|e| McpError::internal_error(format!("Failed to store artifact: {}", e)))?;
+        store.flush()
+            .map_err(|e| McpError::internal_error(format!("Failed to flush artifact store: {}", e)))?;
 
         let result = serde_json::json!({
-            "artifact_id": artifact_id,
+            "artifact_id": artifact_id.as_str(),
             "hash": wav_hash,
             "size_bytes": wav_size,
             "duration_secs": duration_secs,
@@ -199,6 +242,74 @@ impl EventDualityServer {
         });
 
         let json = serde_json::to_string(&result)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize response: {}", e)))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tracing::instrument(
+        name = "mcp.tool.soundfont_inspect",
+        skip(self, request),
+        fields(
+            soundfont.hash = %request.soundfont_hash,
+            soundfont.name = tracing::field::Empty,
+            soundfont.preset_count = tracing::field::Empty,
+        )
+    )]
+    pub async fn soundfont_inspect(
+        &self,
+        request: SoundfontInspectRequest,
+    ) -> Result<CallToolResult, McpError> {
+        // Fetch SoundFont bytes from CAS
+        let sf_ref = self.local_models.inspect_cas_content(&request.soundfont_hash)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Failed to get SoundFont from CAS: {}", e)))?;
+        let sf_path = sf_ref.local_path
+            .ok_or_else(|| McpError::internal_error("SoundFont not found in local CAS"))?;
+        let sf_bytes = tokio::fs::read(&sf_path)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Failed to read SoundFont file: {}", e)))?;
+
+        // Inspect the SoundFont
+        let inspection = inspect_soundfont(&sf_bytes, request.include_drum_map)
+            .map_err(|e| McpError::internal_error(format!("Failed to inspect SoundFont: {}", e)))?;
+
+        let span = tracing::Span::current();
+        span.record("soundfont.name", &*inspection.info.name);
+        span.record("soundfont.preset_count", inspection.info.preset_count);
+
+        let json = serde_json::to_string_pretty(&inspection)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize response: {}", e)))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tracing::instrument(
+        name = "mcp.tool.soundfont_preset_inspect",
+        skip(self, request),
+        fields(
+            soundfont.hash = %request.soundfont_hash,
+            preset.bank = request.bank,
+            preset.program = request.program,
+        )
+    )]
+    pub async fn soundfont_preset_inspect(
+        &self,
+        request: SoundfontPresetInspectRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let sf_ref = self.local_models.inspect_cas_content(&request.soundfont_hash)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Failed to get SoundFont from CAS: {}", e)))?;
+        let sf_path = sf_ref.local_path
+            .ok_or_else(|| McpError::internal_error("SoundFont not found in local CAS"))?;
+        let sf_bytes = tokio::fs::read(&sf_path)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Failed to read SoundFont file: {}", e)))?;
+
+        let inspection = inspect_preset(&sf_bytes, request.bank, request.program)
+            .map_err(|e| McpError::internal_error(format!("Failed to inspect preset: {}", e)))?;
+
+        let json = serde_json::to_string_pretty(&inspection)
             .map_err(|e| McpError::internal_error(format!("Failed to serialize response: {}", e)))?;
 
         Ok(CallToolResult::success(vec![Content::text(json)]))

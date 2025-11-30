@@ -73,12 +73,12 @@ async fn spawn_test_server_configured(
         let cas_dir = state_dir.join("cas");
         std::fs::create_dir_all(&cas_dir).unwrap();
         let cas = Cas::new(&cas_dir).unwrap();
-        let local_models = Arc::new(LocalModels::new(cas.clone(), 2000, 2001));
+        let local_models = Arc::new(LocalModels::new(cas.clone(), 2000));
 
         // Artifacts - always ephemeral
-        let artifact_store = Arc::new(
+        let artifact_store = Arc::new(std::sync::RwLock::new(
             FileStore::new(state_dir.join("artifacts.json")).unwrap()
-        );
+        ));
 
         // Jobs - always in-memory
         let job_store = Arc::new(JobStore::new());
@@ -259,11 +259,11 @@ async fn spawn_persistent_server(
         let cas_dir = state_dir.join("cas");
         std::fs::create_dir_all(&cas_dir).unwrap();
         let cas = Cas::new(&cas_dir).unwrap();
-        let local_models = Arc::new(LocalModels::new(cas.clone(), 2000, 2001));
+        let local_models = Arc::new(LocalModels::new(cas.clone(), 2000));
 
-        let artifact_store = Arc::new(
+        let artifact_store = Arc::new(std::sync::RwLock::new(
             FileStore::new(state_dir.join("artifacts.json")).unwrap()
-        );
+        ));
 
         let job_store = Arc::new(JobStore::new());
 

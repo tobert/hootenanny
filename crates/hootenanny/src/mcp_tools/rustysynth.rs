@@ -1,10 +1,12 @@
-//! RustySynth MIDI to WAV Rendering
+//! RustySynth MIDI to WAV Rendering and SoundFont Inspection
 //!
-//! Provides functions for rendering MIDI files to WAV format using SoundFonts.
+//! Provides functions for rendering MIDI files to WAV format using SoundFonts,
+//! and inspecting SoundFont contents including preset/instrument mappings.
 
 use anyhow::{Context, Result};
 use hound::{WavSpec, WavWriter};
 use rustysynth::{MidiFile, MidiFileSequencer, SoundFont, Synthesizer, SynthesizerSettings};
+use serde::Serialize;
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -126,6 +128,234 @@ pub fn calculate_wav_duration(wav_bytes: &[u8], sample_rate: u32) -> f64 {
     let audio_data_size = wav_bytes.len() - header_size;
     let samples = audio_data_size / 4; // 4 bytes per stereo sample
     samples as f64 / sample_rate as f64
+}
+
+// --- SoundFont Inspection Types ---
+
+/// Information about the SoundFont file
+#[derive(Debug, Serialize)]
+pub struct SoundfontInfo {
+    pub name: String,
+    pub preset_count: usize,
+    pub instrument_count: usize,
+    pub sample_count: usize,
+}
+
+/// A preset in the SoundFont
+#[derive(Debug, Serialize)]
+pub struct PresetInfo {
+    pub name: String,
+    pub bank: i32,
+    pub program: i32,
+    pub is_drum_kit: bool,
+}
+
+/// A drum mapping entry (for bank 128 presets)
+#[derive(Debug, Serialize)]
+pub struct DrumMapping {
+    pub preset_name: String,
+    pub bank: i32,
+    pub program: i32,
+    pub regions: Vec<PresetRegion>,
+}
+
+/// A preset region - the actual zones defined in the SF2
+#[derive(Debug, Serialize)]
+pub struct PresetRegion {
+    pub key_lo: i32,
+    pub key_hi: i32,
+    pub key_range: String,
+    pub instrument: String,
+}
+
+/// Complete SoundFont inspection result
+#[derive(Debug, Serialize)]
+pub struct SoundfontInspection {
+    pub info: SoundfontInfo,
+    pub presets: Vec<PresetInfo>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub drum_mappings: Vec<DrumMapping>,
+}
+
+/// Convert MIDI note number to note name
+fn midi_note_to_name(note: i32) -> String {
+    const NOTE_NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    let octave = (note / 12) - 1;
+    let note_idx = (note % 12) as usize;
+    format!("{}{}", NOTE_NAMES[note_idx], octave)
+}
+
+/// Inspect a SoundFont and return its structure
+///
+/// # Arguments
+/// * `soundfont_bytes` - SoundFont file content
+/// * `include_drum_map` - Whether to include detailed drum key mappings
+///
+/// # Returns
+/// SoundfontInspection with presets, instruments, and optional drum mappings
+pub fn inspect_soundfont(soundfont_bytes: &[u8], include_drum_map: bool) -> Result<SoundfontInspection> {
+    let mut cursor = Cursor::new(soundfont_bytes);
+    let soundfont = SoundFont::new(&mut cursor)
+        .map_err(|e| anyhow::anyhow!("Failed to load SoundFont: {:?}", e))?;
+
+    let sf_info = soundfont.get_info();
+    let presets = soundfont.get_presets();
+    let instruments = soundfont.get_instruments();
+    let samples = soundfont.get_sample_headers();
+
+    let info = SoundfontInfo {
+        name: sf_info.get_bank_name().to_string(),
+        preset_count: presets.len(),
+        instrument_count: instruments.len(),
+        sample_count: samples.len(),
+    };
+
+    let mut preset_infos: Vec<PresetInfo> = presets
+        .iter()
+        .map(|p| PresetInfo {
+            name: p.get_name().to_string(),
+            bank: p.get_bank_number(),
+            program: p.get_patch_number(),
+            is_drum_kit: p.get_bank_number() == 128,
+        })
+        .collect();
+
+    // Sort by bank then program
+    preset_infos.sort_by(|a, b| {
+        a.bank.cmp(&b.bank).then(a.program.cmp(&b.program))
+    });
+
+    let mut drum_mappings = Vec::new();
+
+    if include_drum_map {
+        // Show regions for drum kits (bank 128) or small soundfonts (likely single-purpose)
+        for preset in presets.iter() {
+            if preset.get_bank_number() == 128 || presets.len() <= 2 {
+                let mut regions = Vec::new();
+
+                for region in preset.get_regions() {
+                    let key_lo = region.get_key_range_start();
+                    let key_hi = region.get_key_range_end();
+                    let instrument_idx = region.get_instrument_id() as usize;
+
+                    let instrument_name = if instrument_idx < instruments.len() {
+                        instruments[instrument_idx].get_name().to_string()
+                    } else {
+                        format!("Instrument {}", instrument_idx)
+                    };
+
+                    let key_range = if key_lo == key_hi {
+                        midi_note_to_name(key_lo)
+                    } else {
+                        format!("{}-{}", midi_note_to_name(key_lo), midi_note_to_name(key_hi))
+                    };
+
+                    regions.push(PresetRegion {
+                        key_lo,
+                        key_hi,
+                        key_range,
+                        instrument: instrument_name,
+                    });
+                }
+
+                // Sort by key_lo
+                regions.sort_by_key(|r| r.key_lo);
+
+                if !regions.is_empty() {
+                    drum_mappings.push(DrumMapping {
+                        preset_name: preset.get_name().to_string(),
+                        bank: preset.get_bank_number(),
+                        program: preset.get_patch_number(),
+                        regions,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(SoundfontInspection {
+        info,
+        presets: preset_infos,
+        drum_mappings,
+    })
+}
+
+/// Result of inspecting a single preset
+#[derive(Debug, Serialize)]
+pub struct PresetInspection {
+    pub name: String,
+    pub bank: i32,
+    pub program: i32,
+    pub regions: Vec<RegionDetail>,
+}
+
+/// Detailed region info for a preset
+#[derive(Debug, Serialize)]
+pub struct RegionDetail {
+    pub keys: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub velocity: Option<String>,
+    pub instrument: String,
+}
+
+/// Inspect a specific preset by bank/program
+pub fn inspect_preset(soundfont_bytes: &[u8], bank: i32, program: i32) -> Result<PresetInspection> {
+    let mut cursor = Cursor::new(soundfont_bytes);
+    let soundfont = SoundFont::new(&mut cursor)
+        .map_err(|e| anyhow::anyhow!("Failed to load SoundFont: {:?}", e))?;
+
+    let presets = soundfont.get_presets();
+    let instruments = soundfont.get_instruments();
+
+    let preset = presets
+        .iter()
+        .find(|p| p.get_bank_number() == bank && p.get_patch_number() == program)
+        .ok_or_else(|| anyhow::anyhow!("Preset not found: bank {} program {}", bank, program))?;
+
+    let mut regions = Vec::new();
+    for region in preset.get_regions() {
+        let key_lo = region.get_key_range_start();
+        let key_hi = region.get_key_range_end();
+        let vel_lo = region.get_velocity_range_start();
+        let vel_hi = region.get_velocity_range_end();
+        let inst_id = region.get_instrument_id();
+
+        let keys = if key_lo == key_hi {
+            midi_note_to_name(key_lo)
+        } else {
+            format!("{}-{}", midi_note_to_name(key_lo), midi_note_to_name(key_hi))
+        };
+
+        let velocity = if vel_lo == 0 && vel_hi == 127 {
+            None
+        } else if vel_lo == vel_hi {
+            Some(format!("{}", vel_lo))
+        } else {
+            Some(format!("{}-{}", vel_lo, vel_hi))
+        };
+
+        let instrument = if inst_id < instruments.len() {
+            instruments[inst_id].get_name().to_string()
+        } else {
+            format!("#{}", inst_id)
+        };
+
+        regions.push(RegionDetail { keys, velocity, instrument });
+    }
+
+    regions.sort_by_key(|r| {
+        r.keys.split('-').next()
+            .and_then(|s| s.chars().last())
+            .map(|c| c.to_digit(10).unwrap_or(0) as i32)
+            .unwrap_or(0)
+    });
+
+    Ok(PresetInspection {
+        name: preset.get_name().to_string(),
+        bank,
+        program,
+        regions,
+    })
 }
 
 #[cfg(test)]
