@@ -19,6 +19,7 @@ pub mod progress;
 pub mod prompt;
 pub mod protocol;
 pub mod resource;
+pub mod sampling;
 pub mod tool;
 
 // Common types used across modules

@@ -294,3 +294,36 @@ All response types in `crates/hootenanny/src/api/responses.rs`:
 **Ready for**:
 - Live testing with MCP client
 - Phase 3: Sampling (server-initiated LLM requests)
+
+---
+
+## Phase 3 Implementation Log
+
+### 2025-12-03 Session 1: Sampling Types Created ✅
+
+**Completed**:
+- ✅ Created `crates/baton/src/types/sampling.rs` with complete type definitions
+- ✅ Added sampling module export to baton types
+- ✅ All sampling types with serde support and tests
+
+**Types Created**:
+- `SamplingMessage`, `SamplingRequest`, `SamplingResponse`
+- `ModelPreferences`, `ModelHint`, `IncludeContext`
+- `StopReason` enum
+- Reused common `Role` enum from baton types
+
+**Testing**: Unit tests passing in sampling.rs
+
+**Status**: ⏸️ **Paused** - Types complete, awaiting implementation of:
+- SamplingClient for bidirectional communication
+- Integration with dispatch and session layer
+- Sampler helper in ToolContext
+- Client capability storage
+
+**Recommendation**: Phase 3 requires significant bidirectional infrastructure. The types are ready, but full implementation needs careful design of:
+1. Request/response matching with oneshot channels
+2. Timeout handling (60s default)
+3. SSE event sending from server to client
+4. Integration with existing session/transport layer
+
+This is a good checkpoint before tackling the complex bidirectional communication.
