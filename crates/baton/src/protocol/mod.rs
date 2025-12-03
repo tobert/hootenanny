@@ -14,6 +14,7 @@ use tracing::Instrument;
 use crate::transport::McpState;
 use crate::types::error::ErrorData;
 use crate::types::jsonrpc::JsonRpcMessage;
+use crate::types::progress::{ProgressNotification, ProgressToken};
 use crate::types::prompt::{GetPromptResult, ListPromptsResult, Prompt};
 use crate::types::protocol::{
     InitializeParams, InitializeResult, Implementation, ServerCapabilities,
@@ -23,6 +24,41 @@ use crate::types::resource::{
     Resource, ResourceTemplate,
 };
 use crate::types::tool::{CallToolParams, CallToolResult, ListToolsResult, Tool};
+
+/// Sender for progress notifications.
+///
+/// Tools can use this to send progress updates back to the client during
+/// long-running operations.
+pub type ProgressSender = tokio::sync::mpsc::Sender<ProgressNotification>;
+
+/// Context passed to tool calls for sending progress updates and accessing session info.
+#[derive(Clone)]
+pub struct ToolContext {
+    /// Session ID for this request.
+    pub session_id: String,
+
+    /// Progress token from the request metadata (if client requested progress).
+    pub progress_token: Option<ProgressToken>,
+
+    /// Sender for progress notifications (if client requested progress).
+    pub progress_sender: Option<ProgressSender>,
+}
+
+impl ToolContext {
+    /// Send a progress notification to the client.
+    ///
+    /// Does nothing if no progress sender is available.
+    pub async fn send_progress(&self, progress: ProgressNotification) {
+        if let Some(ref sender) = self.progress_sender {
+            let _ = sender.send(progress).await;
+        }
+    }
+
+    /// Check if progress reporting is enabled for this request.
+    pub fn has_progress(&self) -> bool {
+        self.progress_token.is_some()
+    }
+}
 
 /// Handler trait for MCP server implementations.
 ///
@@ -36,6 +72,19 @@ pub trait Handler: Send + Sync + 'static {
 
     /// Execute a tool call.
     async fn call_tool(&self, name: &str, arguments: Value) -> Result<CallToolResult, ErrorData>;
+
+    /// Execute a tool call with context for progress reporting.
+    ///
+    /// Default implementation calls `call_tool` (ignoring context).
+    /// Override this to support progress notifications for long-running operations.
+    async fn call_tool_with_context(
+        &self,
+        name: &str,
+        arguments: Value,
+        _context: ToolContext,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call_tool(name, arguments).await
+    }
 
     // === Required: Server Info ===
 
@@ -254,15 +303,65 @@ async fn handle_call_tool<H: Handler>(
         .map(Value::Object)
         .unwrap_or(Value::Object(serde_json::Map::new()));
 
+    // Extract progress token from _meta field if present
+    let progress_token = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("_meta"))
+        .and_then(|m| m.get("progressToken"))
+        .and_then(|t| serde_json::from_value::<ProgressToken>(t.clone()).ok());
+
+    // Create progress channel if token is present
+    let (progress_tx, progress_rx) = if progress_token.is_some() {
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
+
+    // Spawn task to forward progress notifications to the client's SSE channel
+    if let (Some(_token), Some(mut rx)) = (progress_token.clone(), progress_rx) {
+        let session = state.sessions.get(session_id);
+        let session_tx = session.and_then(|s| s.tx.clone());
+
+        tokio::spawn(async move {
+            while let Some(progress) = rx.recv().await {
+                // Send as a JSON-RPC notification
+                let notification = JsonRpcMessage::notification(
+                    "notifications/progress",
+                    serde_json::to_value(&progress).unwrap_or_default(),
+                );
+
+                if let Some(ref tx) = session_tx {
+                    // Convert to SSE event
+                    let event_data = serde_json::to_string(&notification).unwrap_or_default();
+                    let event = axum::response::sse::Event::default()
+                        .event("message")
+                        .data(event_data);
+
+                    let _ = tx.send(Ok(event)).await;
+                }
+            }
+        });
+    }
+
+    // Create tool context
+    let context = ToolContext {
+        session_id: session_id.to_string(),
+        progress_token,
+        progress_sender: progress_tx,
+    };
+
     // Create child span for tool execution with MCP-specific attributes
     let tool_span = tracing::info_span!(
         "mcp.tool.call",
         mcp.tool.name = %params.name,
         mcp.session_id = %session_id,
+        mcp.has_progress = %context.has_progress(),
     );
 
     async {
-        let result = state.handler.call_tool(&params.name, arguments).await?;
+        let result = state.handler.call_tool_with_context(&params.name, arguments, context).await?;
 
         serde_json::to_value(&result)
             .map_err(|e| ErrorData::internal_error(format!("Failed to serialize result: {}", e)))

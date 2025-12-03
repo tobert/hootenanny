@@ -176,6 +176,16 @@ pub struct JsonRpcMessage {
 }
 
 impl JsonRpcMessage {
+    /// Create a new notification (no id).
+    pub fn notification(method: impl Into<String>, params: Value) -> Self {
+        Self {
+            jsonrpc: JsonRpcVersion,
+            id: None,
+            method: method.into(),
+            params: Some(params),
+        }
+    }
+
     /// Returns true if this is a notification (no id).
     pub fn is_notification(&self) -> bool {
         self.id.is_none()

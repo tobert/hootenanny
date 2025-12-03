@@ -29,6 +29,12 @@ music interactively.
 - **Enums as Storytellers:** Use enums to represent states, choices, and variations. `Result<T, E>` is a story about success or failure. `Option<T>` is a story about presence or absence. Let's use them to their full potential.
 - **Traits for Capabilities:** Define custom traits to describe the capabilities of your types. This allows for a more modular and extensible design.
 
+**Version Control Hygiene**:
+- **NEVER use wildcards when staging files.** No `git add .`, `git add -A`, or `jj track .`. These are landmines that commit unintended files, secrets, or work-in-progress.
+- **Always add files by explicit path.** Review what you're committing: `git add src/foo.rs src/bar.rs` or let jj auto-track and review with `jj status` before pushing.
+- **Review before pushing.** Use `jj diff` or `git diff --staged` to verify exactly what's going in. Catching a stray file now saves reverting commits later.
+- **Atomic commits.** One logical change per commit. If you're touching unrelated files, that's a sign to split the work.
+
 ## 🧠 Jujutsu: Your Persistent Memory System
 
 **Think of jj as your external memory that persists across sessions.** Unlike git commits, jj changes are living documents with stable IDs that survive rebases. Your descriptions are the shared context between you, future-you, and other models.

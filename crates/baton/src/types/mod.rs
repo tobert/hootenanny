@@ -10,10 +10,12 @@
 //! - `content` - Content types (text, image, audio, resource)
 //! - `resource` - Resource definitions and contents
 //! - `prompt` - Prompt templates and messages
+//! - `progress` - Progress notifications for long-running operations
 
 pub mod content;
 pub mod error;
 pub mod jsonrpc;
+pub mod progress;
 pub mod prompt;
 pub mod protocol;
 pub mod resource;

@@ -8,6 +8,7 @@ use baton::{
     CallToolResult, Content, ErrorData, Handler, Implementation,
     Prompt, PromptMessage, Resource, ResourceContents, ResourceTemplate, Tool, ToolSchema,
 };
+use baton::protocol::ToolContext;
 use baton::types::prompt::GetPromptResult;
 use baton::types::resource::ReadResourceResult;
 use serde_json::Value;
@@ -64,11 +65,13 @@ impl Handler for HootHandler {
                 .with_input_schema(schema_for::<OrpheusContinueRequest>()),
             Tool::new("orpheus_bridge", "Generate a transition clip between MIDI sections (returns bridge only)")
                 .with_input_schema(schema_for::<OrpheusBridgeRequest>()),
-            Tool::new("orpheus_loops", "Generate drum/percussion loops with Orpheus")
-                .with_input_schema(schema_for::<OrpheusLoopsRequest>()),
-            Tool::new("orpheus_classify", "Classify MIDI as human-composed or AI-generated")
-                .with_input_schema(schema_for::<OrpheusClassifyRequest>())
-                .read_only(),
+            // TODO: Implement orpheus_loops
+            // Tool::new("orpheus_loops", "Generate drum/percussion loops with Orpheus")
+            //     .with_input_schema(schema_for::<OrpheusLoopsRequest>()),
+            // TODO: Implement orpheus_classify
+            // Tool::new("orpheus_classify", "Classify MIDI as human-composed or AI-generated")
+            //     .with_input_schema(schema_for::<OrpheusClassifyRequest>())
+            //     .read_only(),
 
             // Job tools
             Tool::new("job_status", "Get the status of an async job")
@@ -135,27 +138,27 @@ impl Handler for HootHandler {
                 .with_input_schema(schema_for::<AnalyzeBeatsRequest>())
                 .read_only(),
 
-            // CLAP audio analysis
-            Tool::new("clap_analyze", "Analyze audio: extract embeddings, classify genre/mood, compare similarity")
-                .with_input_schema(schema_for::<ClapAnalyzeRequest>())
-                .read_only(),
+            // TODO: Implement CLAP audio analysis
+            // Tool::new("clap_analyze", "Analyze audio: extract embeddings, classify genre/mood, compare similarity")
+            //     .with_input_schema(schema_for::<ClapAnalyzeRequest>())
+            //     .read_only(),
 
-            // MusicGen text-to-music
-            Tool::new("musicgen_generate", "Generate music from text description using MusicGen")
-                .with_input_schema(schema_for::<MusicgenGenerateRequest>()),
+            // TODO: Implement MusicGen text-to-music
+            // Tool::new("musicgen_generate", "Generate music from text description using MusicGen")
+            //     .with_input_schema(schema_for::<MusicgenGenerateRequest>()),
 
-            // Anticipatory Music Transformer
-            Tool::new("anticipatory_generate", "Generate polyphonic MIDI with Stanford's Anticipatory Music Transformer")
-                .with_input_schema(schema_for::<AnticipatoryGenerateRequest>()),
-            Tool::new("anticipatory_continue", "Generate continuation clip from MIDI (returns new material only, not concatenated)")
-                .with_input_schema(schema_for::<AnticipatoryContinueRequest>()),
-            Tool::new("anticipatory_embed", "Extract hidden state embeddings from MIDI")
-                .with_input_schema(schema_for::<AnticipatoryEmbedRequest>())
-                .read_only(),
+            // TODO: Implement Anticipatory Music Transformer
+            // Tool::new("anticipatory_generate", "Generate polyphonic MIDI with Stanford's Anticipatory Music Transformer")
+            //     .with_input_schema(schema_for::<AnticipatoryGenerateRequest>()),
+            // Tool::new("anticipatory_continue", "Generate continuation clip from MIDI (returns new material only, not concatenated)")
+            //     .with_input_schema(schema_for::<AnticipatoryContinueRequest>()),
+            // Tool::new("anticipatory_embed", "Extract hidden state embeddings from MIDI")
+            //     .with_input_schema(schema_for::<AnticipatoryEmbedRequest>())
+            //     .read_only(),
 
-            // YuE text-to-song with vocals
-            Tool::new("yue_generate", "Generate a complete song with vocals from lyrics using YuE")
-                .with_input_schema(schema_for::<YueGenerateRequest>()),
+            // TODO: Implement YuE text-to-song with vocals
+            // Tool::new("yue_generate", "Generate a complete song with vocals from lyrics using YuE")
+            //     .with_input_schema(schema_for::<YueGenerateRequest>()),
         ]
     }
 
@@ -214,16 +217,18 @@ impl Handler for HootHandler {
                     .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
                 self.server.orpheus_bridge(request).await
             }
-            "orpheus_loops" => {
-                let request: OrpheusLoopsRequest = serde_json::from_value(args)
-                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
-                self.server.orpheus_loops(request).await
-            }
-            "orpheus_classify" => {
-                let request: OrpheusClassifyRequest = serde_json::from_value(args)
-                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
-                self.server.orpheus_classify(request).await
-            }
+            // TODO: Implement orpheus_loops
+            // "orpheus_loops" => {
+            //     let request: OrpheusLoopsRequest = serde_json::from_value(args)
+            //         .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+            //     self.server.orpheus_loops(request).await
+            // }
+            // TODO: Implement orpheus_classify
+            // "orpheus_classify" => {
+            //     let request: OrpheusClassifyRequest = serde_json::from_value(args)
+            //         .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+            //     self.server.orpheus_classify(request).await
+            // }
 
             // Job tools
             "job_status" => {
@@ -394,46 +399,74 @@ impl Handler for HootHandler {
                 self.server.analyze_beats(request).await
             }
 
-            // CLAP audio analysis
-            "clap_analyze" => {
-                let request: ClapAnalyzeRequest = serde_json::from_value(args)
-                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
-                self.server.clap_analyze(request).await
-            }
+            // TODO: Implement CLAP audio analysis
+            // "clap_analyze" => {
+            //     let request: ClapAnalyzeRequest = serde_json::from_value(args)
+            //         .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+            //     self.server.clap_analyze(request).await
+            // }
 
-            // MusicGen text-to-music
-            "musicgen_generate" => {
-                let request: MusicgenGenerateRequest = serde_json::from_value(args)
-                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
-                self.server.musicgen_generate(request).await
-            }
+            // TODO: Implement MusicGen text-to-music
+            // "musicgen_generate" => {
+            //     let request: MusicgenGenerateRequest = serde_json::from_value(args)
+            //         .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+            //     self.server.musicgen_generate(request).await
+            // }
 
-            // Anticipatory Music Transformer
-            "anticipatory_generate" => {
-                let request: AnticipatoryGenerateRequest = serde_json::from_value(args)
-                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
-                self.server.anticipatory_generate(request).await
-            }
-            "anticipatory_continue" => {
-                let request: AnticipatoryContinueRequest = serde_json::from_value(args)
-                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
-                self.server.anticipatory_continue(request).await
-            }
-            "anticipatory_embed" => {
-                let request: AnticipatoryEmbedRequest = serde_json::from_value(args)
-                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
-                self.server.anticipatory_embed(request).await
-            }
+            // TODO: Implement Anticipatory Music Transformer
+            // "anticipatory_generate" => {
+            //     let request: AnticipatoryGenerateRequest = serde_json::from_value(args)
+            //         .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+            //     self.server.anticipatory_generate(request).await
+            // }
+            // "anticipatory_continue" => {
+            //     let request: AnticipatoryContinueRequest = serde_json::from_value(args)
+            //         .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+            //     self.server.anticipatory_continue(request).await
+            // }
+            // "anticipatory_embed" => {
+            //     let request: AnticipatoryEmbedRequest = serde_json::from_value(args)
+            //         .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+            //     self.server.anticipatory_embed(request).await
+            // }
 
-            // YuE text-to-song with vocals
-            "yue_generate" => {
-                let request: YueGenerateRequest = serde_json::from_value(args)
-                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
-                self.server.yue_generate(request).await
-            }
+            // TODO: Implement YuE text-to-song with vocals
+            // "yue_generate" => {
+            //     let request: YueGenerateRequest = serde_json::from_value(args)
+            //         .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+            //     self.server.yue_generate(request).await
+            // }
 
             _ => Err(ErrorData::tool_not_found(name)),
         }
+    }
+
+    async fn call_tool_with_context(
+        &self,
+        name: &str,
+        args: Value,
+        context: ToolContext,
+    ) -> Result<CallToolResult, ErrorData> {
+        // Log progress capability
+        if context.has_progress() {
+            tracing::debug!(
+                tool = name,
+                session_id = %context.session_id,
+                "Tool called with progress token"
+            );
+        }
+
+        // For now, forward to existing implementations
+        // TODO: Add progress reporting to job-spawning tools:
+        // - orpheus_generate, orpheus_generate_seeded, orpheus_continue
+        // - orpheus_bridge, orpheus_loops
+        // - convert_midi_to_wav
+        // - musicgen_generate
+        // - anticipatory_generate, anticipatory_continue
+        // - yue_generate
+        // - beatthis_analyze, clap_analyze
+
+        self.call_tool(name, args).await
     }
 
     fn server_info(&self) -> Implementation {
