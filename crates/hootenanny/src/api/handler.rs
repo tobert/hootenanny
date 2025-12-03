@@ -297,14 +297,14 @@ impl Handler for HootHandler {
 
                 match graph_bind(&self.server.audio_graph_db, &request.id, &request.name, hints) {
                     Ok(identity) => {
-                        let result = serde_json::json!({
-                            "id": identity.id.0,
-                            "name": identity.name,
-                            "created_at": identity.created_at,
-                        });
-                        Ok(CallToolResult::success(vec![Content::text(
-                            serde_json::to_string_pretty(&result).unwrap_or_default()
-                        )]))
+                        let response = GraphBindResponse {
+                            id: identity.id.0.clone(),
+                            name: identity.name.clone(),
+                            created_at: identity.created_at.clone(),
+                        };
+                        let text = format!("Identity bound: {} ({})", identity.name, identity.id.0);
+                        Ok(CallToolResult::success(vec![Content::text(text)])
+                            .with_structured(serde_json::to_value(&response).unwrap()))
                     }
                     Err(e) => Ok(CallToolResult::error(e)),
                 }
@@ -313,16 +313,19 @@ impl Handler for HootHandler {
                 let request: GraphTagRequest = serde_json::from_value(args)
                     .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
 
-                let add = vec![(request.namespace, request.value)];
+                let add = vec![(request.namespace.clone(), request.value.clone())];
                 match graph_tag(&self.server.audio_graph_db, &request.identity_id, add, vec![]) {
                     Ok(tags) => {
-                        let result: Vec<_> = tags
-                            .iter()
-                            .map(|t| serde_json::json!({"namespace": t.namespace, "value": t.value}))
-                            .collect();
-                        Ok(CallToolResult::success(vec![Content::text(
-                            serde_json::to_string_pretty(&result).unwrap_or_default()
-                        )]))
+                        let response = GraphTagResponse {
+                            identity_id: request.identity_id.clone(),
+                            tags: tags.iter().map(|t| TagInfo {
+                                namespace: t.namespace.clone(),
+                                value: t.value.clone(),
+                            }).collect(),
+                        };
+                        let text = format!("Tagged {}: {}:{}", request.identity_id, request.namespace, request.value);
+                        Ok(CallToolResult::success(vec![Content::text(text)])
+                            .with_structured(serde_json::to_value(&response).unwrap()))
                     }
                     Err(e) => Ok(CallToolResult::error(e)),
                 }
@@ -340,15 +343,15 @@ impl Handler for HootHandler {
                     request.transport.as_deref(),
                 ) {
                     Ok(conn) => {
-                        let result = serde_json::json!({
-                            "id": conn.id,
-                            "from": format!("{}:{}", conn.from_identity.0, conn.from_port),
-                            "to": format!("{}:{}", conn.to_identity.0, conn.to_port),
-                            "transport": conn.transport_kind,
-                        });
-                        Ok(CallToolResult::success(vec![Content::text(
-                            serde_json::to_string_pretty(&result).unwrap_or_default()
-                        )]))
+                        let response = GraphConnectResponse {
+                            connection_id: conn.id.clone(),
+                            from: format!("{}:{}", conn.from_identity.0, conn.from_port),
+                            to: format!("{}:{}", conn.to_identity.0, conn.to_port),
+                            transport: conn.transport_kind.clone().unwrap_or_else(|| "unknown".to_string()),
+                        };
+                        let text = format!("Connected: {} -> {}", response.from, response.to);
+                        Ok(CallToolResult::success(vec![Content::text(text)])
+                            .with_structured(serde_json::to_value(&response).unwrap()))
                     }
                     Err(e) => Ok(CallToolResult::error(e)),
                 }
@@ -364,17 +367,17 @@ impl Handler for HootHandler {
                     request.tag_value.as_deref(),
                 ) {
                     Ok(identities) => {
-                        let result: Vec<_> = identities
-                            .iter()
-                            .map(|i| serde_json::json!({
-                                "id": i.id,
-                                "name": i.name,
-                                "tags": i.tags.iter().map(|t| format!("{}:{}", t.namespace, t.value)).collect::<Vec<_>>()
-                            }))
-                            .collect();
-                        Ok(CallToolResult::success(vec![Content::text(
-                            serde_json::to_string_pretty(&result).unwrap_or_default()
-                        )]))
+                        let response = GraphFindResponse {
+                            identities: identities.iter().map(|i| IdentitySummary {
+                                id: i.id.clone(),
+                                name: i.name.clone(),
+                                tags: i.tags.iter().map(|t| format!("{}:{}", t.namespace, t.value)).collect(),
+                            }).collect(),
+                            count: identities.len(),
+                        };
+                        let text = format!("Found {} identities", identities.len());
+                        Ok(CallToolResult::success(vec![Content::text(text)])
+                            .with_structured(serde_json::to_value(&response).unwrap()))
                     }
                     Err(e) => Ok(CallToolResult::error(e)),
                 }

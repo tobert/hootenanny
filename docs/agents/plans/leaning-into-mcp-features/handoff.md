@@ -251,3 +251,46 @@ Ok(CallToolResult::success(vec![Content::text("Human-readable message")])
 4. Document completion
 
 **Phase 2 Status**: Infrastructure 100%, Implementation 75%
+
+### 2025-12-03 Session 3: Phase 2 COMPLETE ✅
+
+**All hootenanny tools now have structured content!**
+
+**Additional Tools Completed** (15 tools):
+- ✅ ABC (4): abc_parse, abc_validate, abc_transpose, abc_to_midi
+- ✅ Analysis (1): beatthis_analyze
+- ✅ Conversion (1): midi_to_wav (added MidiToWavResponse)
+- ✅ SoundFont (2): soundfont_inspect, soundfont_preset_inspect
+- ✅ Graph (5): graph_bind, graph_tag, graph_connect, graph_find (context/query/add_annotation were already done)
+- ✅ Job (1): job_sleep
+- ✅ Agent chat tools: In separate llm-mcp-bridge crate (delegated)
+
+**Total**: 27 tools with structured content + output schemas
+
+**Key Fixes**:
+- Fixed ABC tools warnings (unused variables)
+- Added MidiToWavResponse for convert_midi_to_wav
+- Added JobSleepResponse for job_sleep
+- Fixed graph_connect to handle Option<String> for transport_kind
+- Mapped SoundFont regions to InstrumentInfo (regions don't have instrument names)
+
+**Testing**:
+- ✅ All lib tests passing (35 tests)
+- ✅ Code compiles cleanly with no errors
+- ⏳ Live MCP testing pending (requires rebuild & reconnect)
+
+**Response Types Created**:
+All response types in `crates/hootenanny/src/api/responses.rs`:
+- Job management: JobSpawnResponse, JobStatusResponse, JobListResponse, JobPollResponse, JobCancelResponse, JobSleepResponse
+- CAS: CasStoreResponse, CasInspectResponse, CasUploadResponse
+- Conversion: MidiToWavResponse
+- SoundFont: SoundfontInspectResponse, SoundfontPresetResponse
+- Graph: GraphBindResponse, GraphTagResponse, GraphConnectResponse, GraphFindResponse, GraphContextResponse, GraphQueryResponse, AddAnnotationResponse
+- ABC: AbcParseResponse, AbcValidateResponse, AbcTransposeResponse, AbcToMidiResponse (type alias to JobSpawnResponse)
+- Analysis: BeatthisAnalyzeResponse
+
+**Phase 2 Status**: ✅ **COMPLETE** (100%)
+
+**Ready for**:
+- Live testing with MCP client
+- Phase 3: Sampling (server-initiated LLM requests)

@@ -99,6 +99,13 @@ pub struct JobCancelResponse {
     pub message: String,
 }
 
+/// Response from job_sleep tool
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct JobSleepResponse {
+    pub slept_ms: u64,
+    pub completed_at: i64,
+}
+
 // ============================================================================
 // CAS (Content Addressable Storage) Responses
 // ============================================================================
@@ -274,6 +281,20 @@ pub struct InstrumentInfo {
     pub name: String,
     pub key_range: Option<(u8, u8)>,
     pub velocity_range: Option<(u8, u8)>,
+}
+
+// ============================================================================
+// Conversion Tool Responses
+// ============================================================================
+
+/// Response from convert_midi_to_wav tool
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MidiToWavResponse {
+    pub artifact_id: String,
+    pub content_hash: String,
+    pub size_bytes: usize,
+    pub duration_secs: f64,
+    pub sample_rate: u32,
 }
 
 // ============================================================================

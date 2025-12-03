@@ -1,4 +1,4 @@
-use crate::api::responses::{JobStatusResponse, JobListResponse, JobSummary, JobCancelResponse, JobPollResponse};
+use crate::api::responses::{JobStatusResponse, JobListResponse, JobSummary, JobCancelResponse, JobPollResponse, JobSleepResponse};
 use crate::api::service::EventDualityServer;
 use crate::api::schema::{GetJobStatusRequest, CancelJobRequest, PollRequest, SleepRequest};
 use crate::job_system::{JobId, JobStatus};
@@ -251,13 +251,15 @@ impl EventDualityServer {
         let completed_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs();
+            .as_secs() as i64;
 
-        let response = serde_json::json!({
-            "slept_ms": ms,
-            "completed_at": completed_at,
-        });
+        let response = JobSleepResponse {
+            slept_ms: ms,
+            completed_at,
+        };
 
-        Ok(CallToolResult::success(vec![Content::text(response.to_string())]))
+        let text = format!("Slept for {}ms", ms);
+        Ok(CallToolResult::success(vec![Content::text(text)])
+            .with_structured(serde_json::to_value(&response).unwrap()))
     }
 }

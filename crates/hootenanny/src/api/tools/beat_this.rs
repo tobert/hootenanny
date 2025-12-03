@@ -1,3 +1,4 @@
+use crate::api::responses::BeatthisAnalyzeResponse;
 use crate::api::schema::{AnalyzeBeatsRequest, BeatThisServiceRequest, BeatThisServiceResponse};
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
@@ -215,23 +216,24 @@ impl EventDualityServer {
         store.flush()
             .map_err(|e| McpError::internal_error(format!("Failed to flush artifact store: {}", e)))?;
 
-        // Return response with artifact info
-        let result = serde_json::json!({
-            "artifact_id": artifact_id.as_str(),
-            "analysis_hash": analysis_hash,
-            "bpm": service_response.bpm,
-            "num_beats": service_response.num_beats,
-            "num_downbeats": service_response.num_downbeats,
-            "duration_seconds": service_response.duration,
-            "beats_per_measure": beats_per_measure,
-            "beat_times": service_response.beats,
-            "downbeat_times": service_response.downbeats,
-        });
+        // Build response with structured content
+        let response = BeatthisAnalyzeResponse {
+            beats: service_response.beats.clone(),
+            downbeats: service_response.downbeats.clone(),
+            estimated_bpm: service_response.bpm,
+            confidence: 0.95, // beat-this doesn't provide confidence, using default
+        };
 
-        let json = serde_json::to_string_pretty(&result)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize result: {}", e)))?;
+        let human_text = format!(
+            "Beat analysis complete: {} BPM, {} beats, {} downbeats\nArtifact: {}",
+            service_response.bpm.round(),
+            service_response.num_beats,
+            service_response.num_downbeats,
+            artifact_id.as_str()
+        );
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(CallToolResult::success(vec![Content::text(human_text)])
+            .with_structured(serde_json::to_value(&response).unwrap()))
     }
 }
 

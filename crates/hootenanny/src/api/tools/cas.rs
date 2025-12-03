@@ -1,4 +1,4 @@
-use crate::api::responses::{CasStoreResponse, CasInspectResponse, CasUploadResponse, JobSpawnResponse, JobStatus, SoundfontInspectResponse, PresetInfo, SoundfontPresetResponse, InstrumentInfo};
+use crate::api::responses::{CasStoreResponse, CasInspectResponse, CasUploadResponse, MidiToWavResponse, SoundfontInspectResponse, PresetInfo, SoundfontPresetResponse, InstrumentInfo};
 use crate::api::service::EventDualityServer;
 use crate::api::schema::{CasStoreRequest, CasInspectRequest, UploadFileRequest, MidiToWavRequest, SoundfontInspectRequest, SoundfontPresetInspectRequest};
 use crate::artifact_store::{Artifact, ArtifactStore};
@@ -246,18 +246,24 @@ impl EventDualityServer {
         store.flush()
             .map_err(|e| McpError::internal_error(format!("Failed to flush artifact store: {}", e)))?;
 
-        let result = serde_json::json!({
-            "artifact_id": artifact_id.as_str(),
-            "hash": wav_hash,
-            "size_bytes": wav_size,
-            "duration_secs": duration_secs,
-            "sample_rate": sample_rate,
-        });
+        let response = MidiToWavResponse {
+            artifact_id: artifact_id.as_str().to_string(),
+            content_hash: wav_hash.clone(),
+            size_bytes: wav_size,
+            duration_secs,
+            sample_rate,
+        };
 
-        let json = serde_json::to_string(&result)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize response: {}", e)))?;
+        let human_text = format!(
+            "MIDI rendered to WAV: {} bytes ({:.1}s, {} Hz)\nArtifact: {}",
+            wav_size,
+            duration_secs,
+            sample_rate,
+            artifact_id.as_str()
+        );
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(CallToolResult::success(vec![Content::text(human_text)])
+            .with_structured(serde_json::to_value(&response).unwrap()))
     }
 
     #[tracing::instrument(
@@ -291,10 +297,26 @@ impl EventDualityServer {
         span.record("soundfont.name", &*inspection.info.name);
         span.record("soundfont.preset_count", inspection.info.preset_count);
 
-        let json = serde_json::to_string_pretty(&inspection)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize response: {}", e)))?;
+        // Convert to response type
+        let response = SoundfontInspectResponse {
+            soundfont_hash: request.soundfont_hash.clone(),
+            presets: inspection.presets.iter().map(|p| PresetInfo {
+                bank: p.bank,
+                program: p.program,
+                name: p.name.clone(),
+            }).collect(),
+            has_drum_presets: inspection.presets.iter().any(|p| p.bank == 128),
+        };
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        let human_text = format!(
+            "SoundFont: {}\n{} presets ({})",
+            inspection.info.name,
+            inspection.info.preset_count,
+            if response.has_drum_presets { "includes drums" } else { "melodic only" }
+        );
+
+        Ok(CallToolResult::success(vec![Content::text(human_text)])
+            .with_structured(serde_json::to_value(&response).unwrap()))
     }
 
     #[tracing::instrument(
@@ -322,10 +344,29 @@ impl EventDualityServer {
         let inspection = inspect_preset(&sf_bytes, request.bank, request.program)
             .map_err(|e| McpError::internal_error(format!("Failed to inspect preset: {}", e)))?;
 
-        let json = serde_json::to_string_pretty(&inspection)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize response: {}", e)))?;
+        // Convert to response type
+        let response = SoundfontPresetResponse {
+            soundfont_hash: request.soundfont_hash.clone(),
+            bank: inspection.bank,
+            program: inspection.program,
+            preset_name: inspection.name.clone(),
+            instruments: inspection.regions.iter().map(|region| InstrumentInfo {
+                name: region.keys.clone(), // Using key range as name since regions don't have names
+                key_range: None, // Regions don't expose key_range in the current structure
+                velocity_range: None,
+            }).collect(),
+        };
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        let human_text = format!(
+            "Preset: {} (Bank {}, Program {})\n{} regions",
+            inspection.name,
+            inspection.bank,
+            inspection.program,
+            inspection.regions.len()
+        );
+
+        Ok(CallToolResult::success(vec![Content::text(human_text)])
+            .with_structured(serde_json::to_value(&response).unwrap()))
     }
 
     /// MIDI to WAV conversion with progress notifications
