@@ -2,6 +2,8 @@
 //!
 //! Provides `graph_query` tool that accepts raw Trustfall/GraphQL queries
 //! and executes them against the audio graph adapter.
+//!
+//! Supports querying Identity and PipeWireNode types from the audio graph schema.
 
 use crate::api::schema::GraphQueryRequest;
 use crate::api::service::EventDualityServer;
@@ -15,35 +17,15 @@ impl EventDualityServer {
     ///
     /// Allows agents to run complex graph queries with full Trustfall power.
     /// Returns JSON-formatted results.
-    #[tracing::instrument(name = "mcp.tool.graph_query", skip(self, request), fields(query_source = %if request.query.starts_with("artifact_") { "artifact" } else { "inline" }))]
+    ///
+    /// Available entry points:
+    /// - Identity(id: String, name: String) - Audio device identities
+    /// - PipeWireNode(media_class: String) - Live PipeWire nodes
+    #[tracing::instrument(name = "mcp.tool.graph_query", skip(self, request))]
     pub async fn graph_query(
         &self,
         request: GraphQueryRequest,
     ) -> Result<CallToolResult, McpError> {
-        // Detect if query is an artifact ID or inline query string
-        let query_string = if request.query.starts_with("artifact_") {
-            // Load query from artifact
-            tracing::info!(artifact_id = %request.query, "Loading query from artifact");
-
-            let artifact_source = self.graph_adapter.artifact_source();
-            let artifact = artifact_source.get_artifact(&request.query)
-                .map_err(|e| McpError::internal_error(format!("Failed to get artifact: {}", e)))?
-                .ok_or_else(|| McpError::invalid_params(format!("Query artifact not found: {}", request.query)))?;
-
-            // Read query text from CAS
-            let cas_ref = self.local_models.inspect_cas_content(&artifact.content_hash).await
-                .map_err(|e| McpError::internal_error(format!("Failed to read artifact content: {}", e)))?;
-
-            // Read from local path
-            let path = cas_ref.local_path
-                .ok_or_else(|| McpError::internal_error("Query artifact has no local path"))?;
-            tokio::fs::read_to_string(&path).await
-                .map_err(|e| McpError::internal_error(format!("Failed to read query file: {}", e)))?
-        } else {
-            // Use query string directly
-            request.query.clone()
-        };
-
         // Convert JSON variables to Trustfall format
         let variables = json_to_variables(&request.variables)
             .map_err(|e| McpError::invalid_params(format!("Invalid variables: {}", e)))?;
@@ -51,13 +33,8 @@ impl EventDualityServer {
         // Execute the query through the Trustfall adapter
         let schema = self.graph_adapter.schema();
         let adapter_arc: Arc<_> = Arc::clone(&self.graph_adapter);
-        let results_iter = execute_query(
-            schema,
-            adapter_arc,
-            &query_string,
-            variables,
-        )
-        .map_err(|e| McpError::invalid_params(format!("Query execution failed: {}", e)))?;
+        let results_iter = execute_query(schema, adapter_arc, &request.query, variables)
+            .map_err(|e| McpError::invalid_params(format!("Query execution failed: {}", e)))?;
 
         // Collect results (respecting limit)
         let limit = request.limit.unwrap_or(100);
@@ -68,8 +45,7 @@ impl EventDualityServer {
 
         // Build response
         let response = serde_json::json!({
-            "query": query_string,
-            "query_source": if request.query.starts_with("artifact_") { "artifact" } else { "inline" },
+            "query": request.query,
             "result_count": results.len(),
             "results": results,
         });

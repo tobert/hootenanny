@@ -6,9 +6,11 @@
 //! - Every artifact has optional parent_id (refinement chains)
 //! - Every artifact has tags (arbitrary metadata)
 //! - Access tracking for observability
+//! - Annotations for subjective descriptions (vibe, mood, etc.)
 
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
 use anyhow::Result;
+use audio_graph_mcp::sources::{AnnotationData, ArtifactData, ArtifactSource};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
@@ -332,6 +334,8 @@ impl ArtifactStore for InMemoryStore {
 pub struct FileStore {
     path: PathBuf,
     store: InMemoryStore,
+    annotations_path: PathBuf,
+    annotations: RwLock<Vec<AnnotationData>>,
 }
 
 impl FileStore {
@@ -346,9 +350,20 @@ impl FileStore {
             Vec::new()
         };
 
+        // Annotations file is alongside artifacts file
+        let annotations_path = path.with_file_name("annotations.json");
+        let annotations = if annotations_path.exists() {
+            let json = std::fs::read_to_string(&annotations_path)?;
+            serde_json::from_str::<Vec<AnnotationData>>(&json)?
+        } else {
+            Vec::new()
+        };
+
         Ok(Self {
             path,
             store: InMemoryStore::from_artifacts(artifacts),
+            annotations_path,
+            annotations: RwLock::new(annotations),
         })
     }
 
@@ -367,7 +382,155 @@ impl FileStore {
         std::fs::write(&temp_path, json)?;
         std::fs::rename(&temp_path, &self.path)?;
 
+        // Save annotations
+        let annotations = self.annotations.read().unwrap();
+        let annotations_json = serde_json::to_string_pretty(&*annotations)?;
+        let annotations_temp = self.annotations_path.with_extension("tmp");
+        std::fs::write(&annotations_temp, annotations_json)?;
+        std::fs::rename(&annotations_temp, &self.annotations_path)?;
+
         Ok(())
+    }
+}
+
+// ============================================================================
+// ArtifactSource Implementation for Trustfall Integration
+// ============================================================================
+
+impl ArtifactSource for FileStore {
+    fn get(&self, id: &str) -> anyhow::Result<Option<ArtifactData>> {
+        let artifact = self.store.get(id)?;
+        Ok(artifact.map(|a| artifact_to_data(&a)))
+    }
+
+    fn all(&self) -> anyhow::Result<Vec<ArtifactData>> {
+        let artifacts = self.store.all()?;
+        Ok(artifacts.iter().map(artifact_to_data).collect())
+    }
+
+    fn by_tag(&self, tag: &str) -> anyhow::Result<Vec<ArtifactData>> {
+        let artifacts = self.store.all()?;
+        Ok(artifacts
+            .iter()
+            .filter(|a| a.has_tag(tag))
+            .map(artifact_to_data)
+            .collect())
+    }
+
+    fn by_creator(&self, creator: &str) -> anyhow::Result<Vec<ArtifactData>> {
+        let artifacts = self.store.all()?;
+        Ok(artifacts
+            .iter()
+            .filter(|a| a.creator == creator)
+            .map(artifact_to_data)
+            .collect())
+    }
+
+    fn by_parent(&self, parent_id: &str) -> anyhow::Result<Vec<ArtifactData>> {
+        let artifacts = self.store.all()?;
+        Ok(artifacts
+            .iter()
+            .filter(|a| a.parent_id.as_ref().map(|p| p.as_str()) == Some(parent_id))
+            .map(artifact_to_data)
+            .collect())
+    }
+
+    fn by_variation_set(&self, set_id: &str) -> anyhow::Result<Vec<ArtifactData>> {
+        let artifacts = self.store.all()?;
+        Ok(artifacts
+            .iter()
+            .filter(|a| a.variation_set_id.as_ref().map(|s| s.as_str()) == Some(set_id))
+            .map(artifact_to_data)
+            .collect())
+    }
+
+    fn annotations_for(&self, artifact_id: &str) -> anyhow::Result<Vec<AnnotationData>> {
+        let annotations = self.annotations.read().unwrap();
+        Ok(annotations
+            .iter()
+            .filter(|a| a.artifact_id == artifact_id)
+            .cloned()
+            .collect())
+    }
+
+    fn add_annotation(&self, annotation: AnnotationData) -> anyhow::Result<()> {
+        let mut annotations = self.annotations.write().unwrap();
+        annotations.push(annotation);
+        Ok(())
+    }
+}
+
+/// Convert internal Artifact to ArtifactData for Trustfall
+fn artifact_to_data(a: &Artifact) -> ArtifactData {
+    ArtifactData {
+        id: a.id.as_str().to_string(),
+        content_hash: a.content_hash.as_str().to_string(),
+        created_at: a.created_at.to_rfc3339(),
+        creator: a.creator.clone(),
+        tags: a.tags.clone(),
+        parent_id: a.parent_id.as_ref().map(|p| p.as_str().to_string()),
+        variation_set_id: a.variation_set_id.as_ref().map(|s| s.as_str().to_string()),
+        variation_index: a.variation_index,
+        metadata: a.metadata.clone(),
+    }
+}
+
+// ============================================================================
+// Wrapper for Arc<RwLock<FileStore>> to implement ArtifactSource
+// ============================================================================
+
+use std::sync::Arc;
+
+/// Wrapper that allows Arc<RwLock<FileStore>> to be used as ArtifactSource
+pub struct FileStoreSource {
+    store: Arc<RwLock<FileStore>>,
+}
+
+impl FileStoreSource {
+    pub fn new(store: Arc<RwLock<FileStore>>) -> Self {
+        Self { store }
+    }
+}
+
+impl ArtifactSource for FileStoreSource {
+    fn get(&self, id: &str) -> anyhow::Result<Option<ArtifactData>> {
+        let store = self.store.read().unwrap();
+        ArtifactSource::get(&*store, id)
+    }
+
+    fn all(&self) -> anyhow::Result<Vec<ArtifactData>> {
+        let store = self.store.read().unwrap();
+        ArtifactSource::all(&*store)
+    }
+
+    fn by_tag(&self, tag: &str) -> anyhow::Result<Vec<ArtifactData>> {
+        let store = self.store.read().unwrap();
+        ArtifactSource::by_tag(&*store, tag)
+    }
+
+    fn by_creator(&self, creator: &str) -> anyhow::Result<Vec<ArtifactData>> {
+        let store = self.store.read().unwrap();
+        ArtifactSource::by_creator(&*store, creator)
+    }
+
+    fn by_parent(&self, parent_id: &str) -> anyhow::Result<Vec<ArtifactData>> {
+        let store = self.store.read().unwrap();
+        ArtifactSource::by_parent(&*store, parent_id)
+    }
+
+    fn by_variation_set(&self, set_id: &str) -> anyhow::Result<Vec<ArtifactData>> {
+        let store = self.store.read().unwrap();
+        ArtifactSource::by_variation_set(&*store, set_id)
+    }
+
+    fn annotations_for(&self, artifact_id: &str) -> anyhow::Result<Vec<AnnotationData>> {
+        let store = self.store.read().unwrap();
+        ArtifactSource::annotations_for(&*store, artifact_id)
+    }
+
+    fn add_annotation(&self, annotation: AnnotationData) -> anyhow::Result<()> {
+        let store = self.store.read().unwrap();
+        ArtifactSource::add_annotation(&*store, annotation)
     }
 }
 
@@ -613,8 +776,8 @@ mod tests {
         // Load and verify
         {
             let store = FileStore::new(&path).unwrap();
-            assert_eq!(store.count().unwrap(), 1);
-            let artifact = store.get("test_001").unwrap().unwrap();
+            assert_eq!(ArtifactStore::count(&store).unwrap(), 1);
+            let artifact = ArtifactStore::get(&store, "test_001").unwrap().unwrap();
             assert_eq!(artifact.id.as_str(), "test_001");
             assert_eq!(artifact.content_hash.as_str(), "filehashfilehashfilehashfilehash");
         }

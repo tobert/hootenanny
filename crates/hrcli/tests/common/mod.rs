@@ -9,7 +9,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
-use audio_graph_mcp::Database as AudioGraphDb;
+use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use hootenanny::api::handler::HootHandler;
 use hootenanny::api::service::EventDualityServer;
 use hootenanny::artifact_store::FileStore;
@@ -77,11 +77,13 @@ impl TestMcpServer {
         let cas = Cas::new(&cas_dir)?;
 
         // Initialize LocalModels (with dummy ports - tests won't call Orpheus/DeepSeek)
-        let local_models = Arc::new(LocalModels::new(cas.clone(), 9999, 9998));
+        let local_models = Arc::new(LocalModels::new(cas.clone(), 9999));
 
         // Initialize artifact store
         let artifact_store_path = state_dir.join("artifacts.json");
-        let artifact_store = Arc::new(FileStore::new(&artifact_store_path)?);
+        let artifact_store = Arc::new(std::sync::RwLock::new(
+            FileStore::new(&artifact_store_path)?
+        ));
 
         // Initialize job store
         let job_store = Arc::new(JobStore::new());
@@ -89,12 +91,26 @@ impl TestMcpServer {
         // Initialize audio graph
         let audio_graph_db = Arc::new(AudioGraphDb::in_memory()?);
 
+        // Create artifact source for Trustfall
+        let artifact_source = Arc::new(
+            hootenanny::artifact_store::FileStoreSource::new(artifact_store.clone())
+        );
+
+        let graph_adapter = Arc::new(
+            AudioGraphAdapter::new_with_artifacts(
+                audio_graph_db.clone(),
+                audio_graph_mcp::PipeWireSnapshot::default(),
+                artifact_source,
+            )?
+        );
+
         // Create the EventDualityServer
         let event_duality_server = Arc::new(EventDualityServer::new(
             local_models,
             artifact_store,
             job_store,
             audio_graph_db,
+            graph_adapter,
         ));
 
         // Create baton MCP handler and state

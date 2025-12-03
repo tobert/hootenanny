@@ -9,7 +9,7 @@ mod types;
 mod web;
 
 use anyhow::{Context, Result};
-use audio_graph_mcp::Database as AudioGraphDb;
+use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use clap::Parser;
 use persistence::journal::{Journal, SessionEvent};
 use api::composite::CompositeHandler;
@@ -136,7 +136,19 @@ async fn main() -> Result<()> {
     // --- Audio Graph Initialization ---
     tracing::info!("🎛️  Initializing Audio Graph...");
     let audio_graph_db = Arc::new(AudioGraphDb::in_memory().context("Failed to create audio graph db")?);
-    tracing::info!("   Audio graph ready (in-memory)");
+
+    // Create artifact source wrapper for Trustfall adapter
+    let artifact_source = Arc::new(artifact_store::FileStoreSource::new(artifact_store.clone()));
+
+    let graph_adapter = Arc::new(
+        AudioGraphAdapter::new_with_artifacts(
+            audio_graph_db.clone(),
+            audio_graph_mcp::PipeWireSnapshot::default(),
+            artifact_source,
+        )
+        .context("Failed to create audio graph adapter")?
+    );
+    tracing::info!("   Audio graph ready (in-memory, with Trustfall adapter + artifacts)");
 
     let addr = format!("0.0.0.0:{}", cli.port);
 
@@ -155,6 +167,7 @@ async fn main() -> Result<()> {
         artifact_store.clone(),
         job_store.clone(),
         audio_graph_db.clone(),
+        graph_adapter.clone(),
     ));
 
     // --- LLM Agent Bridge Initialization ---

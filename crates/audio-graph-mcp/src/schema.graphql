@@ -5,6 +5,7 @@ schema {
 type Query {
     Identity(id: String, name: String): [Identity!]!
     PipeWireNode(media_class: String): [PipeWireNode!]!
+    Artifact(id: String, tag: String, creator: String): [Artifact!]!
 }
 
 type Identity {
@@ -53,4 +54,30 @@ type PipeWireLink {
     output_port_id: Int!
     input_node_id: Int!
     input_port_id: Int!
+}
+
+type Artifact {
+    id: String!
+    content_hash: String!
+    created_at: String!
+    creator: String!
+    tags: [String!]!
+
+    parent: Artifact
+    children: [Artifact!]!
+    variations: [Artifact!]!
+    annotations: [Annotation!]!
+
+    variation_set_id: String
+    variation_index: Int
+    metadata: String
+}
+
+type Annotation {
+    id: String!
+    artifact_id: String!
+    message: String!
+    vibe: String
+    source: String!
+    created_at: String!
 }

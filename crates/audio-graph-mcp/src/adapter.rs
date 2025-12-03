@@ -10,7 +10,7 @@ use trustfall::{
 
 use crate::{
     Database, Identity, IdentityHint, Tag,
-    sources::{PipeWireNode, PipeWirePort, PipeWireSnapshot},
+    sources::{AnnotationData, ArtifactData, ArtifactSource, PipeWireNode, PipeWirePort, PipeWireSnapshot},
 };
 
 #[derive(Debug, Clone)]
@@ -20,6 +20,8 @@ pub enum Vertex {
     Tag(Arc<Tag>),
     PipeWireNode(Arc<PipeWireNode>),
     PipeWirePort(Arc<PipeWirePort>),
+    Artifact(Arc<ArtifactData>),
+    Annotation(Arc<AnnotationData>),
 }
 
 impl Typename for Vertex {
@@ -30,6 +32,8 @@ impl Typename for Vertex {
             Self::Tag(_) => "Tag",
             Self::PipeWireNode(_) => "PipeWireNode",
             Self::PipeWirePort(_) => "PipeWirePort",
+            Self::Artifact(_) => "Artifact",
+            Self::Annotation(_) => "Annotation",
         }
     }
 }
@@ -38,6 +42,7 @@ pub struct AudioGraphAdapter {
     db: Arc<Database>,
     schema: Arc<Schema>,
     pipewire_snapshot: Arc<PipeWireSnapshot>,
+    artifact_source: Option<Arc<dyn ArtifactSource>>,
 }
 
 impl AudioGraphAdapter {
@@ -48,11 +53,28 @@ impl AudioGraphAdapter {
             db,
             schema,
             pipewire_snapshot: Arc::new(pipewire_snapshot),
+            artifact_source: None,
         })
     }
 
     pub fn new_without_pipewire(db: Arc<Database>) -> anyhow::Result<Self> {
         Self::new(db, PipeWireSnapshot::default())
+    }
+
+    /// Create an adapter with artifact source for full artifact queries.
+    pub fn new_with_artifacts(
+        db: Arc<Database>,
+        pipewire_snapshot: PipeWireSnapshot,
+        artifact_source: Arc<dyn ArtifactSource>,
+    ) -> anyhow::Result<Self> {
+        let schema_text = include_str!("schema.graphql");
+        let schema = Arc::new(Schema::parse(schema_text)?);
+        Ok(Self {
+            db,
+            schema,
+            pipewire_snapshot: Arc::new(pipewire_snapshot),
+            artifact_source: Some(artifact_source),
+        })
     }
 
     pub fn schema(&self) -> &Schema {
@@ -115,6 +137,25 @@ impl<'a> trustfall::provider::BasicAdapter<'a> for AudioGraphAdapter {
                 };
 
                 Box::new(filtered.into_iter().map(|n| Vertex::PipeWireNode(Arc::new(n))))
+            }
+            "Artifact" => {
+                let source = match &self.artifact_source {
+                    Some(s) => s.clone(),
+                    None => return Box::new(std::iter::empty()),
+                };
+
+                let id_filter = parameters.get("id").and_then(|v| v.as_str());
+                let tag_filter = parameters.get("tag").and_then(|v| v.as_str());
+                let creator_filter = parameters.get("creator").and_then(|v| v.as_str());
+
+                let artifacts = match (id_filter, tag_filter, creator_filter) {
+                    (Some(id), _, _) => source.get(id).unwrap_or(None).into_iter().collect(),
+                    (_, Some(tag), _) => source.by_tag(tag).unwrap_or_default(),
+                    (_, _, Some(creator)) => source.by_creator(creator).unwrap_or_default(),
+                    _ => source.all().unwrap_or_default(),
+                };
+
+                Box::new(artifacts.into_iter().map(|a| Vertex::Artifact(Arc::new(a))))
             }
             _ => unreachable!("Unknown starting edge: {edge_name}"),
         }
@@ -264,6 +305,115 @@ impl<'a> trustfall::provider::BasicAdapter<'a> for AudioGraphAdapter {
                     unreachable!()
                 }
             }),
+            // Artifact properties
+            ("Artifact", "id") => resolve_property_with(contexts, |v| {
+                if let Vertex::Artifact(a) = v {
+                    FieldValue::String(a.id.clone().into())
+                } else {
+                    unreachable!()
+                }
+            }),
+            ("Artifact", "content_hash") => resolve_property_with(contexts, |v| {
+                if let Vertex::Artifact(a) = v {
+                    FieldValue::String(a.content_hash.clone().into())
+                } else {
+                    unreachable!()
+                }
+            }),
+            ("Artifact", "created_at") => resolve_property_with(contexts, |v| {
+                if let Vertex::Artifact(a) = v {
+                    FieldValue::String(a.created_at.clone().into())
+                } else {
+                    unreachable!()
+                }
+            }),
+            ("Artifact", "creator") => resolve_property_with(contexts, |v| {
+                if let Vertex::Artifact(a) = v {
+                    FieldValue::String(a.creator.clone().into())
+                } else {
+                    unreachable!()
+                }
+            }),
+            ("Artifact", "tags") => resolve_property_with(contexts, |v| {
+                if let Vertex::Artifact(a) = v {
+                    let tags: Vec<FieldValue> = a.tags.iter()
+                        .map(|t| FieldValue::String(t.clone().into()))
+                        .collect();
+                    FieldValue::List(tags.into())
+                } else {
+                    unreachable!()
+                }
+            }),
+            ("Artifact", "variation_set_id") => resolve_property_with(contexts, |v| {
+                if let Vertex::Artifact(a) = v {
+                    a.variation_set_id.as_ref()
+                        .map(|s| FieldValue::String(s.clone().into()))
+                        .unwrap_or(FieldValue::Null)
+                } else {
+                    unreachable!()
+                }
+            }),
+            ("Artifact", "variation_index") => resolve_property_with(contexts, |v| {
+                if let Vertex::Artifact(a) = v {
+                    a.variation_index
+                        .map(|i| FieldValue::Int64(i as i64))
+                        .unwrap_or(FieldValue::Null)
+                } else {
+                    unreachable!()
+                }
+            }),
+            ("Artifact", "metadata") => resolve_property_with(contexts, |v| {
+                if let Vertex::Artifact(a) = v {
+                    FieldValue::String(a.metadata.to_string().into())
+                } else {
+                    unreachable!()
+                }
+            }),
+            // Annotation properties
+            ("Annotation", "id") => resolve_property_with(contexts, |v| {
+                if let Vertex::Annotation(a) = v {
+                    FieldValue::String(a.id.clone().into())
+                } else {
+                    unreachable!()
+                }
+            }),
+            ("Annotation", "artifact_id") => resolve_property_with(contexts, |v| {
+                if let Vertex::Annotation(a) = v {
+                    FieldValue::String(a.artifact_id.clone().into())
+                } else {
+                    unreachable!()
+                }
+            }),
+            ("Annotation", "message") => resolve_property_with(contexts, |v| {
+                if let Vertex::Annotation(a) = v {
+                    FieldValue::String(a.message.clone().into())
+                } else {
+                    unreachable!()
+                }
+            }),
+            ("Annotation", "vibe") => resolve_property_with(contexts, |v| {
+                if let Vertex::Annotation(a) = v {
+                    a.vibe.as_ref()
+                        .map(|s| FieldValue::String(s.clone().into()))
+                        .unwrap_or(FieldValue::Null)
+                } else {
+                    unreachable!()
+                }
+            }),
+            ("Annotation", "source") => resolve_property_with(contexts, |v| {
+                if let Vertex::Annotation(a) = v {
+                    FieldValue::String(a.source.clone().into())
+                } else {
+                    unreachable!()
+                }
+            }),
+            ("Annotation", "created_at") => resolve_property_with(contexts, |v| {
+                if let Vertex::Annotation(a) = v {
+                    FieldValue::String(a.created_at.clone().into())
+                } else {
+                    unreachable!()
+                }
+            }),
             _ => unreachable!("Unknown property: {type_name}.{property_name}"),
         }
     }
@@ -318,6 +468,75 @@ impl<'a> trustfall::provider::BasicAdapter<'a> for AudioGraphAdapter {
                         // TODO: Identity matching by device_bus_path or alsa_card
                         // For now, return empty
                         Box::new(std::iter::empty()) as VertexIterator<'a, Self::Vertex>
+                    } else {
+                        unreachable!()
+                    }
+                })
+            }
+            // Artifact relationships
+            ("Artifact", "parent") => {
+                let source = self.artifact_source.clone();
+                resolve_neighbors_with(contexts, move |v| {
+                    if let Vertex::Artifact(a) = v {
+                        if let (Some(source), Some(parent_id)) = (&source, &a.parent_id) {
+                            let parent = source.get(parent_id).ok().flatten();
+                            Box::new(parent.into_iter().map(|p| Vertex::Artifact(Arc::new(p))))
+                                as VertexIterator<'a, Self::Vertex>
+                        } else {
+                            Box::new(std::iter::empty()) as VertexIterator<'a, Self::Vertex>
+                        }
+                    } else {
+                        unreachable!()
+                    }
+                })
+            }
+            ("Artifact", "children") => {
+                let source = self.artifact_source.clone();
+                resolve_neighbors_with(contexts, move |v| {
+                    if let Vertex::Artifact(a) = v {
+                        if let Some(source) = &source {
+                            let children = source.by_parent(&a.id).unwrap_or_default();
+                            Box::new(children.into_iter().map(|c| Vertex::Artifact(Arc::new(c))))
+                                as VertexIterator<'a, Self::Vertex>
+                        } else {
+                            Box::new(std::iter::empty()) as VertexIterator<'a, Self::Vertex>
+                        }
+                    } else {
+                        unreachable!()
+                    }
+                })
+            }
+            ("Artifact", "variations") => {
+                let source = self.artifact_source.clone();
+                resolve_neighbors_with(contexts, move |v| {
+                    if let Vertex::Artifact(a) = v {
+                        if let (Some(source), Some(set_id)) = (&source, &a.variation_set_id) {
+                            let variations = source.by_variation_set(set_id).unwrap_or_default();
+                            // Exclude self from variations
+                            let filtered: Vec<_> = variations.into_iter()
+                                .filter(|sib| sib.id != a.id)
+                                .collect();
+                            Box::new(filtered.into_iter().map(|s| Vertex::Artifact(Arc::new(s))))
+                                as VertexIterator<'a, Self::Vertex>
+                        } else {
+                            Box::new(std::iter::empty()) as VertexIterator<'a, Self::Vertex>
+                        }
+                    } else {
+                        unreachable!()
+                    }
+                })
+            }
+            ("Artifact", "annotations") => {
+                let source = self.artifact_source.clone();
+                resolve_neighbors_with(contexts, move |v| {
+                    if let Vertex::Artifact(a) = v {
+                        if let Some(source) = &source {
+                            let annotations = source.annotations_for(&a.id).unwrap_or_default();
+                            Box::new(annotations.into_iter().map(|ann| Vertex::Annotation(Arc::new(ann))))
+                                as VertexIterator<'a, Self::Vertex>
+                        } else {
+                            Box::new(std::iter::empty()) as VertexIterator<'a, Self::Vertex>
+                        }
                     } else {
                         unreachable!()
                     }

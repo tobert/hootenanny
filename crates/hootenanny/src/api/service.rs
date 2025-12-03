@@ -1,7 +1,7 @@
 use crate::artifact_store::FileStore;
 use crate::job_system::JobStore;
 use crate::mcp_tools::local_models::LocalModels;
-use audio_graph_mcp::Database as AudioGraphDb;
+use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use std::sync::{Arc, RwLock};
 
 #[derive(Clone)]
@@ -10,6 +10,7 @@ pub struct EventDualityServer {
     pub artifact_store: Arc<RwLock<FileStore>>,
     pub job_store: JobStore,
     pub audio_graph_db: Arc<AudioGraphDb>,
+    pub graph_adapter: Arc<AudioGraphAdapter>,
 }
 
 impl std::fmt::Debug for EventDualityServer {
@@ -26,12 +27,14 @@ impl EventDualityServer {
         artifact_store: Arc<RwLock<FileStore>>,
         job_store: Arc<JobStore>,
         audio_graph_db: Arc<AudioGraphDb>,
+        graph_adapter: Arc<AudioGraphAdapter>,
     ) -> Self {
         Self {
             local_models,
             artifact_store,
             job_store: (*job_store).clone(),
             audio_graph_db,
+            graph_adapter,
         }
     }
 }

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 
-use audio_graph_mcp::Database as AudioGraphDb;
+use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use hootenanny::api::handler::HootHandler;
 use hootenanny::api::service::EventDualityServer;
 use hootenanny::artifact_store::FileStore;
@@ -89,11 +89,25 @@ async fn spawn_test_server_configured(
             None => Arc::new(AudioGraphDb::in_memory().unwrap()),
         };
 
+        // Create artifact source for Trustfall
+        let artifact_source = Arc::new(
+            hootenanny::artifact_store::FileStoreSource::new(artifact_store.clone())
+        );
+
+        let graph_adapter = Arc::new(
+            AudioGraphAdapter::new_with_artifacts(
+                audio_graph_db.clone(),
+                audio_graph_mcp::PipeWireSnapshot::default(),
+                artifact_source,
+            ).unwrap()
+        );
+
         let event_duality_server = Arc::new(EventDualityServer::new(
             local_models,
             artifact_store,
             job_store,
             audio_graph_db,
+            graph_adapter,
         ));
 
         let hoot_handler = HootHandler::new(event_duality_server);
@@ -270,11 +284,25 @@ async fn spawn_persistent_server(
         // File-backed audio graph DB (the thing we're testing persistence of)
         let audio_graph_db = Arc::new(AudioGraphDb::open(&audio_graph_db_path).unwrap());
 
+        // Create artifact source for Trustfall
+        let artifact_source = Arc::new(
+            hootenanny::artifact_store::FileStoreSource::new(artifact_store.clone())
+        );
+
+        let graph_adapter = Arc::new(
+            AudioGraphAdapter::new_with_artifacts(
+                audio_graph_db.clone(),
+                audio_graph_mcp::PipeWireSnapshot::default(),
+                artifact_source,
+            ).unwrap()
+        );
+
         let event_duality_server = Arc::new(EventDualityServer::new(
             local_models,
             artifact_store,
             job_store,
             audio_graph_db,
+            graph_adapter,
         ));
 
         let hoot_handler = HootHandler::new(event_duality_server);

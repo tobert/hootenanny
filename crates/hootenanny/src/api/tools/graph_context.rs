@@ -1,10 +1,12 @@
 //! Graph context tools for sub-agent asset discovery
 //!
 //! Provides bounded context about artifacts for sub-agent conversations.
+//! Uses Trustfall queries through the graph_adapter for artifact queries.
 
-use crate::api::schema::{GraphContextRequest, AddAnnotationRequest};
+use crate::api::schema::{AddAnnotationRequest, GraphContextRequest};
 use crate::api::service::EventDualityServer;
-use baton::{ErrorData as McpError, CallToolResult, Content};
+use audio_graph_mcp::sources::AnnotationData;
+use baton::{CallToolResult, Content, ErrorData as McpError};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use trustfall::{execute_query, FieldValue};
@@ -12,12 +14,11 @@ use trustfall::{execute_query, FieldValue};
 impl EventDualityServer {
     /// Generate a bounded context about artifacts for sub-agents
     ///
+    /// Uses Trustfall queries to fetch artifacts based on filters.
     /// Returns a JSON object with:
     /// - Summary counts by type
-    /// - List of matching artifacts with optional metadata and annotations
+    /// - List of matching artifacts with optional metadata
     /// - Suitable for injecting into agent prompts
-    ///
-    /// Now uses Trustfall for consistent graph query execution.
     #[tracing::instrument(name = "mcp.tool.graph_context", skip(self, request))]
     pub async fn graph_context(
         &self,
@@ -25,33 +26,124 @@ impl EventDualityServer {
     ) -> Result<CallToolResult, McpError> {
         let limit = request.limit.unwrap_or(20);
 
-        // Build Trustfall query from request parameters
-        let query = build_context_query(&request);
+        // Build Trustfall query based on filters
+        let (query, variables) = build_artifact_query(&request);
 
-        // Execute query through Trustfall
+        // Execute via Trustfall
         let schema = self.graph_adapter.schema();
         let adapter_arc: Arc<_> = Arc::clone(&self.graph_adapter);
-        let results_iter = execute_query(
-            schema,
-            adapter_arc,
-            &query,
-            BTreeMap::<Arc<str>, FieldValue>::new(), // No variables for now, filters are in query string
-        )
-        .map_err(|e| McpError::internal_error(format!("Query execution failed: {}", e)))?;
 
-        // Collect and aggregate results
-        let rows: Vec<_> = results_iter.take(limit * 10).collect(); // Extra rows for annotations
-        let artifacts = aggregate_artifact_rows(rows, &request);
+        let results_iter = execute_query(schema, adapter_arc, &query, variables)
+            .map_err(|e| McpError::internal_error(format!("Query failed: {}", e)))?;
 
-        // Take only up to limit artifacts (after aggregation)
-        let artifacts: Vec<_> = artifacts.into_iter().take(limit).collect();
+        // Collect results
+        let results: Vec<_> = results_iter.take(limit).collect();
 
-        // Build summary counts by metadata type
+        // Build summary counts by type
         let mut type_counts: HashMap<String, usize> = HashMap::new();
-        for artifact in &artifacts {
-            let meta_type = artifact["type"].as_str().unwrap_or("unknown").to_string();
-            *type_counts.entry(meta_type).or_insert(0) += 1;
+        for result in &results {
+            if let Some(FieldValue::List(tags)) = result.get("tags" as &str) {
+                let type_tag = tags
+                    .iter()
+                    .filter_map(|t| {
+                        if let FieldValue::String(s) = t {
+                            if s.starts_with("type:") {
+                                return Some(s.strip_prefix("type:").unwrap_or(s).to_string());
+                            }
+                        }
+                        None
+                    })
+                    .next()
+                    .unwrap_or_else(|| "unknown".to_string());
+                *type_counts.entry(type_tag).or_insert(0) += 1;
+            }
         }
+
+        // Convert results to JSON representation
+        let artifacts: Vec<serde_json::Value> = results
+            .into_iter()
+            .map(|row| {
+                let mut obj = serde_json::Map::new();
+
+                // Required fields
+                if let Some(FieldValue::String(id)) = row.get("id" as &str) {
+                    obj.insert("id".to_string(), serde_json::Value::String(id.to_string()));
+                }
+                if let Some(FieldValue::String(hash)) = row.get("content_hash" as &str) {
+                    obj.insert(
+                        "content_hash".to_string(),
+                        serde_json::Value::String(hash.to_string()),
+                    );
+                }
+                if let Some(FieldValue::String(created)) = row.get("created_at" as &str) {
+                    obj.insert(
+                        "created_at".to_string(),
+                        serde_json::Value::String(created.to_string()),
+                    );
+                }
+                if let Some(FieldValue::String(creator)) = row.get("creator" as &str) {
+                    obj.insert(
+                        "creator".to_string(),
+                        serde_json::Value::String(creator.to_string()),
+                    );
+                }
+
+                // Tags
+                if let Some(FieldValue::List(tags)) = row.get("tags" as &str) {
+                    let tag_arr: Vec<serde_json::Value> = tags
+                        .iter()
+                        .filter_map(|t| {
+                            if let FieldValue::String(s) = t {
+                                Some(serde_json::Value::String(s.to_string()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    obj.insert("tags".to_string(), serde_json::Value::Array(tag_arr));
+
+                    // Extract type from tags
+                    for t in tags.iter() {
+                        if let FieldValue::String(s) = t {
+                            if s.starts_with("type:") {
+                                obj.insert(
+                                    "type".to_string(),
+                                    serde_json::Value::String(
+                                        s.strip_prefix("type:").unwrap_or(s).to_string(),
+                                    ),
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Optional fields
+                if let Some(FieldValue::String(v)) = row.get("variation_set_id" as &str) {
+                    obj.insert(
+                        "variation_set_id".to_string(),
+                        serde_json::Value::String(v.to_string()),
+                    );
+                }
+                if let Some(FieldValue::Int64(idx)) = row.get("variation_index" as &str) {
+                    obj.insert(
+                        "variation_index".to_string(),
+                        serde_json::Value::Number((*idx).into()),
+                    );
+                }
+
+                // Include metadata if requested
+                if request.include_metadata {
+                    if let Some(FieldValue::String(m)) = row.get("metadata" as &str) {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(m) {
+                            obj.insert("metadata".to_string(), parsed);
+                        }
+                    }
+                }
+
+                serde_json::Value::Object(obj)
+            })
+            .collect();
 
         // Build final context
         let context = serde_json::json!({
@@ -74,34 +166,50 @@ impl EventDualityServer {
     }
 
     /// Add an annotation to an artifact
+    ///
+    /// Uses the proper annotation storage system via ArtifactSource trait.
     #[tracing::instrument(name = "mcp.tool.add_annotation", skip(self, request))]
     pub async fn add_annotation(
         &self,
         request: AddAnnotationRequest,
     ) -> Result<CallToolResult, McpError> {
+        use audio_graph_mcp::sources::ArtifactSource;
+
         // Verify artifact exists
-        let artifact_source = self.graph_adapter.artifact_source();
-        let artifact = artifact_source.get_artifact(&request.artifact_id)
+        let artifact_store = self.artifact_store.read().map_err(|e| {
+            McpError::internal_error(format!("Failed to read artifact store: {}", e))
+        })?;
+
+        let artifact_exists = ArtifactSource::get(&*artifact_store, &request.artifact_id)
             .map_err(|e| McpError::internal_error(format!("Failed to get artifact: {}", e)))?
-            .ok_or_else(|| McpError::invalid_params(format!("Artifact not found: {}", request.artifact_id)))?;
+            .is_some();
 
-        // Generate annotation ID
-        let annotation_id = format!("ann_{}", &uuid::Uuid::new_v4().to_string().replace("-", "")[..12]);
+        if !artifact_exists {
+            return Err(McpError::invalid_params(format!(
+                "Artifact not found: {}",
+                request.artifact_id
+            )));
+        }
 
-        // Add annotation to database
+        // Create annotation
         let source = request.source.unwrap_or_else(|| "agent".to_string());
-        self.audio_graph_db.add_annotation(
-            &annotation_id,
-            "artifact",
-            &request.artifact_id,
-            &source,
-            &request.message,
-            request.vibe.as_deref(),
-        ).map_err(|e| McpError::internal_error(format!("Failed to add annotation: {}", e)))?;
+        let annotation = AnnotationData::new(
+            request.artifact_id.clone(),
+            request.message.clone(),
+            request.vibe.clone(),
+            source.clone(),
+        );
+
+        let annotation_id = annotation.id.clone();
+
+        // Store the annotation
+        ArtifactSource::add_annotation(&*artifact_store, annotation).map_err(|e| {
+            McpError::internal_error(format!("Failed to store annotation: {}", e))
+        })?;
 
         let result = serde_json::json!({
             "annotation_id": annotation_id,
-            "artifact_id": artifact.id,
+            "artifact_id": request.artifact_id,
             "message": request.message,
             "vibe": request.vibe,
             "source": source,
@@ -114,132 +222,42 @@ impl EventDualityServer {
     }
 }
 
-// ============================================================================
-// Helper Functions for Trustfall Query Building and Aggregation
-// ============================================================================
-
-/// Build a Trustfall query string from GraphContextRequest parameters
-fn build_context_query(request: &GraphContextRequest) -> String {
-    let mut query = String::from("{\n  Artifact");
-
-    // Add filter parameters
-    let mut params = Vec::new();
-    if let Some(tag) = &request.tag {
-        params.push(format!("tag: \"{}\"", tag));
-    }
-    if let Some(creator) = &request.creator {
-        params.push(format!("creator: \"{}\"", creator));
-    }
-    if let Some(vibe) = &request.vibe_search {
-        params.push(format!("annotation_contains: \"{}\"", vibe));
-    }
-
-    if !params.is_empty() {
-        query.push_str("(");
-        query.push_str(&params.join(", "));
-        query.push_str(")");
-    }
-
-    query.push_str(" {\n");
-    query.push_str("    id @output\n");
-    query.push_str("    content_hash @output\n");
-    query.push_str("    created_at @output\n");
-    query.push_str("    creator @output\n");
-    query.push_str("    metadata_type @output\n");
-    query.push_str("    tags { tag @output }\n");
-
-    if request.include_annotations {
-        query.push_str("    annotations {\n");
-        query.push_str("      message @output\n");
-        query.push_str("      vibe @output\n");
-        query.push_str("      source @output\n");
-        query.push_str("    }\n");
-    }
-
-    query.push_str("  }\n}");
-    query
-}
-
-/// Aggregate Trustfall rows into artifact objects
-///
-/// Trustfall returns one row per nested item (e.g., one row per tag, one row per annotation).
-/// We need to group these rows by artifact ID and rebuild the artifact structure.
-fn aggregate_artifact_rows(
-    rows: Vec<BTreeMap<Arc<str>, FieldValue>>,
+/// Build a Trustfall query for artifacts based on request filters
+fn build_artifact_query(
     request: &GraphContextRequest,
-) -> Vec<serde_json::Value> {
-    let mut artifacts_map: HashMap<String, serde_json::Value> = HashMap::new();
+) -> (String, BTreeMap<Arc<str>, FieldValue>) {
+    let mut variables: BTreeMap<Arc<str>, FieldValue> = BTreeMap::new();
 
-    for row in rows {
-        // Extract artifact ID
-        let artifact_id = match row.get("id" as &str) {
-            Some(FieldValue::String(s)) => s.to_string(),
-            _ => continue, // Skip rows without ID
-        };
+    // Build query parameters
+    let query_params = if let Some(ref tag) = request.tag {
+        variables.insert("tag".into(), FieldValue::String(tag.clone().into()));
+        "tag: $tag"
+    } else if let Some(ref creator) = request.creator {
+        variables.insert("creator".into(), FieldValue::String(creator.clone().into()));
+        "creator: $creator"
+    } else {
+        ""
+    };
 
-        // Get or create artifact entry
-        let artifact = artifacts_map.entry(artifact_id.clone()).or_insert_with(|| {
-            // Create artifact from first row
-            let mut artifact = serde_json::json!({
-                "id": artifact_id,
-                "type": field_value_to_string(row.get("metadata_type" as &str)),
-                "creator": field_value_to_string(row.get("creator" as &str)),
-                "created_at": field_value_to_string(row.get("created_at" as &str)),
-                "tags": Vec::<String>::new(),
-            });
+    // Build query - note: vibe_search would require annotation traversal
+    // For now we filter by tag or creator at the entry point
+    let query = format!(
+        r#"
+        query {{
+            Artifact({}) {{
+                id @output
+                content_hash @output
+                created_at @output
+                creator @output
+                tags @output
+                variation_set_id @output
+                variation_index @output
+                metadata @output
+            }}
+        }}
+        "#,
+        query_params
+    );
 
-            // Initialize annotations array if needed
-            if request.include_annotations {
-                artifact["annotations"] = serde_json::Value::Array(Vec::new());
-            }
-
-            artifact
-        });
-
-        // Add tag if present
-        if let Some(FieldValue::String(tag)) = row.get("tag" as &str) {
-            if let Some(tags_array) = artifact["tags"].as_array_mut() {
-                let tag_str = tag.to_string();
-                if !tags_array.iter().any(|t| t.as_str() == Some(&tag_str)) {
-                    tags_array.push(serde_json::Value::String(tag_str));
-                }
-            }
-        }
-
-        // Add annotation if present
-        if request.include_annotations {
-            if let Some(FieldValue::String(message)) = row.get("message" as &str) {
-                if let Some(annotations) = artifact["annotations"].as_array_mut() {
-                    let ann = serde_json::json!({
-                        "message": message.to_string(),
-                        "vibe": field_value_to_string(row.get("vibe" as &str)),
-                        "source": field_value_to_string(row.get("source" as &str)),
-                    });
-                    // Avoid duplicates
-                    if !annotations.iter().any(|a| a["message"] == ann["message"]) {
-                        annotations.push(ann);
-                    }
-                }
-            }
-        }
-    }
-
-    // Convert to vec and sort by ID for consistency
-    let mut artifacts: Vec<_> = artifacts_map.into_values().collect();
-    artifacts.sort_by(|a, b| {
-        let a_id = a["id"].as_str().unwrap_or("");
-        let b_id = b["id"].as_str().unwrap_or("");
-        a_id.cmp(b_id)
-    });
-
-    artifacts
-}
-
-/// Helper to convert FieldValue to string, handling None gracefully
-fn field_value_to_string(field: Option<&FieldValue>) -> String {
-    match field {
-        Some(FieldValue::String(s)) => s.to_string(),
-        Some(FieldValue::Null) | None => String::new(),
-        Some(other) => format!("{:?}", other),
-    }
+    (query, variables)
 }
