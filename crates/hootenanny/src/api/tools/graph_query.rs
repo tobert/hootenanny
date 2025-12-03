@@ -5,6 +5,7 @@
 //!
 //! Supports querying Identity and PipeWireNode types from the audio graph schema.
 
+use crate::api::responses::GraphQueryResponse;
 use crate::api::schema::GraphQueryRequest;
 use crate::api::service::EventDualityServer;
 use baton::{CallToolResult, Content, ErrorData as McpError};
@@ -44,16 +45,17 @@ impl EventDualityServer {
             .collect();
 
         // Build response
-        let response = serde_json::json!({
-            "query": request.query,
-            "result_count": results.len(),
-            "results": results,
-        });
+        let count = results.len();
+        let response = GraphQueryResponse {
+            results,
+            count,
+        };
 
         let json = serde_json::to_string_pretty(&response)
             .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(CallToolResult::success(vec![Content::text(json)])
+            .with_structured(serde_json::to_value(&response).unwrap()))
     }
 }
 
