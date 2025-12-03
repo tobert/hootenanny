@@ -15,6 +15,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::responses::*;
 use super::schema::*;
 use super::service::EventDualityServer;
 
@@ -49,22 +50,29 @@ impl Handler for HootHandler {
         vec![
             // CAS tools
             Tool::new("cas_store", "Store content in the Content Addressable Storage")
-                .with_input_schema(schema_for::<CasStoreRequest>()),
+                .with_input_schema(schema_for::<CasStoreRequest>())
+                .with_output_schema(schema_for::<CasStoreResponse>()),
             Tool::new("cas_inspect", "Inspect content in the CAS by hash")
                 .with_input_schema(schema_for::<CasInspectRequest>())
+                .with_output_schema(schema_for::<CasInspectResponse>())
                 .read_only(),
             Tool::new("cas_upload_file", "Upload a file to the CAS")
-                .with_input_schema(schema_for::<UploadFileRequest>()),
+                .with_input_schema(schema_for::<UploadFileRequest>())
+                .with_output_schema(schema_for::<CasUploadResponse>()),
 
             // Orpheus tools
             Tool::new("orpheus_generate", "Generate MIDI with the Orpheus model")
-                .with_input_schema(schema_for::<OrpheusGenerateRequest>()),
+                .with_input_schema(schema_for::<OrpheusGenerateRequest>())
+                .with_output_schema(schema_for::<JobSpawnResponse>()),
             Tool::new("orpheus_generate_seeded", "Generate MIDI from a seed with Orpheus")
-                .with_input_schema(schema_for::<OrpheusGenerateSeededRequest>()),
+                .with_input_schema(schema_for::<OrpheusGenerateSeededRequest>())
+                .with_output_schema(schema_for::<JobSpawnResponse>()),
             Tool::new("orpheus_continue", "Generate continuation clip from MIDI (returns new material only, not concatenated)")
-                .with_input_schema(schema_for::<OrpheusContinueRequest>()),
+                .with_input_schema(schema_for::<OrpheusContinueRequest>())
+                .with_output_schema(schema_for::<JobSpawnResponse>()),
             Tool::new("orpheus_bridge", "Generate a transition clip between MIDI sections (returns bridge only)")
-                .with_input_schema(schema_for::<OrpheusBridgeRequest>()),
+                .with_input_schema(schema_for::<OrpheusBridgeRequest>())
+                .with_output_schema(schema_for::<JobSpawnResponse>()),
             // TODO: Implement orpheus_loops
             // Tool::new("orpheus_loops", "Generate drum/percussion loops with Orpheus")
             //     .with_input_schema(schema_for::<OrpheusLoopsRequest>()),
@@ -76,13 +84,17 @@ impl Handler for HootHandler {
             // Job tools
             Tool::new("job_status", "Get the status of an async job")
                 .with_input_schema(schema_for::<GetJobStatusRequest>())
+                .with_output_schema(schema_for::<JobStatusResponse>())
                 .read_only(),
             Tool::new("job_list", "List all jobs")
+                .with_output_schema(schema_for::<JobListResponse>())
                 .read_only(),
             Tool::new("job_cancel", "Cancel a running job")
-                .with_input_schema(schema_for::<CancelJobRequest>()),
+                .with_input_schema(schema_for::<CancelJobRequest>())
+                .with_output_schema(schema_for::<JobCancelResponse>()),
             Tool::new("job_poll", "Poll for job completion")
                 .with_input_schema(schema_for::<PollRequest>())
+                .with_output_schema(schema_for::<JobPollResponse>())
                 .read_only(),
             Tool::new("job_sleep", "Sleep for a specified duration")
                 .with_input_schema(schema_for::<SleepRequest>())
@@ -91,51 +103,66 @@ impl Handler for HootHandler {
 
             // Conversion tools
             Tool::new("convert_midi_to_wav", "Render MIDI to WAV using a SoundFont")
-                .with_input_schema(schema_for::<MidiToWavRequest>()),
+                .with_input_schema(schema_for::<MidiToWavRequest>())
+                .with_output_schema(schema_for::<JobSpawnResponse>()),
 
             // SoundFont tools
             Tool::new("soundfont_inspect", "Inspect SoundFont presets and drum mappings")
                 .with_input_schema(schema_for::<SoundfontInspectRequest>())
+                .with_output_schema(schema_for::<SoundfontInspectResponse>())
                 .read_only(),
             Tool::new("soundfont_preset_inspect", "Inspect a specific preset by bank/program")
                 .with_input_schema(schema_for::<SoundfontPresetInspectRequest>())
+                .with_output_schema(schema_for::<SoundfontPresetResponse>())
                 .read_only(),
 
             Tool::new("graph_bind", "Bind an identity in the audio graph")
-                .with_input_schema(schema_for::<GraphBindRequest>()),
+                .with_input_schema(schema_for::<GraphBindRequest>())
+                .with_output_schema(schema_for::<GraphBindResponse>()),
             Tool::new("graph_tag", "Tag an identity in the audio graph")
-                .with_input_schema(schema_for::<GraphTagRequest>()),
+                .with_input_schema(schema_for::<GraphTagRequest>())
+                .with_output_schema(schema_for::<GraphTagResponse>()),
             Tool::new("graph_connect", "Connect nodes in the audio graph")
-                .with_input_schema(schema_for::<GraphConnectRequest>()),
+                .with_input_schema(schema_for::<GraphConnectRequest>())
+                .with_output_schema(schema_for::<GraphConnectResponse>()),
             Tool::new("graph_find", "Find identities in the audio graph")
                 .with_input_schema(schema_for::<GraphFindRequest>())
+                .with_output_schema(schema_for::<GraphFindResponse>())
                 .read_only(),
 
             // Graph context tools for sub-agent asset discovery
             Tool::new("graph_context", "Simple artifact discovery with filters (tag, creator, vibe). Returns bounded context for sub-agents. Use this for quick lookups; use graph_query for complex traversals.")
                 .with_input_schema(schema_for::<GraphContextRequest>())
+                .with_output_schema(schema_for::<GraphContextResponse>())
                 .read_only(),
             Tool::new("add_annotation", "Add subjective annotations to artifacts with vibe keywords (e.g., 'warm, jazzy, vintage feel'). Makes artifacts searchable by mood/character.")
-                .with_input_schema(schema_for::<AddAnnotationRequest>()),
+                .with_input_schema(schema_for::<AddAnnotationRequest>())
+                .with_output_schema(schema_for::<AddAnnotationResponse>()),
             Tool::new("graph_query", "Execute GraphQL queries against the unified graph (artifacts, soundfonts, MIDI, audio). Query entry points: Artifact, SoundFont. Use @output for fields you want returned. Supports nested queries (annotations, tags, parent/children lineage).")
                 .with_input_schema(schema_for::<GraphQueryRequest>())
+                .with_output_schema(schema_for::<GraphQueryResponse>())
                 .read_only(),
 
             // ABC notation tools
             Tool::new("abc_parse", "Parse ABC notation into a structured AST")
                 .with_input_schema(schema_for::<AbcParseRequest>())
+                .with_output_schema(schema_for::<AbcParseResponse>())
                 .read_only(),
             Tool::new("abc_to_midi", "Convert ABC notation to MIDI")
-                .with_input_schema(schema_for::<AbcToMidiRequest>()),
+                .with_input_schema(schema_for::<AbcToMidiRequest>())
+                .with_output_schema(schema_for::<JobSpawnResponse>()),
             Tool::new("abc_validate", "Validate ABC notation and return feedback")
                 .with_input_schema(schema_for::<AbcValidateRequest>())
+                .with_output_schema(schema_for::<AbcValidateResponse>())
                 .read_only(),
             Tool::new("abc_transpose", "Transpose ABC notation by semitones or to a target key")
-                .with_input_schema(schema_for::<AbcTransposeRequest>()),
+                .with_input_schema(schema_for::<AbcTransposeRequest>())
+                .with_output_schema(schema_for::<AbcTransposeResponse>()),
 
             // Beat detection tools (BeatThis model)
             Tool::new("beatthis_analyze", "Detect beats and downbeats in audio. Returns beat times in seconds, estimated BPM, and optionally frame-level probabilities.")
                 .with_input_schema(schema_for::<AnalyzeBeatsRequest>())
+                .with_output_schema(schema_for::<BeatthisAnalyzeResponse>())
                 .read_only(),
 
             // TODO: Implement CLAP audio analysis
