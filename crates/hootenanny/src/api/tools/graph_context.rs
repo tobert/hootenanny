@@ -3,6 +3,7 @@
 //! Provides bounded context about artifacts for sub-agent conversations.
 //! Uses Trustfall queries through the graph_adapter for artifact queries.
 
+use crate::api::responses::{GraphContextResponse, ContextSummary, AddAnnotationResponse};
 use crate::api::schema::{AddAnnotationRequest, GraphContextRequest};
 use crate::api::service::EventDualityServer;
 use audio_graph_mcp::sources::AnnotationData;
@@ -146,23 +147,20 @@ impl EventDualityServer {
             .collect();
 
         // Build final context
-        let context = serde_json::json!({
-            "summary": {
-                "total_matching": artifacts.len(),
-                "by_type": type_counts,
-                "filter": {
-                    "tag": request.tag,
-                    "vibe_search": request.vibe_search,
-                    "creator": request.creator,
-                },
+        let total = artifacts.len();
+        let response = GraphContextResponse {
+            artifacts,
+            summary: ContextSummary {
+                total,
+                by_type: type_counts,
             },
-            "artifacts": artifacts,
-        });
+        };
 
-        let json = serde_json::to_string_pretty(&context)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize context: {}", e)))?;
+        let json = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(CallToolResult::success(vec![Content::text(json)])
+            .with_structured(serde_json::to_value(&response).unwrap()))
     }
 
     /// Add an annotation to an artifact
@@ -207,18 +205,17 @@ impl EventDualityServer {
             McpError::internal_error(format!("Failed to store annotation: {}", e))
         })?;
 
-        let result = serde_json::json!({
-            "annotation_id": annotation_id,
-            "artifact_id": request.artifact_id,
-            "message": request.message,
-            "vibe": request.vibe,
-            "source": source,
-        });
+        let response = AddAnnotationResponse {
+            artifact_id: request.artifact_id.clone(),
+            annotation_id: annotation_id.clone(),
+            success: true,
+        };
 
-        let json = serde_json::to_string(&result)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize result: {}", e)))?;
+        let json = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(CallToolResult::success(vec![Content::text(json)])
+            .with_structured(serde_json::to_value(&response).unwrap()))
     }
 }
 
