@@ -12,10 +12,12 @@
 //! - Session ID via Mcp-Session-Id header
 
 mod message;
+mod sampling;
 mod sse;
 mod streamable;
 
 pub use message::message_handler;
+pub use sampling::{SamplingClient, SamplingError};
 pub use sse::sse_handler;
 pub use streamable::{streamable_handler, delete_handler};
 
@@ -37,6 +39,9 @@ pub struct McpState<H> {
 
     /// Server version for protocol responses.
     pub server_version: String,
+
+    /// Sampling client for server-initiated LLM requests.
+    pub sampling_client: Arc<SamplingClient>,
 }
 
 impl<H> McpState<H> {
@@ -47,6 +52,7 @@ impl<H> McpState<H> {
             sessions: Arc::new(InMemorySessionStore::new()),
             server_name: server_name.into(),
             server_version: server_version.into(),
+            sampling_client: Arc::new(SamplingClient::new()),
         }
     }
 
@@ -62,6 +68,7 @@ impl<H> McpState<H> {
             sessions,
             server_name: server_name.into(),
             server_version: server_version.into(),
+            sampling_client: Arc::new(SamplingClient::new()),
         }
     }
 }

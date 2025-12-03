@@ -61,7 +61,7 @@ pub use types::tool::{CallToolResult, Tool, ToolAnnotations, ToolSchema};
 pub use session::{spawn_cleanup_task, InMemorySessionStore, Session, SessionStats, SessionStore};
 
 // Re-export protocol types
-pub use protocol::Handler;
+pub use protocol::{Handler, Sampler, ToolContext};
 
 // Re-export transport types
 pub use transport::{router, streamable_router, dual_router, McpState};

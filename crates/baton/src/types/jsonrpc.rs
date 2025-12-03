@@ -176,6 +176,16 @@ pub struct JsonRpcMessage {
 }
 
 impl JsonRpcMessage {
+    /// Create a new request (with id).
+    pub fn request(id: impl Into<String>, method: impl Into<String>, params: Value) -> Self {
+        Self {
+            jsonrpc: JsonRpcVersion,
+            id: Some(RequestId::String(id.into())),
+            method: method.into(),
+            params: Some(params),
+        }
+    }
+
     /// Create a new notification (no id).
     pub fn notification(method: impl Into<String>, params: Value) -> Self {
         Self {

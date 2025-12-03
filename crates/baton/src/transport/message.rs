@@ -73,6 +73,19 @@ pub async fn message_handler<H: Handler>(
         .cloned()
         .unwrap_or(Value::Null);
 
+    // Check if this is a response (has result/error field, no method field)
+    if body.get("result").is_some() || body.get("error").is_some() {
+        // This is a response to a sampling request
+        if let (Some(id), Some(result)) = (body.get("id"), body.get("result")) {
+            if let Ok(sampling_response) = serde_json::from_value(result.clone()) {
+                state.sampling_client.handle_response(&id.to_string(), sampling_response);
+                return StatusCode::ACCEPTED.into_response();
+            }
+        }
+        // Invalid response format
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
     // Parse JSON-RPC message (request or notification)
     let message: JsonRpcMessage = match serde_json::from_value(body) {
         Ok(r) => r,

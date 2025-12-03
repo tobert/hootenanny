@@ -327,3 +327,39 @@ All response types in `crates/hootenanny/src/api/responses.rs`:
 4. Integration with existing session/transport layer
 
 This is a good checkpoint before tackling the complex bidirectional communication.
+
+### 2025-12-03 Session 2: Phase 3 Infrastructure Complete ✅
+
+**Completed**:
+- ✅ Created `SamplingClient` with pending request tracking
+- ✅ Added `SamplingClient` to `McpState`
+- ✅ Wired sampling response handling into message dispatch
+- ✅ Added `Sampler` helper to `ToolContext`
+- ✅ Added `JsonRpcMessage::request()` method for creating requests
+
+**Files Changed**:
+- `crates/baton/src/transport/sampling.rs` (new) - SamplingClient implementation
+- `crates/baton/src/transport/mod.rs` - Export SamplingClient, add to McpState
+- `crates/baton/src/transport/message.rs` - Handle sampling responses
+- `crates/baton/src/protocol/mod.rs` - Sampler helper with ask() and sample()
+- `crates/baton/src/types/jsonrpc.rs` - Added request() constructor
+- `crates/baton/src/lib.rs` - Export Sampler and ToolContext
+
+**Architecture**:
+- `SamplingClient` tracks pending requests with DashMap<request_id, oneshot::Sender>
+- Sends JSON-RPC requests via SSE to client
+- Matches responses by ID when client replies
+- `Sampler` provides ergonomic API: `ask()` for simple text, `sample()` for full control
+- Response handling detects `result` field in message dispatch
+- 60-second timeout with graceful failure
+
+**Testing**: Both baton and hootenanny compile cleanly
+
+**Remaining Work**:
+- ⏸️ Store client capabilities during initialize (check if sampling supported)
+- ⏸️ Create Sampler instances when capabilities permit
+- ⏸️ Add sample_llm tool for direct testing
+- ⏸️ Use sampling in generation tools (vibe extraction)
+- ⏸️ Live test with MCP client that supports sampling
+
+**Status**: ✅ **Infrastructure Complete** - Ready for capability detection and usage

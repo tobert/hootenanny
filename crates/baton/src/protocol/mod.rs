@@ -42,6 +42,69 @@ pub struct ToolContext {
 
     /// Sender for progress notifications (if client requested progress).
     pub progress_sender: Option<ProgressSender>,
+
+    /// Sampler for requesting LLM inference from the client (if supported).
+    pub sampler: Option<Sampler>,
+}
+
+/// Handle for making sampling requests to the connected client's LLM.
+#[derive(Clone)]
+pub struct Sampler {
+    client: Arc<crate::transport::SamplingClient>,
+    sessions: Arc<dyn crate::session::SessionStore>,
+    session_id: String,
+}
+
+impl Sampler {
+    /// Create a new sampler for the given session.
+    pub fn new(
+        client: Arc<crate::transport::SamplingClient>,
+        sessions: Arc<dyn crate::session::SessionStore>,
+        session_id: String,
+    ) -> Self {
+        Self {
+            client,
+            sessions,
+            session_id,
+        }
+    }
+
+    /// Request a simple text completion from the client's LLM.
+    ///
+    /// This is a convenience wrapper that creates a simple user message request.
+    pub async fn ask(&self, question: impl Into<String>) -> Result<String, crate::transport::SamplingError> {
+        use crate::types::sampling::{SamplingMessage, SamplingRequest};
+
+        let request = SamplingRequest {
+            messages: vec![SamplingMessage::user(question)],
+            max_tokens: Some(500),
+            ..Default::default()
+        };
+
+        let response = self.sample(request).await?;
+
+        // Extract text from response content
+        if let Some(text_content) = response.content.as_text() {
+            Ok(text_content.to_string())
+        } else {
+            Ok(String::new())
+        }
+    }
+
+    /// Request sampling with full control over parameters.
+    pub async fn sample(
+        &self,
+        request: crate::types::sampling::SamplingRequest,
+    ) -> Result<crate::types::sampling::SamplingResponse, crate::transport::SamplingError> {
+        // Get the session
+        let session = self
+            .sessions
+            .get(&self.session_id)
+            .ok_or(crate::transport::SamplingError::SessionNotFound)?;
+
+        // Send sampling request through the client
+        self.client.sample(session, request, None).await
+    }
 }
 
 impl ToolContext {
@@ -346,10 +409,12 @@ async fn handle_call_tool<H: Handler>(
     }
 
     // Create tool context
+    // TODO: Add sampler when client capabilities support sampling
     let context = ToolContext {
         session_id: session_id.to_string(),
         progress_token,
         progress_sender: progress_tx,
+        sampler: None, // Not yet checking client capabilities
     };
 
     // Create child span for tool execution with MCP-specific attributes
