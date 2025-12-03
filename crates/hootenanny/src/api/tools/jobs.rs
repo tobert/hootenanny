@@ -1,3 +1,4 @@
+use crate::api::responses::{JobStatusResponse, JobListResponse, JobSummary, JobCancelResponse, JobPollResponse};
 use crate::api::service::EventDualityServer;
 use crate::api::schema::{GetJobStatusRequest, CancelJobRequest, PollRequest, SleepRequest};
 use crate::job_system::{JobId, JobStatus};
@@ -24,10 +25,31 @@ impl EventDualityServer {
 
         tracing::Span::current().record("job.status", format!("{:?}", job_info.status));
 
-        let json = serde_json::to_string(&job_info)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize job info: {}", e)))?;
+        // Convert to response type with structured content
+        let status = match job_info.status {
+            JobStatus::Pending => crate::api::responses::JobStatus::Pending,
+            JobStatus::Running => crate::api::responses::JobStatus::Running,
+            JobStatus::Complete => crate::api::responses::JobStatus::Completed,
+            JobStatus::Failed => crate::api::responses::JobStatus::Failed,
+            JobStatus::Cancelled => crate::api::responses::JobStatus::Cancelled,
+        };
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        let response = JobStatusResponse {
+            job_id: job_info.job_id.as_str().to_string(),
+            status,
+            tool_name: job_info.tool_name.clone(),
+            result: job_info.result.clone(),
+            error: job_info.error.clone(),
+            created_at: Some(job_info.created_at as i64),
+            started_at: job_info.started_at.map(|t| t as i64),
+            completed_at: job_info.completed_at.map(|t| t as i64),
+        };
+
+        let json = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)])
+            .with_structured(serde_json::to_value(&response).unwrap()))
     }
 
     #[tracing::instrument(
@@ -42,10 +64,33 @@ impl EventDualityServer {
 
         tracing::Span::current().record("jobs.count", jobs.len());
 
-        let json = serde_json::to_string(&jobs)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize jobs: {}", e)))?;
+        // Convert to response type
+        let job_summaries: Vec<JobSummary> = jobs.iter().map(|j| {
+            let status = match j.status {
+                JobStatus::Pending => crate::api::responses::JobStatus::Pending,
+                JobStatus::Running => crate::api::responses::JobStatus::Running,
+                JobStatus::Complete => crate::api::responses::JobStatus::Completed,
+                JobStatus::Failed => crate::api::responses::JobStatus::Failed,
+                JobStatus::Cancelled => crate::api::responses::JobStatus::Cancelled,
+            };
+            JobSummary {
+                job_id: j.job_id.as_str().to_string(),
+                tool_name: j.tool_name.clone(),
+                status,
+                created_at: j.created_at as i64,
+            }
+        }).collect();
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        let response = JobListResponse {
+            total: job_summaries.len(),
+            jobs: job_summaries,
+        };
+
+        let json = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)])
+            .with_structured(serde_json::to_value(&response).unwrap()))
     }
 
     #[tracing::instrument(
@@ -64,12 +109,16 @@ impl EventDualityServer {
         self.job_store.cancel_job(&job_id)
             .map_err(|e| McpError::internal_error(e.to_string()))?;
 
-        let response = serde_json::json!({
-            "status": "cancelled",
-            "job_id": job_id.as_str(),
-        });
+        let response = JobCancelResponse {
+            job_id: job_id.as_str().to_string(),
+            cancelled: true,
+            message: "Job cancelled successfully".to_string(),
+        };
 
-        Ok(CallToolResult::success(vec![Content::text(response.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            format!("Job {}: {}", job_id.as_str(), response.message)
+        )])
+        .with_structured(serde_json::to_value(&response).unwrap()))
     }
 
     #[tracing::instrument(
@@ -167,15 +216,19 @@ impl EventDualityServer {
             tracing::Span::current().record("poll.elapsed_ms", elapsed_ms);
             tracing::Span::current().record("poll.reason", reason);
 
-            let response = serde_json::json!({
-                "completed": completed,
-                "pending": pending,
-                "failed": failed,
-                "elapsed_ms": elapsed_ms,
-                "reason": reason,
-            });
+            let response = JobPollResponse {
+                completed: completed.iter().map(|id| id.as_str().to_string()).collect(),
+                failed: failed.iter().map(|id| id.as_str().to_string()).collect(),
+                pending: pending.iter().map(|id| id.as_str().to_string()).collect(),
+                reason: reason.to_string(),
+                elapsed_ms,
+            };
 
-            return Ok(CallToolResult::success(vec![Content::text(response.to_string())]));
+            let json = serde_json::to_string_pretty(&response)
+                .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
+
+            return Ok(CallToolResult::success(vec![Content::text(json)])
+                .with_structured(serde_json::to_value(&response).unwrap()));
         }
     }
 
