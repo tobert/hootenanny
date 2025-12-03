@@ -1,3 +1,4 @@
+use crate::api::responses::{CasStoreResponse, CasInspectResponse, CasUploadResponse, JobSpawnResponse, JobStatus, SoundfontInspectResponse, PresetInfo, SoundfontPresetResponse, InstrumentInfo};
 use crate::api::service::EventDualityServer;
 use crate::api::schema::{CasStoreRequest, CasInspectRequest, UploadFileRequest, MidiToWavRequest, SoundfontInspectRequest, SoundfontPresetInspectRequest};
 use crate::artifact_store::{Artifact, ArtifactStore};
@@ -38,7 +39,14 @@ impl EventDualityServer {
 
         tracing::Span::current().record("cas.hash", &hash);
 
-        Ok(CallToolResult::success(vec![Content::text(hash)]))
+        let response = CasStoreResponse {
+            hash: hash.clone(),
+            size_bytes: decoded_content.len() as u64,
+            mime_type: request.mime_type.clone(),
+        };
+
+        Ok(CallToolResult::success(vec![Content::text(format!("Stored {} bytes as {}", response.size_bytes, hash))])
+            .with_structured(serde_json::to_value(&response).unwrap()))
     }
 
     #[tracing::instrument(
@@ -62,17 +70,19 @@ impl EventDualityServer {
         span.record("cas.mime_type", &*cas_ref.mime_type);
         span.record("cas.size_bytes", cas_ref.size_bytes);
 
-        let result = serde_json::json!({
-            "hash": cas_ref.hash,
-            "mime_type": cas_ref.mime_type,
-            "size": cas_ref.size_bytes,
-            "local_path": cas_ref.local_path,
-        });
+        let response = CasInspectResponse {
+            hash: cas_ref.hash.clone(),
+            mime_type: cas_ref.mime_type.clone(),
+            size_bytes: cas_ref.size_bytes,
+            exists: true,
+            local_path: cas_ref.local_path.clone(),
+        };
 
-        let json = serde_json::to_string(&result)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize CAS reference: {}", e)))?;
+        let json = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(CallToolResult::success(vec![Content::text(json)])
+            .with_structured(serde_json::to_value(&response).unwrap()))
     }
 
     #[tracing::instrument(
@@ -104,16 +114,18 @@ impl EventDualityServer {
 
         span.record("cas.hash", &*hash);
 
-        let result = serde_json::json!({
-            "hash": hash,
-            "size_bytes": file_bytes.len(),
-            "mime_type": request.mime_type,
-        });
+        let response = CasUploadResponse {
+            hash: hash.clone(),
+            size_bytes: file_bytes.len() as u64,
+            mime_type: request.mime_type.clone(),
+            source_path: request.file_path.clone(),
+        };
 
-        let json = serde_json::to_string(&result)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize response: {}", e)))?;
+        let json = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(CallToolResult::success(vec![Content::text(json)])
+            .with_structured(serde_json::to_value(&response).unwrap()))
     }
 
     #[tracing::instrument(
