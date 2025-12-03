@@ -641,23 +641,23 @@ pub struct BeatMetadata {
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GraphContextRequest {
-    #[schemars(description = "Filter by artifact tag (e.g., 'type:soundfont', 'type:midi')")]
+    #[schemars(description = "Filter by artifact tag (e.g., 'type:soundfont', 'type:midi', 'source:orpheus'). Use this for type-based discovery.")]
     pub tag: Option<String>,
 
-    #[schemars(description = "Search annotations/vibes for this text")]
+    #[schemars(description = "Search annotations/vibes for this text (e.g., 'warm', 'jazzy'). Finds artifacts with matching subjective descriptions.")]
     pub vibe_search: Option<String>,
 
-    #[schemars(description = "Filter by creator")]
+    #[schemars(description = "Filter by creator (e.g., 'claude', 'user'). Useful for finding your own artifacts.")]
     pub creator: Option<String>,
 
-    #[schemars(description = "Maximum number of artifacts to include (default: 20)")]
+    #[schemars(description = "Maximum number of artifacts to include (default: 20). Keep low for sub-agent context injection.")]
     pub limit: Option<usize>,
 
-    #[schemars(description = "Include full metadata (default: false, just summary)")]
+    #[schemars(description = "Include full metadata (default: false). Enable to see MIDI/audio technical details.")]
     #[serde(default)]
     pub include_metadata: bool,
 
-    #[schemars(description = "Include annotations (default: true)")]
+    #[schemars(description = "Include annotations (default: true). Disable to reduce context size.")]
     #[serde(default = "default_true")]
     pub include_annotations: bool,
 }
@@ -683,10 +683,10 @@ pub struct AddAnnotationRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GraphQueryRequest {
-    #[schemars(description = "Trustfall/GraphQL query string")]
+    #[schemars(description = "GraphQL query string OR artifact ID containing a saved query. Query example: '{ Artifact(tag: \"type:midi\") { id @output } }'. Artifact example: 'artifact_abc123'. Use @output on fields you want returned. Available entry points: Artifact, SoundFont.")]
     pub query: String,
 
-    #[schemars(description = "Variables for the query as JSON object (e.g., {\"artifact_id\": \"artifact_123\"})")]
+    #[schemars(description = "Variables for parameterized queries as JSON object (e.g., {\"artifact_id\": \"artifact_123\"}). Works with both inline queries and query artifacts.")]
     #[serde(default)]
     pub variables: serde_json::Value,
 

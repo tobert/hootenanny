@@ -60,9 +60,9 @@ impl Handler for HootHandler {
                 .with_input_schema(schema_for::<OrpheusGenerateRequest>()),
             Tool::new("orpheus_generate_seeded", "Generate MIDI from a seed with Orpheus")
                 .with_input_schema(schema_for::<OrpheusGenerateSeededRequest>()),
-            Tool::new("orpheus_continue", "Continue existing MIDI with Orpheus")
+            Tool::new("orpheus_continue", "Generate continuation clip from MIDI (returns new material only, not concatenated)")
                 .with_input_schema(schema_for::<OrpheusContinueRequest>()),
-            Tool::new("orpheus_bridge", "Create a bridge between MIDI sections")
+            Tool::new("orpheus_bridge", "Generate a transition clip between MIDI sections (returns bridge only)")
                 .with_input_schema(schema_for::<OrpheusBridgeRequest>()),
             Tool::new("orpheus_loops", "Generate drum/percussion loops with Orpheus")
                 .with_input_schema(schema_for::<OrpheusLoopsRequest>()),
@@ -109,12 +109,12 @@ impl Handler for HootHandler {
                 .read_only(),
 
             // Graph context tools for sub-agent asset discovery
-            Tool::new("graph_context", "Get bounded context about artifacts for sub-agent conversations. Returns a summary and list of matching artifacts with annotations.")
+            Tool::new("graph_context", "Simple artifact discovery with filters (tag, creator, vibe). Returns bounded context for sub-agents. Use this for quick lookups; use graph_query for complex traversals.")
                 .with_input_schema(schema_for::<GraphContextRequest>())
                 .read_only(),
-            Tool::new("add_annotation", "Add a subjective annotation to an artifact (e.g., 'warm, jazzy, vintage feel')")
+            Tool::new("add_annotation", "Add subjective annotations to artifacts with vibe keywords (e.g., 'warm, jazzy, vintage feel'). Makes artifacts searchable by mood/character.")
                 .with_input_schema(schema_for::<AddAnnotationRequest>()),
-            Tool::new("graph_query", "Execute a Trustfall/GraphQL query against the audio graph. Allows complex graph traversals and filtering.")
+            Tool::new("graph_query", "Execute GraphQL queries against the unified graph (artifacts, soundfonts, MIDI, audio). Query entry points: Artifact, SoundFont. Use @output for fields you want returned. Supports nested queries (annotations, tags, parent/children lineage).")
                 .with_input_schema(schema_for::<GraphQueryRequest>())
                 .read_only(),
 
@@ -147,7 +147,7 @@ impl Handler for HootHandler {
             // Anticipatory Music Transformer
             Tool::new("anticipatory_generate", "Generate polyphonic MIDI with Stanford's Anticipatory Music Transformer")
                 .with_input_schema(schema_for::<AnticipatoryGenerateRequest>()),
-            Tool::new("anticipatory_continue", "Continue existing MIDI with Anticipatory Music Transformer")
+            Tool::new("anticipatory_continue", "Generate continuation clip from MIDI (returns new material only, not concatenated)")
                 .with_input_schema(schema_for::<AnticipatoryContinueRequest>()),
             Tool::new("anticipatory_embed", "Extract hidden state embeddings from MIDI")
                 .with_input_schema(schema_for::<AnticipatoryEmbedRequest>())

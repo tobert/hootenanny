@@ -15,11 +15,35 @@ impl EventDualityServer {
     ///
     /// Allows agents to run complex graph queries with full Trustfall power.
     /// Returns JSON-formatted results.
-    #[tracing::instrument(name = "mcp.tool.graph_query", skip(self, request), fields(query_preview = %request.query.chars().take(80).collect::<String>()))]
+    #[tracing::instrument(name = "mcp.tool.graph_query", skip(self, request), fields(query_source = %if request.query.starts_with("artifact_") { "artifact" } else { "inline" }))]
     pub async fn graph_query(
         &self,
         request: GraphQueryRequest,
     ) -> Result<CallToolResult, McpError> {
+        // Detect if query is an artifact ID or inline query string
+        let query_string = if request.query.starts_with("artifact_") {
+            // Load query from artifact
+            tracing::info!(artifact_id = %request.query, "Loading query from artifact");
+
+            let artifact_source = self.graph_adapter.artifact_source();
+            let artifact = artifact_source.get_artifact(&request.query)
+                .map_err(|e| McpError::internal_error(format!("Failed to get artifact: {}", e)))?
+                .ok_or_else(|| McpError::invalid_params(format!("Query artifact not found: {}", request.query)))?;
+
+            // Read query text from CAS
+            let cas_ref = self.local_models.inspect_cas_content(&artifact.content_hash).await
+                .map_err(|e| McpError::internal_error(format!("Failed to read artifact content: {}", e)))?;
+
+            // Read from local path
+            let path = cas_ref.local_path
+                .ok_or_else(|| McpError::internal_error("Query artifact has no local path"))?;
+            tokio::fs::read_to_string(&path).await
+                .map_err(|e| McpError::internal_error(format!("Failed to read query file: {}", e)))?
+        } else {
+            // Use query string directly
+            request.query.clone()
+        };
+
         // Convert JSON variables to Trustfall format
         let variables = json_to_variables(&request.variables)
             .map_err(|e| McpError::invalid_params(format!("Invalid variables: {}", e)))?;
@@ -30,7 +54,7 @@ impl EventDualityServer {
         let results_iter = execute_query(
             schema,
             adapter_arc,
-            &request.query,
+            &query_string,
             variables,
         )
         .map_err(|e| McpError::invalid_params(format!("Query execution failed: {}", e)))?;
@@ -44,7 +68,8 @@ impl EventDualityServer {
 
         // Build response
         let response = serde_json::json!({
-            "query": request.query,
+            "query": query_string,
+            "query_source": if request.query.starts_with("artifact_") { "artifact" } else { "inline" },
             "result_count": results.len(),
             "results": results,
         });
