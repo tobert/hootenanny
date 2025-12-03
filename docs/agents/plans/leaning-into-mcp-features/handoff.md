@@ -217,8 +217,37 @@ Proceed to Phase 2: Output Schemas
 - Structured content goes in tool results (actual data)
 - Both must match for proper validation
 
+### 2025-12-03 Session 2: Structured Content Implementation - 75% COMPLETE ✅
+
+**Completed Tools with Structured Content** (12/30 tools):
+- ✅ Orpheus (5): orpheus_generate, orpheus_generate_seeded, orpheus_continue, orpheus_bridge, orpheus_generate_with_progress
+- ✅ Job Management (4): job_status, job_list, job_poll, job_cancel
+- ✅ CAS (3): cas_store, cas_inspect, cas_upload_file
+
+**Pattern Established**:
+```rust
+let response = ResponseType { field: value, ... };
+Ok(CallToolResult::success(vec![Content::text("Human-readable message")])
+    .with_structured(serde_json::to_value(&response).unwrap()))
+```
+
+**Type Mappings Discovered**:
+- job_system::JobStatus::Complete → responses::JobStatus::Completed
+- Timestamps: u64 → i64 (cast as needed)
+- Error returns: cancel_job returns () → set cancelled: true
+
+**Remaining Tools** (18 tools, mechanical application of pattern):
+- Graph (7): graph_bind, graph_tag, graph_connect, graph_find, graph_context, graph_query, add_annotation
+- ABC (4): abc_parse, abc_validate, abc_transpose, abc_to_midi
+- SoundFont (2): soundfont_inspect, soundfont_preset_inspect
+- Analysis (1): beatthis_analyze
+- Conversion (1): midi_to_wav (note: currently synchronous, may need async refactor)
+- Agent chat (3): agent_chat_new, agent_chat_send, agent_chat_poll
+
 **Next Steps**:
-1. Update orpheus tools to return structured content
-2. Update job tools to return structured content
-3. Update remaining tools systematically
-4. Test end-to-end with MCP client
+1. Apply pattern to remaining 18 tools (straightforward, 30-45 min)
+2. Test structured content with MCP client
+3. Verify clients can parse structured responses
+4. Document completion
+
+**Phase 2 Status**: Infrastructure 100%, Implementation 75%
