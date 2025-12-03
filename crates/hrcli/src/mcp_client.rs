@@ -111,7 +111,9 @@ impl McpClient {
             "method": "initialize",
             "params": {
                 "protocolVersion": "2025-06-18",
-                "capabilities": {},
+                "capabilities": {
+                    "sampling": {}
+                },
                 "clientInfo": {
                     "name": "hrcli",
                     "version": env!("CARGO_PKG_VERSION")

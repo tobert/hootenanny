@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use baton::{
     CallToolResult, ErrorData, Handler, Implementation, Resource, ResourceTemplate, Tool,
+    ToolContext,
 };
 use serde_json::Value;
 
@@ -33,6 +34,19 @@ impl Handler for CompositeHandler {
             self.agent.call_tool(name, arguments).await
         } else {
             self.hoot.call_tool(name, arguments).await
+        }
+    }
+
+    async fn call_tool_with_context(
+        &self,
+        name: &str,
+        arguments: Value,
+        context: ToolContext,
+    ) -> Result<CallToolResult, ErrorData> {
+        if name.starts_with("agent_chat_") {
+            self.agent.call_tool_with_context(name, arguments, context).await
+        } else {
+            self.hoot.call_tool_with_context(name, arguments, context).await
         }
     }
 
