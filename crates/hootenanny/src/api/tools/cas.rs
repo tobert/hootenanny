@@ -4,6 +4,7 @@ use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::mcp_tools::rustysynth::{render_midi_to_wav, inspect_soundfont, inspect_preset};
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
 use baton::{ErrorData as McpError, CallToolResult, Content};
+use baton::protocol::ProgressSender;
 use base64::{Engine as _, engine::general_purpose};
 use tracing;
 
@@ -313,5 +314,15 @@ impl EventDualityServer {
             .map_err(|e| McpError::internal_error(format!("Failed to serialize response: {}", e)))?;
 
         Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    /// MIDI to WAV conversion with progress notifications
+    pub async fn midi_to_wav_with_progress(
+        &self,
+        request: MidiToWavRequest,
+        _progress: Option<ProgressSender>,
+    ) -> Result<CallToolResult, McpError> {
+        // TODO: Add progress notifications for conversion stages
+        self.midi_to_wav(request).await
     }
 }

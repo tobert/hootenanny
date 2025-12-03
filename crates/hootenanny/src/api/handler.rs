@@ -456,17 +456,40 @@ impl Handler for HootHandler {
             );
         }
 
-        // For now, forward to existing implementations
-        // TODO: Add progress reporting to job-spawning tools:
-        // - orpheus_generate, orpheus_generate_seeded, orpheus_continue
-        // - orpheus_bridge, orpheus_loops
-        // - convert_midi_to_wav
-        // - musicgen_generate
-        // - anticipatory_generate, anticipatory_continue
-        // - yue_generate
-        // - beatthis_analyze, clap_analyze
+        // Route job-spawning tools to progress-aware implementations
+        match name {
+            "orpheus_generate" if context.has_progress() => {
+                let request: OrpheusGenerateRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.orpheus_generate_with_progress(request, context.progress_sender).await
+            }
+            "orpheus_generate_seeded" if context.has_progress() => {
+                let request: OrpheusGenerateSeededRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.orpheus_generate_seeded_with_progress(request, context.progress_sender).await
+            }
+            "orpheus_continue" if context.has_progress() => {
+                let request: OrpheusContinueRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.orpheus_continue_with_progress(request, context.progress_sender).await
+            }
+            "orpheus_bridge" if context.has_progress() => {
+                let request: OrpheusBridgeRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.orpheus_bridge_with_progress(request, context.progress_sender).await
+            }
+            "convert_midi_to_wav" if context.has_progress() => {
+                let request: MidiToWavRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.midi_to_wav_with_progress(request, context.progress_sender).await
+            }
+            // TODO: Add other tools when their modules are implemented:
+            // - musicgen_generate, anticipatory_generate, anticipatory_continue
+            // - yue_generate, beatthis_analyze, clap_analyze
 
-        self.call_tool(name, args).await
+            // Fall through to standard implementation for tools without progress or no token
+            _ => self.call_tool(name, args).await
+        }
     }
 
     fn server_info(&self) -> Implementation {

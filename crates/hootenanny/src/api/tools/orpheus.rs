@@ -4,6 +4,8 @@ use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::mcp_tools::local_models::OrpheusGenerateParams;
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
 use baton::{ErrorData as McpError, CallToolResult, Content};
+use baton::protocol::ProgressSender;
+use baton::types::progress::ProgressNotification;
 use std::sync::Arc;
 use tracing;
 
@@ -579,5 +581,204 @@ impl EventDualityServer {
         });
 
         Ok(CallToolResult::success(vec![Content::text(response.to_string())]))
+    }
+
+    // ========================================================================
+    // Progress-aware versions of tools
+    // ========================================================================
+
+    /// Orpheus generate with progress notifications
+    pub async fn orpheus_generate_with_progress(
+        &self,
+        request: OrpheusGenerateRequest,
+        progress: Option<ProgressSender>,
+    ) -> Result<CallToolResult, McpError> {
+        // If no progress sender, fall back to regular version
+        let Some(progress_tx) = progress else {
+            return self.orpheus_generate(request).await;
+        };
+
+        // Get progress token from the context (we'll need to extract it)
+        // For now, use a placeholder - the dispatch layer provides the actual token
+        let progress_token = baton::types::progress::ProgressToken::String("progress".to_string());
+
+        // Validate and create job (same as regular version)
+        Self::validate_sampling_params(request.temperature, request.top_p)?;
+        let job_id = self.job_store.create_job("orpheus_generate".to_string());
+
+        // Clone for background task
+        let local_models = Arc::clone(&self.local_models);
+        let artifact_store = Arc::clone(&self.artifact_store);
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
+        let progress_token_clone = progress_token.clone();
+
+        // Spawn background task with progress reporting
+        let handle = tokio::spawn(async move {
+            let _ = job_store.mark_running(&job_id_clone);
+
+            // Send initial progress
+            let _ = progress_tx.send(ProgressNotification::normalized(
+                progress_token_clone.clone(),
+                0.0,
+                "Starting generation...",
+            )).await;
+
+            let params = OrpheusGenerateParams {
+                temperature: request.temperature,
+                top_p: request.top_p,
+                max_tokens: request.max_tokens,
+                num_variations: request.num_variations,
+            };
+
+            let model = request.model.unwrap_or_else(|| "base".to_string());
+
+            // Progress: tokenizing
+            let _ = progress_tx.send(ProgressNotification::normalized(
+                progress_token_clone.clone(),
+                0.25,
+                "Tokenizing...",
+            )).await;
+
+            match local_models.run_orpheus_generate(
+                model.clone(),
+                "generate".to_string(),
+                None,
+                params,
+                Some(job_id_clone.as_str().to_string())
+            ).await {
+                Ok(result) => {
+                    // Progress: creating artifacts
+                    let _ = progress_tx.send(ProgressNotification::normalized(
+                        progress_token_clone.clone(),
+                        0.75,
+                        "Creating artifacts...",
+                    )).await;
+
+                    let artifacts_result = (|| -> anyhow::Result<Vec<Artifact>> {
+                        let mut artifacts = Vec::new();
+                        let store = artifact_store.write().map_err(|_| anyhow::anyhow!("Lock poisoned"))?;
+
+                        for (i, hash) in result.output_hashes.iter().enumerate() {
+                            let tokens = result.num_tokens.get(i).copied().map(|t| t as u32);
+                            let content_hash = ContentHash::new(hash);
+                            let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+                            let creator = request.creator.clone().unwrap_or_else(|| "agent_orpheus".to_string());
+
+                            let mut artifact = Artifact::new(
+                                artifact_id,
+                                content_hash,
+                                &creator,
+                                serde_json::json!({
+                                    "type": "orpheus_generation",
+                                    "task": "generate",
+                                    "model": { "name": model },
+                                    "params": {
+                                        "temperature": request.temperature,
+                                        "top_p": request.top_p,
+                                        "max_tokens": request.max_tokens,
+                                        "num_variations": request.num_variations,
+                                    },
+                                    "generation": {
+                                        "tokens": tokens,
+                                        "job_id": job_id_clone.as_str(),
+                                    },
+                                })
+                            )
+                            .with_tags(vec![
+                                "type:midi",
+                                "source:orpheus",
+                                "tool:orpheus_generate"
+                            ]);
+
+                            if let Some(ref set_id) = request.variation_set_id {
+                                let index = store.next_variation_index(set_id)?;
+                                artifact = artifact.with_variation_set(VariationSetId::new(set_id), index);
+                            }
+
+                            if let Some(ref parent_id) = request.parent_id {
+                                artifact = artifact.with_parent(ArtifactId::new(parent_id));
+                            }
+
+                            artifact = artifact.with_tags(request.tags.clone());
+                            store.put(artifact.clone())?;
+                            artifacts.push(artifact);
+                        }
+
+                        store.flush()?;
+                        Ok(artifacts)
+                    })();
+
+                    match artifacts_result {
+                        Ok(artifacts) => {
+                            // Progress: complete
+                            let _ = progress_tx.send(ProgressNotification::normalized(
+                                progress_token_clone,
+                                1.0,
+                                "Complete",
+                            )).await;
+
+                            let response = serde_json::json!({
+                                "status": result.status,
+                                "output_hashes": result.output_hashes,
+                                "artifact_ids": artifacts.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+                                "summary": result.summary,
+                                "variation_set_id": artifacts.first().and_then(|a| a.variation_set_id.as_ref().map(|s| s.as_str())),
+                                "variation_indices": artifacts.iter().map(|a| a.variation_index).collect::<Vec<_>>(),
+                            });
+
+                            let _ = job_store.mark_complete(&job_id_clone, response);
+                        }
+                        Err(e) => {
+                            let _ = job_store.mark_failed(&job_id_clone, format!("Failed to create artifacts: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
+        });
+
+        self.job_store.store_handle(&job_id, handle);
+
+        // Return job ID immediately (same as regular version)
+        let response = serde_json::json!({
+            "job_id": job_id.as_str(),
+            "status": "pending",
+            "message": "Generation started with progress tracking."
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(response.to_string())]))
+    }
+
+    /// Stub implementations for other progress-aware methods
+    /// TODO: Implement full progress reporting for these
+
+    pub async fn orpheus_generate_seeded_with_progress(
+        &self,
+        request: OrpheusGenerateSeededRequest,
+        _progress: Option<ProgressSender>,
+    ) -> Result<CallToolResult, McpError> {
+        // TODO: Add progress notifications
+        self.orpheus_generate_seeded(request).await
+    }
+
+    pub async fn orpheus_continue_with_progress(
+        &self,
+        request: OrpheusContinueRequest,
+        _progress: Option<ProgressSender>,
+    ) -> Result<CallToolResult, McpError> {
+        // TODO: Add progress notifications
+        self.orpheus_continue(request).await
+    }
+
+    pub async fn orpheus_bridge_with_progress(
+        &self,
+        request: OrpheusBridgeRequest,
+        _progress: Option<ProgressSender>,
+    ) -> Result<CallToolResult, McpError> {
+        // TODO: Add progress notifications
+        self.orpheus_bridge(request).await
     }
 }
