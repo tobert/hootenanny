@@ -693,3 +693,20 @@ pub struct GraphQueryRequest {
     #[schemars(description = "Maximum number of results to return (default: 100)")]
     pub limit: Option<usize>,
 }
+
+// --- Sampling Requests ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SampleLlmRequest {
+    #[schemars(description = "The question or prompt to send to the client's LLM")]
+    pub prompt: String,
+
+    #[schemars(description = "Maximum tokens to generate (default: 500)")]
+    pub max_tokens: Option<u32>,
+
+    #[schemars(description = "Temperature 0.0-2.0 (default: 1.0). Higher = more random")]
+    pub temperature: Option<f64>,
+
+    #[schemars(description = "System prompt to use (optional)")]
+    pub system_prompt: Option<String>,
+}

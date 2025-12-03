@@ -5,6 +5,7 @@ pub mod graph_context;
 pub mod graph_query;
 pub mod jobs;
 pub mod orpheus;
+pub mod sampling;
 
 // TODO: These modules need to be created for progress notification support:
 // pub mod anticipatory;

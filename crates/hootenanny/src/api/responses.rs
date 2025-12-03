@@ -317,3 +317,15 @@ pub struct AddAnnotationResponse {
     pub annotation_id: String,
     pub success: bool,
 }
+
+// ============================================================================
+// Sampling Tool Responses
+// ============================================================================
+
+/// Response from sample_llm tool
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SampleLlmResponse {
+    pub response: String,
+    pub model: String,
+    pub stop_reason: Option<String>,
+}

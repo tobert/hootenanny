@@ -165,6 +165,12 @@ impl Handler for HootHandler {
                 .with_output_schema(schema_for::<BeatthisAnalyzeResponse>())
                 .read_only(),
 
+            // Sampling tools (server-initiated LLM requests)
+            Tool::new("sample_llm", "Request LLM inference from the connected client (requires client sampling support)")
+                .with_input_schema(schema_for::<SampleLlmRequest>())
+                .with_output_schema(schema_for::<SampleLlmResponse>())
+                .read_only(),
+
             // TODO: Implement CLAP audio analysis
             // Tool::new("clap_analyze", "Analyze audio: extract embeddings, classify genre/mood, compare similarity")
             //     .with_input_schema(schema_for::<ClapAnalyzeRequest>())
@@ -513,6 +519,13 @@ impl Handler for HootHandler {
                     .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
                 self.server.midi_to_wav_with_progress(request, context.progress_sender).await
             }
+            // Sampling tools (always need context for Sampler)
+            "sample_llm" => {
+                let request: SampleLlmRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.sample_llm(request, context).await
+            }
+
             // TODO: Add other tools when their modules are implemented:
             // - musicgen_generate, anticipatory_generate, anticipatory_continue
             // - yue_generate, beatthis_analyze, clap_analyze
