@@ -363,3 +363,34 @@ This is a good checkpoint before tackling the complex bidirectional communicatio
 - ⏸️ Live test with MCP client that supports sampling
 
 **Status**: ✅ **Infrastructure Complete** - Ready for capability detection and usage
+
+### 2025-12-03 Session 3: Capability Detection Complete ✅
+
+**Completed**:
+- ✅ Added `client_capabilities` field to Session
+- ✅ Added `set_capabilities()` and `supports_sampling()` to Session
+- ✅ Updated SessionStore trait with `set_capabilities()`
+- ✅ Implemented in InMemorySessionStore
+- ✅ Store capabilities during initialize handshake
+- ✅ Create Sampler in ToolContext when client supports sampling
+
+**Files Changed**:
+- `crates/baton/src/session/store.rs` - Added client_capabilities field
+- `crates/baton/src/session/mod.rs` - Added capability methods
+- `crates/baton/src/protocol/mod.rs` - Store capabilities, create Sampler
+
+**Flow**:
+1. Client sends `initialize` with ClientCapabilities
+2. Server stores capabilities in session
+3. `Session::supports_sampling()` checks for `sampling` capability
+4. When calling tools, create `Sampler` if supported
+5. Tools can use `context.sampler.ask()` for LLM inference
+
+**Testing**: Both baton and hootenanny compile cleanly
+
+**Status**: ✅ **Phase 3 Complete** - Full sampling infrastructure ready for use
+
+**Next Steps** (optional enhancements):
+- Add `sample_llm` tool for direct testing
+- Use sampling in Orpheus generation (vibe extraction)
+- Live test with Claude Code or other sampling-capable client

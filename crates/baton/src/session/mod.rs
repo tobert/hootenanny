@@ -30,6 +30,7 @@ impl Session {
             created_at: now,
             last_seen: now,
             client_info: None,
+            client_capabilities: None,
             initialized: false,
             tx: None,
         }
@@ -55,6 +56,19 @@ impl Session {
         self.initialized = true;
         self.client_info = Some(client_info);
         self.touch();
+    }
+
+    /// Set client capabilities after initialization.
+    pub fn set_capabilities(&mut self, capabilities: crate::types::protocol::ClientCapabilities) {
+        self.client_capabilities = Some(capabilities);
+    }
+
+    /// Check if the client supports sampling.
+    pub fn supports_sampling(&self) -> bool {
+        self.client_capabilities
+            .as_ref()
+            .and_then(|c| c.sampling.as_ref())
+            .is_some()
     }
 
     /// Register an SSE connection.

@@ -322,8 +322,9 @@ async fn handle_initialize<H: Handler>(
         .map_err(|e| ErrorData::invalid_params(format!("Invalid initialize params: {}", e)))?
         .ok_or_else(|| ErrorData::invalid_params("Missing initialize params"))?;
 
-    // Store client info in session
+    // Store client info and capabilities in session
     state.sessions.set_initialized(session_id, params.client_info);
+    state.sessions.set_capabilities(session_id, params.capabilities);
 
     let result = InitializeResult::new(
         Implementation::new(&state.server_name, &state.server_version),
@@ -408,13 +409,26 @@ async fn handle_call_tool<H: Handler>(
         });
     }
 
+    // Create sampler if client supports sampling
+    let sampler = {
+        let session = state.sessions.get(session_id);
+        if session.as_ref().map(|s| s.supports_sampling()).unwrap_or(false) {
+            Some(Sampler::new(
+                Arc::clone(&state.sampling_client),
+                Arc::clone(&state.sessions),
+                session_id.to_string(),
+            ))
+        } else {
+            None
+        }
+    };
+
     // Create tool context
-    // TODO: Add sampler when client capabilities support sampling
     let context = ToolContext {
         session_id: session_id.to_string(),
         progress_token,
         progress_sender: progress_tx,
-        sampler: None, // Not yet checking client capabilities
+        sampler,
     };
 
     // Create child span for tool execution with MCP-specific attributes

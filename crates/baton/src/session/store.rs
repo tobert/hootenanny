@@ -33,6 +33,9 @@ pub struct Session {
     /// Client implementation info (set after initialize).
     pub client_info: Option<Implementation>,
 
+    /// Client capabilities (set after initialize).
+    pub client_capabilities: Option<crate::types::protocol::ClientCapabilities>,
+
     /// Whether the session has completed initialization.
     pub initialized: bool,
 
@@ -70,6 +73,9 @@ pub trait SessionStore: Send + Sync {
 
     /// Mark a session as initialized.
     fn set_initialized(&self, id: &str, client_info: Implementation);
+
+    /// Set client capabilities for a session.
+    fn set_capabilities(&self, id: &str, capabilities: crate::types::protocol::ClientCapabilities);
 
     /// Register an SSE connection for a session.
     fn register_sse(&self, id: &str, tx: SseSender);
@@ -181,6 +187,18 @@ impl SessionStore for InMemorySessionStore {
                 "Session initialized"
             );
             session.set_initialized(client_info);
+        }
+    }
+
+    fn set_capabilities(&self, id: &str, capabilities: crate::types::protocol::ClientCapabilities) {
+        if let Some(mut session) = self.sessions.get_mut(id) {
+            let supports_sampling = capabilities.sampling.is_some();
+            tracing::debug!(
+                session_id = %id,
+                supports_sampling = supports_sampling,
+                "Client capabilities registered"
+            );
+            session.set_capabilities(capabilities);
         }
     }
 
