@@ -64,6 +64,11 @@ impl Handler for HootHandler {
                 .with_input_schema(schema_for::<OrpheusContinueRequest>()),
             Tool::new("orpheus_bridge", "Create a bridge between MIDI sections")
                 .with_input_schema(schema_for::<OrpheusBridgeRequest>()),
+            Tool::new("orpheus_loops", "Generate drum/percussion loops with Orpheus")
+                .with_input_schema(schema_for::<OrpheusLoopsRequest>()),
+            Tool::new("orpheus_classify", "Classify MIDI as human-composed or AI-generated")
+                .with_input_schema(schema_for::<OrpheusClassifyRequest>())
+                .read_only(),
 
             // Job tools
             Tool::new("job_status", "Get the status of an async job")
@@ -103,6 +108,16 @@ impl Handler for HootHandler {
                 .with_input_schema(schema_for::<GraphFindRequest>())
                 .read_only(),
 
+            // Graph context tools for sub-agent asset discovery
+            Tool::new("graph_context", "Get bounded context about artifacts for sub-agent conversations. Returns a summary and list of matching artifacts with annotations.")
+                .with_input_schema(schema_for::<GraphContextRequest>())
+                .read_only(),
+            Tool::new("add_annotation", "Add a subjective annotation to an artifact (e.g., 'warm, jazzy, vintage feel')")
+                .with_input_schema(schema_for::<AddAnnotationRequest>()),
+            Tool::new("graph_query", "Execute a Trustfall/GraphQL query against the audio graph. Allows complex graph traversals and filtering.")
+                .with_input_schema(schema_for::<GraphQueryRequest>())
+                .read_only(),
+
             // ABC notation tools
             Tool::new("abc_parse", "Parse ABC notation into a structured AST")
                 .with_input_schema(schema_for::<AbcParseRequest>())
@@ -119,6 +134,28 @@ impl Handler for HootHandler {
             Tool::new("beatthis_analyze", "Detect beats and downbeats in audio. Returns beat times in seconds, estimated BPM, and optionally frame-level probabilities.")
                 .with_input_schema(schema_for::<AnalyzeBeatsRequest>())
                 .read_only(),
+
+            // CLAP audio analysis
+            Tool::new("clap_analyze", "Analyze audio: extract embeddings, classify genre/mood, compare similarity")
+                .with_input_schema(schema_for::<ClapAnalyzeRequest>())
+                .read_only(),
+
+            // MusicGen text-to-music
+            Tool::new("musicgen_generate", "Generate music from text description using MusicGen")
+                .with_input_schema(schema_for::<MusicgenGenerateRequest>()),
+
+            // Anticipatory Music Transformer
+            Tool::new("anticipatory_generate", "Generate polyphonic MIDI with Stanford's Anticipatory Music Transformer")
+                .with_input_schema(schema_for::<AnticipatoryGenerateRequest>()),
+            Tool::new("anticipatory_continue", "Continue existing MIDI with Anticipatory Music Transformer")
+                .with_input_schema(schema_for::<AnticipatoryContinueRequest>()),
+            Tool::new("anticipatory_embed", "Extract hidden state embeddings from MIDI")
+                .with_input_schema(schema_for::<AnticipatoryEmbedRequest>())
+                .read_only(),
+
+            // YuE text-to-song with vocals
+            Tool::new("yue_generate", "Generate a complete song with vocals from lyrics using YuE")
+                .with_input_schema(schema_for::<YueGenerateRequest>()),
         ]
     }
 
@@ -176,6 +213,16 @@ impl Handler for HootHandler {
                 let request: OrpheusBridgeRequest = serde_json::from_value(args)
                     .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
                 self.server.orpheus_bridge(request).await
+            }
+            "orpheus_loops" => {
+                let request: OrpheusLoopsRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.orpheus_loops(request).await
+            }
+            "orpheus_classify" => {
+                let request: OrpheusClassifyRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.orpheus_classify(request).await
             }
 
             // Job tools
@@ -301,6 +348,23 @@ impl Handler for HootHandler {
                 }
             }
 
+            // Graph context tools for sub-agent asset discovery
+            "graph_context" => {
+                let request: GraphContextRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.graph_context(request).await
+            }
+            "add_annotation" => {
+                let request: AddAnnotationRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.add_annotation(request).await
+            }
+            "graph_query" => {
+                let request: GraphQueryRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.graph_query(request).await
+            }
+
             // ABC notation tools
             "abc_parse" => {
                 let request: AbcParseRequest = serde_json::from_value(args)
@@ -328,6 +392,44 @@ impl Handler for HootHandler {
                 let request: AnalyzeBeatsRequest = serde_json::from_value(args)
                     .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
                 self.server.analyze_beats(request).await
+            }
+
+            // CLAP audio analysis
+            "clap_analyze" => {
+                let request: ClapAnalyzeRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.clap_analyze(request).await
+            }
+
+            // MusicGen text-to-music
+            "musicgen_generate" => {
+                let request: MusicgenGenerateRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.musicgen_generate(request).await
+            }
+
+            // Anticipatory Music Transformer
+            "anticipatory_generate" => {
+                let request: AnticipatoryGenerateRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.anticipatory_generate(request).await
+            }
+            "anticipatory_continue" => {
+                let request: AnticipatoryContinueRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.anticipatory_continue(request).await
+            }
+            "anticipatory_embed" => {
+                let request: AnticipatoryEmbedRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.anticipatory_embed(request).await
+            }
+
+            // YuE text-to-song with vocals
+            "yue_generate" => {
+                let request: YueGenerateRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.yue_generate(request).await
             }
 
             _ => Err(ErrorData::tool_not_found(name)),
@@ -765,7 +867,7 @@ impl Handler for HootHandler {
                         map
                     });
 
-                let mut recent: Vec<_> = midi_artifacts.iter().cloned().collect();
+                let mut recent: Vec<_> = midi_artifacts.to_vec();
                 recent.sort_by(|a, b| b.created_at.cmp(&a.created_at));
                 let recent_summary: Vec<_> = recent.iter()
                     .take(3)
@@ -862,7 +964,7 @@ impl HootHandler {
                         let json = serde_json::to_string_pretty(&result)
                             .map_err(|e| ErrorData::internal_error(e.to_string()))?;
                         Ok(ReadResourceResult::single(ResourceContents::text_with_mime(
-                            &format!("graph://identity/{}", id),
+                            format!("graph://identity/{}", id),
                             json,
                             "application/json",
                         )))
@@ -881,14 +983,12 @@ impl HootHandler {
         match self.server.cas_inspect(request).await {
             Ok(result) => {
                 // The cas_inspect result contains metadata, return it as the resource
-                if let Some(content) = result.content.first() {
-                    if let Content::Text { text, .. } = content {
-                        return Ok(ReadResourceResult::single(ResourceContents::text_with_mime(
-                            &format!("cas://{}", hash),
-                            text.clone(),
-                            "application/json",
-                        )));
-                    }
+                if let Some(Content::Text { text, .. }) = result.content.first() {
+                    return Ok(ReadResourceResult::single(ResourceContents::text_with_mime(
+                        format!("cas://{}", hash),
+                        text.clone(),
+                        "application/json",
+                    )));
                 }
                 Err(ErrorData::internal_error("No text content in CAS inspect result"))
             }
@@ -945,7 +1045,7 @@ impl HootHandler {
                 let recent: Vec<_> = all.into_iter().take(10).collect();
 
                 let result: Vec<_> = recent.iter()
-                    .map(|a| Self::artifact_to_json(a))
+                    .map(Self::artifact_to_json)
                     .collect();
                 Ok(Self::as_json_resource("artifacts://recent", &serde_json::json!(result))?)
             }
@@ -984,7 +1084,7 @@ impl HootHandler {
                 let result = serde_json::json!({
                     "set_id": set_id,
                     "count": filtered.len(),
-                    "variations": filtered.iter().map(|a| Self::artifact_to_json(a)).collect::<Vec<_>>(),
+                    "variations": filtered.iter().map(Self::artifact_to_json).collect::<Vec<_>>(),
                 });
                 Ok(Self::as_json_resource(&format!("artifacts://variation-set/{}", set_id), &result)?)
             }

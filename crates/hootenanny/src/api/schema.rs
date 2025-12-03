@@ -181,6 +181,211 @@ pub struct OrpheusBridgeRequest {
     pub creator: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct OrpheusLoopsRequest {
+    #[schemars(description = "Sampling temperature 0.0-2.0 (default: 1.0). Higher = more random")]
+    pub temperature: Option<f32>,
+
+    #[schemars(description = "Nucleus sampling 0.0-1.0 (default: 0.95). Lower = more focused")]
+    pub top_p: Option<f32>,
+
+    #[schemars(description = "Max tokens to generate (default: 1024)")]
+    pub max_tokens: Option<u32>,
+
+    #[schemars(description = "Number of variations to generate (default: 1)")]
+    pub num_variations: Option<u32>,
+
+    #[schemars(description = "CAS hash of seed MIDI for seeded generation (optional)")]
+    pub seed_hash: Option<String>,
+
+    #[schemars(description = "Optional variation set ID to group related generations")]
+    pub variation_set_id: Option<String>,
+
+    #[schemars(description = "Optional parent artifact ID for refinements")]
+    pub parent_id: Option<String>,
+
+    #[schemars(description = "Optional tags for organizing artifacts")]
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[schemars(description = "Creator identifier (agent or user ID)")]
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct OrpheusClassifyRequest {
+    #[schemars(description = "CAS hash of MIDI to classify (required)")]
+    pub midi_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ClapAnalyzeRequest {
+    #[schemars(description = "CAS hash of audio file to analyze (required)")]
+    pub audio_hash: String,
+
+    #[schemars(description = "Tasks to run: 'embeddings', 'genre', 'mood', 'zero_shot', 'similarity'. Default: ['embeddings']")]
+    #[serde(default = "default_clap_tasks")]
+    pub tasks: Vec<String>,
+
+    #[schemars(description = "CAS hash of second audio for similarity comparison")]
+    pub audio_b_hash: Option<String>,
+
+    #[schemars(description = "Custom text labels for zero_shot classification")]
+    #[serde(default)]
+    pub text_candidates: Vec<String>,
+}
+
+fn default_clap_tasks() -> Vec<String> {
+    vec!["embeddings".to_string()]
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MusicgenGenerateRequest {
+    #[schemars(description = "Text prompt describing the music to generate")]
+    pub prompt: Option<String>,
+
+    #[schemars(description = "Duration in seconds (0.5-30.0, default: 10.0)")]
+    pub duration: Option<f32>,
+
+    #[schemars(description = "Sampling temperature (0.01-2.0, default: 1.0)")]
+    pub temperature: Option<f32>,
+
+    #[schemars(description = "Top-k filtering (0-1000, default: 250)")]
+    pub top_k: Option<u32>,
+
+    #[schemars(description = "Nucleus sampling (0.0-1.0, default: 0.9)")]
+    pub top_p: Option<f32>,
+
+    #[schemars(description = "Classifier-free guidance scale (1.0-15.0, default: 3.0). Higher = stronger prompt adherence")]
+    pub guidance_scale: Option<f32>,
+
+    #[schemars(description = "Enable sampling vs greedy decoding (default: true)")]
+    pub do_sample: Option<bool>,
+
+    #[schemars(description = "Optional variation set ID")]
+    pub variation_set_id: Option<String>,
+
+    #[schemars(description = "Optional parent artifact ID")]
+    pub parent_id: Option<String>,
+
+    #[schemars(description = "Optional tags for organizing artifacts")]
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[schemars(description = "Creator identifier (agent or user ID)")]
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AnticipatoryGenerateRequest {
+    #[schemars(description = "Duration in seconds to generate (1.0-120.0, default: 20.0)")]
+    pub length_seconds: Option<f32>,
+
+    #[schemars(description = "Nucleus sampling (0.1-1.0, default: 0.95)")]
+    pub top_p: Option<f32>,
+
+    #[schemars(description = "Number of variations (1-5, default: 1)")]
+    pub num_variations: Option<u32>,
+
+    #[schemars(description = "Model size: 'small', 'medium', or 'large' (default: 'small')")]
+    pub model_size: Option<String>,
+
+    #[schemars(description = "Optional variation set ID")]
+    pub variation_set_id: Option<String>,
+
+    #[schemars(description = "Optional parent artifact ID")]
+    pub parent_id: Option<String>,
+
+    #[schemars(description = "Optional tags for organizing artifacts")]
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[schemars(description = "Creator identifier (agent or user ID)")]
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AnticipatoryContinueRequest {
+    #[schemars(description = "CAS hash of MIDI to continue (required)")]
+    pub midi_hash: String,
+
+    #[schemars(description = "Seconds of input to use as prime (1.0-60.0, default: 5.0)")]
+    pub prime_seconds: Option<f32>,
+
+    #[schemars(description = "Seconds of new music to generate (1.0-120.0, default: 20.0)")]
+    pub length_seconds: Option<f32>,
+
+    #[schemars(description = "Nucleus sampling (0.1-1.0, default: 0.95)")]
+    pub top_p: Option<f32>,
+
+    #[schemars(description = "Number of variations (1-5, default: 1)")]
+    pub num_variations: Option<u32>,
+
+    #[schemars(description = "Model size: 'small', 'medium', or 'large' (default: 'small')")]
+    pub model_size: Option<String>,
+
+    #[schemars(description = "Optional variation set ID")]
+    pub variation_set_id: Option<String>,
+
+    #[schemars(description = "Optional parent artifact ID")]
+    pub parent_id: Option<String>,
+
+    #[schemars(description = "Optional tags for organizing artifacts")]
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[schemars(description = "Creator identifier (agent or user ID)")]
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AnticipatoryEmbedRequest {
+    #[schemars(description = "CAS hash of MIDI to embed (required)")]
+    pub midi_hash: String,
+
+    #[schemars(description = "Hidden layer to extract (-12 to -1, default: -3 = layer 10)")]
+    pub embed_layer: Option<i32>,
+
+    #[schemars(description = "Model size: 'small', 'medium', or 'large' (default: 'small')")]
+    pub model_size: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct YueGenerateRequest {
+    #[schemars(description = "Lyrics with structure markers like [verse], [chorus], [bridge]")]
+    pub lyrics: String,
+
+    #[schemars(description = "Genre (e.g., 'Pop', 'Rock', 'Jazz', 'Electronic'). Default: 'Pop'")]
+    pub genre: Option<String>,
+
+    #[schemars(description = "Max tokens for stage 1 generation (default: 3000)")]
+    pub max_new_tokens: Option<u32>,
+
+    #[schemars(description = "Number of song segments to generate (default: 2)")]
+    pub run_n_segments: Option<u32>,
+
+    #[schemars(description = "Random seed for reproducibility (default: 42)")]
+    pub seed: Option<u64>,
+
+    #[schemars(description = "Optional variation set ID")]
+    pub variation_set_id: Option<String>,
+
+    #[schemars(description = "Optional parent artifact ID")]
+    pub parent_id: Option<String>,
+
+    #[schemars(description = "Optional tags for organizing artifacts")]
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[schemars(description = "Creator identifier (agent or user ID)")]
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
+}
+
 // --- CAS Requests ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -430,4 +635,61 @@ pub struct BeatFrames {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BeatMetadata {
     pub client_job_id: Option<String>,
+}
+
+// --- Graph Context Requests ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GraphContextRequest {
+    #[schemars(description = "Filter by artifact tag (e.g., 'type:soundfont', 'type:midi')")]
+    pub tag: Option<String>,
+
+    #[schemars(description = "Search annotations/vibes for this text")]
+    pub vibe_search: Option<String>,
+
+    #[schemars(description = "Filter by creator")]
+    pub creator: Option<String>,
+
+    #[schemars(description = "Maximum number of artifacts to include (default: 20)")]
+    pub limit: Option<usize>,
+
+    #[schemars(description = "Include full metadata (default: false, just summary)")]
+    #[serde(default)]
+    pub include_metadata: bool,
+
+    #[schemars(description = "Include annotations (default: true)")]
+    #[serde(default = "default_true")]
+    pub include_annotations: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AddAnnotationRequest {
+    #[schemars(description = "Artifact ID to annotate")]
+    pub artifact_id: String,
+
+    #[schemars(description = "The annotation message")]
+    pub message: String,
+
+    #[schemars(description = "Vibe keywords (e.g., 'warm, jazzy, vintage')")]
+    pub vibe: Option<String>,
+
+    #[schemars(description = "Source of the annotation (e.g., 'user', 'agent_claude')")]
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GraphQueryRequest {
+    #[schemars(description = "Trustfall/GraphQL query string")]
+    pub query: String,
+
+    #[schemars(description = "Variables for the query as JSON object (e.g., {\"artifact_id\": \"artifact_123\"})")]
+    #[serde(default)]
+    pub variables: serde_json::Value,
+
+    #[schemars(description = "Maximum number of results to return (default: 100)")]
+    pub limit: Option<usize>,
 }

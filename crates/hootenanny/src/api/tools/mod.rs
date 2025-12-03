@@ -1,5 +1,13 @@
 pub mod abc;
+pub mod anticipatory;
 pub mod beat_this;
 pub mod cas;
+pub mod clap;
+pub mod classify;
+pub mod graph_context;
+pub mod graph_query;
 pub mod jobs;
+pub mod loops;
+pub mod musicgen;
 pub mod orpheus;
+pub mod yue;
