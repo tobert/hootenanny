@@ -1,3 +1,4 @@
+use crate::api::responses::{JobSpawnResponse, JobStatus};
 use crate::api::schema::{OrpheusGenerateRequest, OrpheusGenerateSeededRequest, OrpheusContinueRequest, OrpheusBridgeRequest};
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
@@ -171,14 +172,19 @@ impl EventDualityServer {
         // Store handle for potential cancellation
         self.job_store.store_handle(&job_id, handle);
 
-        // Return job ID immediately
-        let response = serde_json::json!({
-            "job_id": job_id.as_str(),
-            "status": "pending",
-            "message": "Generation started. Use get_job_status() or wait_for_job() to retrieve results."
-        });
+        // Return job ID immediately with structured content
+        let response = JobSpawnResponse {
+            job_id: job_id.as_str().to_string(),
+            status: JobStatus::Pending,
+            artifact_id: None,
+            content_hash: None,
+            message: Some("Generation started. Use job_poll() to retrieve results.".to_string()),
+        };
 
-        Ok(CallToolResult::success(vec![Content::text(response.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            format!("Started job: {}", job_id.as_str())
+        )])
+        .with_structured(serde_json::to_value(&response).unwrap()))
     }
 
     #[tracing::instrument(
@@ -312,13 +318,18 @@ impl EventDualityServer {
 
         self.job_store.store_handle(&job_id, handle);
 
-        let response = serde_json::json!({
-            "job_id": job_id.as_str(),
-            "status": "pending",
-            "message": "Seeded generation started. Use get_job_status() or wait_for_job() to retrieve results."
-        });
+        let response = JobSpawnResponse {
+            job_id: job_id.as_str().to_string(),
+            status: JobStatus::Pending,
+            artifact_id: None,
+            content_hash: None,
+            message: Some("Seeded generation started. Use job_poll() to retrieve results.".to_string()),
+        };
 
-        Ok(CallToolResult::success(vec![Content::text(response.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            format!("Started job: {}", job_id.as_str())
+        )])
+        .with_structured(serde_json::to_value(&response).unwrap()))
     }
 
     #[tracing::instrument(
@@ -449,13 +460,18 @@ impl EventDualityServer {
 
         self.job_store.store_handle(&job_id, handle);
 
-        let response = serde_json::json!({
-            "job_id": job_id.as_str(),
-            "status": "pending",
-            "message": "Continuation started. Use get_job_status() or wait_for_job() to retrieve results."
-        });
+        let response = JobSpawnResponse {
+            job_id: job_id.as_str().to_string(),
+            status: JobStatus::Pending,
+            artifact_id: None,
+            content_hash: None,
+            message: Some("Continuation started. Use job_poll() to retrieve results.".to_string()),
+        };
 
-        Ok(CallToolResult::success(vec![Content::text(response.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            format!("Started job: {}", job_id.as_str())
+        )])
+        .with_structured(serde_json::to_value(&response).unwrap()))
     }
 
     #[tracing::instrument(
@@ -574,13 +590,18 @@ impl EventDualityServer {
 
         self.job_store.store_handle(&job_id, handle);
 
-        let response = serde_json::json!({
-            "job_id": job_id.as_str(),
-            "status": "pending",
-            "message": "Bridge generation started. Use job_poll() to retrieve results."
-        });
+        let response = JobSpawnResponse {
+            job_id: job_id.as_str().to_string(),
+            status: JobStatus::Pending,
+            artifact_id: None,
+            content_hash: None,
+            message: Some("Bridge generation started. Use job_poll() to retrieve results.".to_string()),
+        };
 
-        Ok(CallToolResult::success(vec![Content::text(response.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            format!("Started job: {}", job_id.as_str())
+        )])
+        .with_structured(serde_json::to_value(&response).unwrap()))
     }
 
     // ========================================================================
@@ -742,14 +763,19 @@ impl EventDualityServer {
 
         self.job_store.store_handle(&job_id, handle);
 
-        // Return job ID immediately (same as regular version)
-        let response = serde_json::json!({
-            "job_id": job_id.as_str(),
-            "status": "pending",
-            "message": "Generation started with progress tracking."
-        });
+        // Return job ID immediately with structured content
+        let response = JobSpawnResponse {
+            job_id: job_id.as_str().to_string(),
+            status: JobStatus::Pending,
+            artifact_id: None,
+            content_hash: None,
+            message: Some("Generation started with progress tracking.".to_string()),
+        };
 
-        Ok(CallToolResult::success(vec![Content::text(response.to_string())]))
+        Ok(CallToolResult::success(vec![Content::text(
+            format!("Started job: {}", job_id.as_str())
+        )])
+        .with_structured(serde_json::to_value(&response).unwrap()))
     }
 
     /// Stub implementations for other progress-aware methods
