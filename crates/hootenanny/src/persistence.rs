@@ -2,5 +2,4 @@
 //!
 //! This module is responsible for saving and loading state using sled.
 
-pub mod journal;
 pub mod snapshots;

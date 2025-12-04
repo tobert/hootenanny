@@ -11,7 +11,6 @@ mod web;
 use anyhow::{Context, Result};
 use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use clap::Parser;
-use persistence::journal::{Journal, SessionEvent};
 use api::composite::CompositeHandler;
 use api::handler::HootHandler;
 use api::service::EventDualityServer;
@@ -19,7 +18,7 @@ use mcp_tools::local_models::LocalModels;
 use cas::Cas;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 use llm_mcp_bridge::{AgentChatHandler, AgentManager, BackendConfig, BridgeConfig};
@@ -71,38 +70,6 @@ async fn main() -> Result<()> {
 
     std::fs::create_dir_all(&state_dir).context("Failed to create state directory")?;
     tracing::info!("Using state directory: {}", state_dir.display());
-
-    // --- Persistence / Journal ---
-    tracing::info!("🗄️  Initializing sled journal...");
-    let journal_dir = state_dir.join("journal");
-    std::fs::create_dir_all(&journal_dir)?;
-    let mut journal = Journal::new(&journal_dir)?;
-
-    tracing::info!("📝 Writing 'sessionStarted' event...");
-    let event = SessionEvent {
-        timestamp: SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)?
-            .as_nanos() as u64,
-        event_type: "sessionStarted".to_string(),
-    };
-    let event_id = journal.write_session_event(&event)?;
-    tracing::info!("   ✅ Event written with ID: {}", event_id);
-
-    tracing::info!("📖 Reading all events from journal...");
-    let events = journal.read_events()?;
-    tracing::info!("   Found {} event(s) in the journal.", events.len());
-
-    for (i, event) in events.iter().enumerate() {
-        tracing::info!(
-            "   Event {}: timestamp={} type={}",
-            i,
-            event.timestamp,
-            event.event_type
-        );
-    }
-
-    journal.flush()?;
-    tracing::info!("💾 Journal flushed to disk");
 
     // --- CAS Initialization ---
     tracing::info!("📦 Initializing Content Addressable Storage (CAS)...");
