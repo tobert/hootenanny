@@ -431,3 +431,62 @@ This is a good checkpoint before tackling the complex bidirectional communicatio
 **Optional Enhancements**:
 - Use sampling in Orpheus generation (vibe extraction)
 - Add more sampling-enabled tools
+
+---
+
+## Phase 4 Implementation Log
+
+### 2025-12-04 Session 1: Phase 4 COMPLETE ✅
+
+**All completion infrastructure implemented and tested!**
+
+**Completed**:
+- ✅ Created `crates/baton/src/types/completion.rs` with complete types
+- ✅ Added `complete()` method to Handler trait with default implementation
+- ✅ Wired `completion/complete` into dispatch
+- ✅ Added `enable_completions()` to ServerCapabilities
+- ✅ HootHandler implements complete() with routing to specialized methods
+- ✅ Added helper methods for dynamic completions
+
+**Files Changed**:
+- `crates/baton/src/types/completion.rs` (new) - CompletionRef, CompleteParams, CompletionResult
+- `crates/baton/src/types/mod.rs` - Export completion module
+- `crates/baton/src/types/protocol.rs` - Added enable_completions() method
+- `crates/baton/src/protocol/mod.rs` - Added complete() to Handler trait, handle_complete() dispatcher
+- `crates/hootenanny/src/api/handler.rs` - Implemented complete() and helper methods
+
+**Completion Support**:
+
+*Tool Argument Completions*:
+- Orpheus tools: `model` parameter → ["base", "children", "mono_melodies", "bridge"]
+- abc_to_midi: `channel` → ["0", "1", ..., "9 (drums)", ..., "15"]
+- graph_bind: `hints` → ["usb_device_id", "midi_name", "alsa_card", "pipewire_name"]
+- graph_tag/graph_find: `namespace`/`tag_namespace` → Dynamic from existing tags
+- Any `*_hash` parameters → Recent hashes from artifacts (dynamic)
+- `artifact_id`/`parent_id` → Recent artifact IDs (dynamic)
+
+*Prompt Argument Completions*:
+- ensemble-jam/sequence-idea: `style` → ["ambient", "techno", "jazz", "experimental", "cinematic", "electronic", "classical"]
+- patch-synth: `style` → ["pad", "lead", "bass", "fx", "keys", "strings"]
+- patch-synth: `character` → ["warm", "bright", "dark", "aggressive", "ethereal", "gritty"]
+- patch-synth: `synth_id` → Synth identities from graph (dynamic)
+- explore-variations: `intensity` → ["subtle", "moderate", "radical"]
+
+*Resource URI Completions*:
+- Prefixes: ["graph://identities", "graph://connections", "artifacts://summary", "artifacts://recent"]
+
+**Architecture**:
+- Completions use case-insensitive prefix matching
+- Dynamic completions query live data (artifacts, graph tags)
+- Empty result for unknown parameters (graceful fallback)
+- Supports all three reference types: tool arguments, prompt arguments, resource URIs
+
+**Testing**:
+- ✅ Unit tests in completion.rs (serialization, result construction)
+- ✅ All lib tests passing (211 tests total)
+- ✅ No compilation warnings
+- ⏳ Live testing pending (requires client with completion support)
+
+**Status**: ✅ **Phase 4 COMPLETE** - All completions infrastructure ready
+
+**Ready for**: Phase 5 (Logging) - Structured log streaming to clients

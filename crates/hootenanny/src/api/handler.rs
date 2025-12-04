@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use audio_graph_mcp::{graph_bind, graph_connect, graph_find, graph_tag, graph_connections, HintKind};
 use baton::{
-    CallToolResult, Content, ErrorData, Handler, Implementation,
+    CallToolResult, Content, ErrorData, Handler, Implementation, ServerCapabilities,
     Prompt, PromptMessage, Resource, ResourceContents, ResourceTemplate, Tool, ToolSchema,
 };
 use baton::protocol::ToolContext;
@@ -546,6 +546,14 @@ impl Handler for HootHandler {
         )
     }
 
+    fn capabilities(&self) -> ServerCapabilities {
+        ServerCapabilities::default()
+            .enable_tools()
+            .enable_resources()
+            .enable_prompts()
+            .enable_completions()
+    }
+
     fn resources(&self) -> Vec<Resource> {
         vec![
             // Graph resources
@@ -998,6 +1006,25 @@ impl Handler for HootHandler {
             _ => Err(ErrorData::invalid_params(format!("Unknown prompt: {}", name))),
         }
     }
+
+    async fn complete(
+        &self,
+        params: baton::types::completion::CompleteParams,
+    ) -> Result<baton::types::completion::CompletionResult, ErrorData> {
+        use baton::types::completion::CompletionRef;
+
+        match params.reference {
+            CompletionRef::Argument { name, argument_name } => {
+                self.complete_tool_argument(&name, &argument_name, &params.argument.value).await
+            }
+            CompletionRef::Prompt { name } => {
+                self.complete_prompt_argument(&name, &params.argument.name, &params.argument.value).await
+            }
+            CompletionRef::Resource { uri } => {
+                self.complete_resource_uri(&uri, &params.argument.value).await
+            }
+        }
+    }
 }
 
 impl HootHandler {
@@ -1246,6 +1273,215 @@ impl HootHandler {
             json,
             "application/json",
         )))
+    }
+
+    // === Completion Helper Methods ===
+
+    async fn complete_tool_argument(
+        &self,
+        tool: &str,
+        arg: &str,
+        partial: &str,
+    ) -> Result<baton::types::completion::CompletionResult, ErrorData> {
+        use baton::types::completion::CompletionResult;
+
+        let values: Vec<String> = match (tool, arg) {
+            // Orpheus model variants
+            (t, "model") if t.starts_with("orpheus_") => {
+                vec!["base", "children", "mono_melodies", "bridge"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            }
+
+            // MIDI channel with descriptions
+            ("abc_to_midi", "channel") => {
+                (0..16)
+                    .map(|i| {
+                        if i == 9 {
+                            format!("{} (drums)", i)
+                        } else {
+                            i.to_string()
+                        }
+                    })
+                    .collect()
+            }
+
+            // Graph hint kinds
+            ("graph_bind", "hints") => {
+                vec!["usb_device_id", "midi_name", "alsa_card", "pipewire_name"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            }
+
+            // Tag namespaces from existing data
+            ("graph_tag", "namespace") | ("graph_find", "tag_namespace") => {
+                self.get_existing_tag_namespaces().await
+            }
+
+            // Hash arguments - suggest recent artifacts
+            (_, arg) if arg.ends_with("_hash") || arg == "hash" => {
+                self.get_recent_hashes(10).await
+            }
+
+            // Artifact IDs
+            (_, "artifact_id") | (_, "parent_id") => {
+                self.get_recent_artifact_ids(10).await
+            }
+
+            _ => return Ok(CompletionResult::empty()),
+        };
+
+        // Filter by partial input (case-insensitive prefix match)
+        let filtered: Vec<String> = values
+            .into_iter()
+            .filter(|v| v.to_lowercase().starts_with(&partial.to_lowercase()))
+            .collect();
+
+        Ok(CompletionResult::new(filtered))
+    }
+
+    async fn complete_prompt_argument(
+        &self,
+        prompt: &str,
+        arg: &str,
+        partial: &str,
+    ) -> Result<baton::types::completion::CompletionResult, ErrorData> {
+        use baton::types::completion::CompletionResult;
+
+        let values: Vec<String> = match (prompt, arg) {
+            ("ensemble-jam", "style") | ("sequence-idea", "style") => {
+                vec![
+                    "ambient",
+                    "techno",
+                    "jazz",
+                    "experimental",
+                    "cinematic",
+                    "electronic",
+                    "classical",
+                ]
+                .into_iter()
+                .map(String::from)
+                .collect()
+            }
+            ("patch-synth", "style") => {
+                vec!["pad", "lead", "bass", "fx", "keys", "strings"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            }
+            ("patch-synth", "character") => {
+                vec!["warm", "bright", "dark", "aggressive", "ethereal", "gritty"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            }
+            ("patch-synth", "synth_id") => self.get_synth_identities().await,
+            ("explore-variations", "intensity") => {
+                vec!["subtle", "moderate", "radical"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            }
+            _ => return Ok(CompletionResult::empty()),
+        };
+
+        let filtered: Vec<String> = values
+            .into_iter()
+            .filter(|v| v.to_lowercase().starts_with(&partial.to_lowercase()))
+            .collect();
+
+        Ok(CompletionResult::new(filtered))
+    }
+
+    async fn complete_resource_uri(
+        &self,
+        _uri: &str,
+        partial: &str,
+    ) -> Result<baton::types::completion::CompletionResult, ErrorData> {
+        use baton::types::completion::CompletionResult;
+
+        // Suggest resource URI completions
+        let all_uris = vec![
+            "graph://identities",
+            "graph://connections",
+            "artifacts://summary",
+            "artifacts://recent",
+        ];
+
+        let filtered: Vec<String> = all_uris
+            .into_iter()
+            .map(String::from)
+            .filter(|u| u.starts_with(partial))
+            .collect();
+
+        Ok(CompletionResult::new(filtered))
+    }
+
+    async fn get_existing_tag_namespaces(&self) -> Vec<String> {
+        use std::collections::HashSet;
+
+        // Query graph for distinct namespaces
+        match graph_find(&self.server.audio_graph_db, None, None, None) {
+            Ok(identities) => identities
+                .into_iter()
+                .flat_map(|i| i.tags)
+                .map(|t| t.namespace)
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect(),
+            Err(_) => vec![],
+        }
+    }
+
+    async fn get_recent_hashes(&self, limit: usize) -> Vec<String> {
+        use crate::artifact_store::ArtifactStore;
+
+        match self.server.artifact_store.read() {
+            Ok(store) => {
+                if let Ok(artifacts) = store.all() {
+                    let mut artifacts = artifacts;
+                    artifacts.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                    artifacts
+                        .into_iter()
+                        .take(limit)
+                        .map(|a| a.content_hash.as_str().to_string())
+                        .collect()
+                } else {
+                    vec![]
+                }
+            }
+            Err(_) => vec![],
+        }
+    }
+
+    async fn get_recent_artifact_ids(&self, limit: usize) -> Vec<String> {
+        use crate::artifact_store::ArtifactStore;
+
+        match self.server.artifact_store.read() {
+            Ok(store) => {
+                if let Ok(artifacts) = store.all() {
+                    let mut artifacts = artifacts;
+                    artifacts.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                    artifacts
+                        .into_iter()
+                        .take(limit)
+                        .map(|a| a.id.as_str().to_string())
+                        .collect()
+                } else {
+                    vec![]
+                }
+            }
+            Err(_) => vec![],
+        }
+    }
+
+    async fn get_synth_identities(&self) -> Vec<String> {
+        match graph_find(&self.server.audio_graph_db, None, Some("type"), Some("synth")) {
+            Ok(identities) => identities.into_iter().map(|i| i.id).collect(),
+            Err(_) => vec![],
+        }
     }
 
     fn artifact_to_json(a: &crate::artifact_store::Artifact) -> serde_json::Value {

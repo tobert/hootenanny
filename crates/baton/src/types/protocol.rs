@@ -192,6 +192,12 @@ impl ServerCapabilities {
         self.logging = Some(LoggingCapability::default());
         self
     }
+
+    /// Enable completions.
+    pub fn enable_completions(mut self) -> Self {
+        self.completions = Some(CompletionsCapability::default());
+        self
+    }
 }
 
 /// Tools capability.

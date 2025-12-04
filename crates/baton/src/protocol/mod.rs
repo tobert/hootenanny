@@ -187,6 +187,18 @@ pub trait Handler: Send + Sync + 'static {
         Err(ErrorData::method_not_found("prompts/get"))
     }
 
+    // === Optional: Completions ===
+
+    /// Provide argument completions for tools, prompts, or resources.
+    ///
+    /// Default implementation returns no completions.
+    async fn complete(
+        &self,
+        _params: crate::types::completion::CompleteParams,
+    ) -> Result<crate::types::completion::CompletionResult, ErrorData> {
+        Ok(crate::types::completion::CompletionResult::empty())
+    }
+
     // === Optional: Metadata ===
 
     /// Return instructions for the LLM.
@@ -303,6 +315,9 @@ async fn dispatch_inner<H: Handler>(
         // Prompts
         "prompts/list" => handle_list_prompts(state).await,
         "prompts/get" => handle_get_prompt(state, message).await,
+
+        // Completions
+        "completion/complete" => handle_complete(state, message).await,
 
         // Unknown
         _ => Err(ErrorData::method_not_found(&message.method)),
@@ -542,4 +557,24 @@ async fn handle_get_prompt<H: Handler>(
     }
     .instrument(prompt_span)
     .await
+}
+
+async fn handle_complete<H: Handler>(
+    state: &Arc<McpState<H>>,
+    request: &JsonRpcMessage,
+) -> Result<Value, ErrorData> {
+    use crate::types::completion::CompleteParams;
+
+    let params: CompleteParams = request
+        .params
+        .as_ref()
+        .map(|p| serde_json::from_value(p.clone()))
+        .transpose()
+        .map_err(|e| ErrorData::invalid_params(format!("Invalid complete params: {}", e)))?
+        .ok_or_else(|| ErrorData::invalid_params("Missing complete params"))?;
+
+    let result = state.handler.complete(params).await?;
+
+    serde_json::to_value(&serde_json::json!({ "completion": result }))
+        .map_err(|e| ErrorData::internal_error(e.to_string()))
 }

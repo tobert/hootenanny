@@ -11,7 +11,9 @@
 //! - `resource` - Resource definitions and contents
 //! - `prompt` - Prompt templates and messages
 //! - `progress` - Progress notifications for long-running operations
+//! - `completion` - Argument autocompletion for tools, prompts, and resources
 
+pub mod completion;
 pub mod content;
 pub mod error;
 pub mod jsonrpc;
