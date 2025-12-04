@@ -687,11 +687,19 @@ pub struct GraphQueryRequest {
     pub query: String,
 
     #[schemars(description = "Variables for parameterized queries as JSON object (e.g., {\"artifact_id\": \"artifact_123\"}). Works with both inline queries and query artifacts.")]
+    #[schemars(schema_with = "json_object_schema")]
     #[serde(default)]
     pub variables: serde_json::Value,
 
     #[schemars(description = "Maximum number of results to return (default: 100)")]
     pub limit: Option<usize>,
+}
+
+/// Schema function for JSON objects (not arbitrary values)
+fn json_object_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    serde_json::from_value(serde_json::json!({
+        "type": "object"
+    })).unwrap()
 }
 
 // --- Sampling Requests ---

@@ -50,6 +50,7 @@ pub struct JobStatusResponse {
     pub status: JobStatus,
     pub tool_name: String,
 
+    #[schemars(schema_with = "json_object_or_null_schema")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<serde_json::Value>,
 
@@ -64,6 +65,13 @@ pub struct JobStatusResponse {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<i64>,
+}
+
+/// Schema function for optional JSON objects
+fn json_object_or_null_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    serde_json::from_value(serde_json::json!({
+        "type": ["object", "null"]
+    })).unwrap()
 }
 
 /// Response from job_list tool
@@ -216,6 +224,7 @@ pub struct GraphQueryResponse {
 pub struct AbcParseResponse {
     pub success: bool,
 
+    #[schemars(schema_with = "json_object_or_null_schema")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ast: Option<serde_json::Value>,
 
