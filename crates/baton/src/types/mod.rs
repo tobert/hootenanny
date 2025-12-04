@@ -14,9 +14,11 @@
 //! - `completion` - Argument autocompletion for tools, prompts, and resources
 //! - `logging` - Structured logging to clients
 //! - `subscription` - Resource subscription management
+//! - `elicitation` - Server-initiated user input requests
 
 pub mod completion;
 pub mod content;
+pub mod elicitation;
 pub mod error;
 pub mod jsonrpc;
 pub mod logging;

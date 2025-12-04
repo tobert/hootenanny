@@ -73,6 +73,14 @@ impl Session {
             .is_some()
     }
 
+    /// Check if the client supports elicitation.
+    pub fn supports_elicitation(&self) -> bool {
+        self.client_capabilities
+            .as_ref()
+            .map(|c| c.elicitation.is_some())
+            .unwrap_or(false)
+    }
+
     /// Check if a message at this level should be sent to the client.
     pub fn should_log(&self, level: crate::types::logging::LogLevel) -> bool {
         level >= self.log_level
