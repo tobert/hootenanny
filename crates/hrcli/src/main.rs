@@ -108,6 +108,9 @@ async fn execute_tool(
     );
     pb.set_message("Initializing...");
 
+    // Enable steady tick so spinner animates even when progress doesn't change
+    pb.enable_steady_tick(std::time::Duration::from_millis(80));
+
     // Create notification callback for progress and logs
     let pb_clone = pb.clone();
     let callback: mcp_client::NotificationCallback = Arc::new(move |notification| {
