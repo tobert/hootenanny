@@ -104,6 +104,7 @@ impl DiscoveryClient {
                 description: tool.description.clone(),
                 metadata,
                 input_schema: self.parse_input_schema(&tool),
+                output_schema: None,  // Not available in standard MCP discovery
                 parameter_handlers: self.infer_handlers(&tool),
                 output_format: self.infer_output_format(&tool.name),
             };

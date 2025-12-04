@@ -3,7 +3,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use reqwest;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
@@ -19,12 +19,75 @@ pub struct ToolInfo {
     pub input_schema: Option<Value>,
 }
 
+// Progress notification types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressNotification {
+    pub progress_token: ProgressToken,
+    pub progress: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(untagged)]
+pub enum ProgressToken {
+    String(String),
+    Integer(i64),
+}
+
+// Log message types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogMessage {
+    pub level: LogLevel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logger: Option<String>,
+    #[serde(rename = "data")]
+    pub message: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Debug,
+    Info,
+    Notice,
+    Warning,
+    Error,
+    Critical,
+    Alert,
+    Emergency,
+}
+
+// Notification callback type
+pub type NotificationCallback = Arc<dyn Fn(Notification) + Send + Sync>;
+
+#[derive(Debug, Clone)]
+pub enum Notification {
+    Progress(ProgressNotification),
+    Log(LogMessage),
+}
+
+// Completion types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionResult {
+    pub values: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_more: Option<bool>,
+}
+
 pub struct McpClient {
     base_url: String,
     client: reqwest::Client,
     session_id: Option<String>,
     responses: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
     next_id: Arc<Mutex<u64>>,
+    notification_callback: Option<NotificationCallback>,
 }
 
 impl McpClient {
@@ -36,13 +99,20 @@ impl McpClient {
             client,
             session_id: None,
             responses: Arc::new(Mutex::new(HashMap::new())),
-            next_id: Arc::new(Mutex::new(1)), // Start IDs from 1
+            next_id: Arc::new(Mutex::new(1)),
+            notification_callback: None,
         };
 
         // Connect to SSE endpoint to get session ID and start listener
         mcp_client.establish_session().await?;
 
         Ok(mcp_client)
+    }
+
+    /// Set notification callback for progress and log messages
+    pub fn with_notification_callback(mut self, callback: NotificationCallback) -> Self {
+        self.notification_callback = Some(callback);
+        self
     }
 
     /// Establish SSE connection, extract session ID, and start listener task
@@ -73,9 +143,10 @@ impl McpClient {
         // Spawn the background task to listen for SSE messages
         // The listener will extract the session ID and send it back
         let responses = self.responses.clone();
+        let callback = self.notification_callback.clone();
         tokio::spawn(async move {
             eprintln!("[MCP] SSE listener task started");
-            listen_for_responses(stream, responses, session_tx).await;
+            listen_for_responses(stream, responses, session_tx, callback).await;
             eprintln!("[MCP] SSE listener task ended");
         });
 
@@ -242,6 +313,50 @@ impl McpClient {
         Err(anyhow!("No result in response"))
     }
 
+    /// Request argument completions from the server
+    pub async fn complete_argument(
+        &self,
+        tool_name: &str,
+        argument_name: &str,
+        partial: &str,
+    ) -> Result<CompletionResult> {
+        let params = json!({
+            "ref": {
+                "type": "ref/argument",
+                "name": tool_name,
+                "argumentName": argument_name
+            },
+            "argument": {
+                "name": argument_name,
+                "value": partial
+            }
+        });
+
+        let response = self.request("completion/complete", params).await?;
+
+        let result = response.get("completion")
+            .ok_or_else(|| anyhow!("Missing completion field"))?;
+
+        serde_json::from_value(result.clone())
+            .context("Failed to parse completion result")
+    }
+
+    /// Generic MCP request (used for completions, etc.)
+    async fn request(&self, method: &str, params: Value) -> Result<Value> {
+        let mut next_id_lock = self.next_id.lock().await;
+        let id = *next_id_lock;
+        *next_id_lock += 1;
+        drop(next_id_lock);
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params
+        });
+
+        self.send_request(id, request).await
+    }
+
     /// Send an MCP request via HTTP POST and wait for the response from the SSE stream
     async fn send_request(&self, id: u64, request: Value) -> Result<Value> {
         let session_id = self
@@ -317,6 +432,7 @@ async fn listen_for_responses(
     mut stream: impl futures::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
     responses: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
     session_sender: oneshot::Sender<String>,
+    notification_callback: Option<NotificationCallback>,
 ) {
     let mut current_event_type: Option<String> = None;
     let mut current_data = String::new();
@@ -364,7 +480,35 @@ async fn listen_for_responses(
                                 match serde_json::from_str::<Value>(&current_data) {
                                     Ok(value) => {
                                         eprintln!("[MCP-LISTENER] Parsed message: {:?}", &value.to_string()[..value.to_string().len().min(200)]);
-                                        if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
+
+                                        // Check if it's a notification (no id field) or response (has id)
+                                        if value.get("id").is_none() {
+                                            // It's a notification
+                                            if let Some(method) = value.get("method").and_then(|m| m.as_str()) {
+                                                match method {
+                                                    "notifications/progress" => {
+                                                        if let Ok(notif) = serde_json::from_value::<ProgressNotification>(
+                                                            value.get("params").cloned().unwrap_or(Value::Null)
+                                                        ) {
+                                                            if let Some(ref cb) = notification_callback {
+                                                                cb(Notification::Progress(notif));
+                                                            }
+                                                        }
+                                                    }
+                                                    "notifications/message" => {
+                                                        if let Ok(msg) = serde_json::from_value::<LogMessage>(
+                                                            value.get("params").cloned().unwrap_or(Value::Null)
+                                                        ) {
+                                                            if let Some(ref cb) = notification_callback {
+                                                                cb(Notification::Log(msg));
+                                                            }
+                                                        }
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                        } else if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
+                                            // It's a response with an id
                                             let mut resp_map = responses.lock().await;
                                             if let Some(sender) = resp_map.remove(&id) {
                                                 eprintln!("[MCP-LISTENER] Dispatching response for id: {}", id);

@@ -17,6 +17,10 @@ pub struct DynamicToolSchema {
     #[serde(rename = "inputSchema")]
     pub input_schema: Option<Value>,
 
+    /// Output schema from MCP (for validation)
+    #[serde(rename = "outputSchema")]
+    pub output_schema: Option<Value>,
+
     /// Server-provided parameter handlers
     #[serde(default)]
     pub parameter_handlers: HashMap<String, ParameterHandler>,
