@@ -483,6 +483,9 @@ impl Handler for HootHandler {
         args: Value,
         context: ToolContext,
     ) -> Result<CallToolResult, ErrorData> {
+        // Log tool execution to client
+        context.log_debug(format!("Executing tool: {}", name)).await;
+
         // Log progress capability
         if context.has_progress() {
             tracing::debug!(
@@ -552,6 +555,7 @@ impl Handler for HootHandler {
             .enable_resources()
             .enable_prompts()
             .enable_completions()
+            .enable_logging()
     }
 
     fn resources(&self) -> Vec<Resource> {

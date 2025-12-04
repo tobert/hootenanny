@@ -33,6 +33,7 @@ impl Session {
             client_capabilities: None,
             initialized: false,
             tx: None,
+            log_level: crate::types::logging::LogLevel::default(),
         }
     }
 
@@ -69,6 +70,11 @@ impl Session {
             .as_ref()
             .and_then(|c| c.sampling.as_ref())
             .is_some()
+    }
+
+    /// Check if a message at this level should be sent to the client.
+    pub fn should_log(&self, level: crate::types::logging::LogLevel) -> bool {
+        level >= self.log_level
     }
 
     /// Register an SSE connection.

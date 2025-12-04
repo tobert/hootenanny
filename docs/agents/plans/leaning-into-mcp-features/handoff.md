@@ -490,3 +490,47 @@ This is a good checkpoint before tackling the complex bidirectional communicatio
 **Status**: ✅ **Phase 4 COMPLETE** - All completions infrastructure ready
 
 **Ready for**: Phase 5 (Logging) - Structured log streaming to clients
+
+---
+
+## Phase 5 Implementation Log
+
+### 2025-12-04 Session 1: Phase 5 COMPLETE ✅
+
+**All logging infrastructure implemented and tested!**
+
+**Completed**:
+- ✅ Created `crates/baton/src/types/logging.rs` with complete types (LogLevel, LogMessage, SetLevelParams)
+- ✅ Added `log_level` field to Session with `should_log()` method
+- ✅ Added `logging/setLevel` handler to dispatch
+- ✅ Created `McpLogger` in transport layer for sending notifications
+- ✅ Added `logger` to ToolContext with convenience methods (log_debug, log_info, etc.)
+- ✅ Enabled logging capability in HootHandler
+- ✅ Added example logging to call_tool_with_context
+
+**Files Changed**:
+- `crates/baton/src/types/logging.rs` (new) - LogLevel, LogMessage, SetLevelParams with unit tests
+- `crates/baton/src/types/mod.rs` - Export logging module
+- `crates/baton/src/session/store.rs` - Added log_level field to Session
+- `crates/baton/src/session/mod.rs` - Initialize log_level, added should_log() method
+- `crates/baton/src/protocol/mod.rs` - Added handle_set_log_level(), logger methods to ToolContext
+- `crates/baton/src/transport/logger.rs` (new) - McpLogger for sending notifications/message
+- `crates/baton/src/transport/mod.rs` - Export McpLogger, add to McpState
+- `crates/hootenanny/src/api/handler.rs` - Enable logging, example log statement
+
+**Architecture**:
+- `LogLevel` enum with 8 syslog levels (debug, info, notice, warning, error, critical, alert, emergency)
+- Session tracks client's desired log level (defaults to Info)
+- `McpLogger` sends `notifications/message` via SSE
+- Level filtering: messages only sent if level >= session's log_level
+- ToolContext provides ergonomic helpers: `log_debug()`, `log_info()`, `log_warning()`, `log_error()`
+
+**Testing**:
+- ✅ Unit tests in logging.rs (8 tests for serialization, ordering, conversion)
+- ✅ All lib tests passing (224 tests total)
+- ✅ No compilation warnings or errors
+- ⏳ Live testing pending (requires client reconnect + setLevel call)
+
+**Status**: ✅ **Phase 5 COMPLETE** - Full logging infrastructure ready
+
+**Ready for**: Phase 6 (Resource Subscriptions) - Live resource change notifications

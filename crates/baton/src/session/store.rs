@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use super::SseSender;
+use crate::types::logging::LogLevel;
 use crate::types::protocol::Implementation;
 
 /// An MCP session.
@@ -41,6 +42,9 @@ pub struct Session {
 
     /// SSE channel sender (None if disconnected).
     pub tx: Option<SseSender>,
+
+    /// Client's requested log level.
+    pub log_level: LogLevel,
 }
 
 /// Statistics about active sessions.

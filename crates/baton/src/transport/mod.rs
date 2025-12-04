@@ -11,11 +11,13 @@
 //! - DELETE / - Terminate session
 //! - Session ID via Mcp-Session-Id header
 
+mod logger;
 mod message;
 mod sampling;
 mod sse;
 mod streamable;
 
+pub use logger::McpLogger;
 pub use message::message_handler;
 pub use sampling::{SamplingClient, SamplingError};
 pub use sse::sse_handler;
@@ -42,14 +44,19 @@ pub struct McpState<H> {
 
     /// Sampling client for server-initiated LLM requests.
     pub sampling_client: Arc<SamplingClient>,
+
+    /// Logger for sending messages to clients.
+    pub logger: McpLogger,
 }
 
 impl<H> McpState<H> {
     /// Create new MCP state with the given handler.
     pub fn new(handler: H, server_name: impl Into<String>, server_version: impl Into<String>) -> Self {
+        let sessions = Arc::new(InMemorySessionStore::new());
         Self {
             handler: Arc::new(handler),
-            sessions: Arc::new(InMemorySessionStore::new()),
+            logger: McpLogger::new(sessions.clone()),
+            sessions,
             server_name: server_name.into(),
             server_version: server_version.into(),
             sampling_client: Arc::new(SamplingClient::new()),
@@ -65,6 +72,7 @@ impl<H> McpState<H> {
     ) -> Self {
         Self {
             handler: Arc::new(handler),
+            logger: McpLogger::new(sessions.clone()),
             sessions,
             server_name: server_name.into(),
             server_version: server_version.into(),

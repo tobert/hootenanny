@@ -12,11 +12,13 @@
 //! - `prompt` - Prompt templates and messages
 //! - `progress` - Progress notifications for long-running operations
 //! - `completion` - Argument autocompletion for tools, prompts, and resources
+//! - `logging` - Structured logging to clients
 
 pub mod completion;
 pub mod content;
 pub mod error;
 pub mod jsonrpc;
+pub mod logging;
 pub mod progress;
 pub mod prompt;
 pub mod protocol;

@@ -45,6 +45,9 @@ pub struct ToolContext {
 
     /// Sampler for requesting LLM inference from the client (if supported).
     pub sampler: Option<Sampler>,
+
+    /// Logger for sending messages to the client.
+    pub logger: crate::transport::McpLogger,
 }
 
 /// Handle for making sampling requests to the connected client's LLM.
@@ -120,6 +123,32 @@ impl ToolContext {
     /// Check if progress reporting is enabled for this request.
     pub fn has_progress(&self) -> bool {
         self.progress_token.is_some()
+    }
+
+    /// Send a log message to the client.
+    pub async fn log(&self, level: crate::types::logging::LogLevel, message: impl Into<String>) {
+        use crate::types::logging::LogMessage;
+        self.logger.log(&self.session_id, LogMessage::new(level, message)).await;
+    }
+
+    /// Send a debug message to the client.
+    pub async fn log_debug(&self, message: impl Into<String>) {
+        self.log(crate::types::logging::LogLevel::Debug, message).await;
+    }
+
+    /// Send an info message to the client.
+    pub async fn log_info(&self, message: impl Into<String>) {
+        self.log(crate::types::logging::LogLevel::Info, message).await;
+    }
+
+    /// Send a warning message to the client.
+    pub async fn log_warning(&self, message: impl Into<String>) {
+        self.log(crate::types::logging::LogLevel::Warning, message).await;
+    }
+
+    /// Send an error message to the client.
+    pub async fn log_error(&self, message: impl Into<String>) {
+        self.log(crate::types::logging::LogLevel::Error, message).await;
     }
 }
 
@@ -319,6 +348,9 @@ async fn dispatch_inner<H: Handler>(
         // Completions
         "completion/complete" => handle_complete(state, message).await,
 
+        // Logging
+        "logging/setLevel" => handle_set_log_level(state, session_id, message).await,
+
         // Unknown
         _ => Err(ErrorData::method_not_found(&message.method)),
     }
@@ -444,6 +476,7 @@ async fn handle_call_tool<H: Handler>(
         progress_token,
         progress_sender: progress_tx,
         sampler,
+        logger: state.logger.clone(),
     };
 
     // Create child span for tool execution with MCP-specific attributes
@@ -577,4 +610,31 @@ async fn handle_complete<H: Handler>(
 
     serde_json::to_value(&serde_json::json!({ "completion": result }))
         .map_err(|e| ErrorData::internal_error(e.to_string()))
+}
+
+async fn handle_set_log_level<H: Handler>(
+    state: &Arc<McpState<H>>,
+    session_id: &str,
+    request: &JsonRpcMessage,
+) -> Result<Value, ErrorData> {
+    use crate::types::logging::SetLevelParams;
+
+    let params: SetLevelParams = request
+        .params
+        .as_ref()
+        .map(|p| serde_json::from_value(p.clone()))
+        .transpose()
+        .map_err(|e| ErrorData::invalid_params(format!("Invalid setLevel params: {}", e)))?
+        .ok_or_else(|| ErrorData::invalid_params("Missing setLevel params"))?;
+
+    if let Some(mut session) = state.sessions.get_mut(session_id) {
+        session.log_level = params.level;
+        tracing::info!(
+            session_id = %session_id,
+            level = ?params.level,
+            "Log level set"
+        );
+    }
+
+    Ok(serde_json::json!({}))
 }
