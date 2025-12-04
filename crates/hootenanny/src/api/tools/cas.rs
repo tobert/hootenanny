@@ -1,4 +1,4 @@
-use crate::api::responses::{CasStoreResponse, CasInspectResponse, CasUploadResponse, MidiToWavResponse, SoundfontInspectResponse, PresetInfo, SoundfontPresetResponse, InstrumentInfo};
+use crate::api::responses::{CasStoreResponse, CasInspectResponse, CasUploadResponse, MidiToWavResponse, SoundfontInspectResponse, PresetInfo, SoundfontPresetResponse, InstrumentInfo, JobSpawnResponse, JobStatus};
 use crate::api::service::EventDualityServer;
 use crate::api::schema::{CasStoreRequest, CasInspectRequest, UploadFileRequest, MidiToWavRequest, SoundfontInspectRequest, SoundfontPresetInspectRequest};
 use crate::artifact_store::{Artifact, ArtifactStore};
@@ -8,6 +8,7 @@ use baton::{ErrorData as McpError, CallToolResult, Content};
 use baton::protocol::ProgressSender;
 use base64::{Engine as _, engine::general_purpose};
 use tracing;
+use std::sync::Arc;
 
 /// Look up an artifact ID by its content hash
 fn find_artifact_by_hash<S: ArtifactStore>(store: &S, content_hash: &str) -> Option<String> {
@@ -135,135 +136,123 @@ impl EventDualityServer {
             midi.hash = %request.input_hash,
             soundfont.hash = %request.soundfont_hash,
             audio.sample_rate = request.sample_rate.unwrap_or(44100),
-            cas.output_hash = tracing::field::Empty,
+            job.id = tracing::field::Empty,
         )
     )]
     pub async fn midi_to_wav(
         &self,
         request: MidiToWavRequest,
     ) -> Result<CallToolResult, McpError> {
-        let sample_rate = request.sample_rate.unwrap_or(44100);
+        // Create job
+        let job_id = self.job_store.create_job("convert_midi_to_wav".to_string());
+        tracing::Span::current().record("job.id", job_id.as_str());
 
-        // Fetch MIDI bytes from CAS
-        let midi_ref = self.local_models.inspect_cas_content(&request.input_hash)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Failed to get MIDI from CAS: {}", e)))?;
-        let midi_path = midi_ref.local_path
-            .ok_or_else(|| McpError::internal_error("MIDI not found in local CAS"))?;
-        let midi_bytes = tokio::fs::read(&midi_path)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Failed to read MIDI file: {}", e)))?;
+        // Clone everything needed for the background task
+        let local_models = Arc::clone(&self.local_models);
+        let artifact_store = Arc::clone(&self.artifact_store);
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
 
-        // Fetch SoundFont bytes from CAS
-        let sf_ref = self.local_models.inspect_cas_content(&request.soundfont_hash)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Failed to get SoundFont from CAS: {}", e)))?;
-        let sf_path = sf_ref.local_path
-            .ok_or_else(|| McpError::internal_error("SoundFont not found in local CAS"))?;
-        let sf_bytes = tokio::fs::read(&sf_path)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Failed to read SoundFont file: {}", e)))?;
+        // Spawn background task
+        let handle = tokio::spawn(async move {
+            let _ = job_store.mark_running(&job_id_clone);
 
-        // Get SoundFont name for metadata (best effort)
-        let soundfont_name = inspect_soundfont(&sf_bytes, false)
-            .map(|info| info.info.name)
-            .ok();
+            let result: anyhow::Result<MidiToWavResponse> = (async {
+                let sample_rate = request.sample_rate.unwrap_or(44100);
 
-        // Render MIDI to WAV
-        let wav_bytes = render_midi_to_wav(&midi_bytes, &sf_bytes, sample_rate)
-            .map_err(|e| McpError::internal_error(format!("Failed to render MIDI to WAV: {}", e)))?;
+                // Fetch MIDI bytes from CAS
+                let midi_ref = local_models.inspect_cas_content(&request.input_hash).await?;
+                let midi_path = midi_ref.local_path.ok_or_else(|| anyhow::anyhow!("MIDI not found in local CAS"))?;
+                let midi_bytes = tokio::fs::read(&midi_path).await?;
 
-        let wav_size = wav_bytes.len();
-        let duration_secs = crate::mcp_tools::rustysynth::calculate_wav_duration(&wav_bytes, sample_rate);
+                // Fetch SoundFont bytes from CAS
+                let sf_ref = local_models.inspect_cas_content(&request.soundfont_hash).await?;
+                let sf_path = sf_ref.local_path.ok_or_else(|| anyhow::anyhow!("SoundFont not found in local CAS"))?;
+                let sf_bytes = tokio::fs::read(&sf_path).await?;
 
-        // Store WAV in CAS
-        let wav_hash = self.local_models.store_cas_content(&wav_bytes, "audio/wav")
-            .await
-            .map_err(|e| McpError::internal_error(format!("Failed to store WAV in CAS: {}", e)))?;
+                // Get SoundFont name for metadata
+                let soundfont_name = inspect_soundfont(&sf_bytes, false).map(|info| info.info.name).ok();
 
-        tracing::Span::current().record("cas.output_hash", &*wav_hash);
+                // Render MIDI to WAV
+                let wav_bytes = render_midi_to_wav(&midi_bytes, &sf_bytes, sample_rate)?;
 
-        // Look up source artifact IDs
-        let store = self.artifact_store.read()
-            .map_err(|_| McpError::internal_error("Lock poisoned"))?;
-        let midi_artifact_id = find_artifact_by_hash(&*store, &request.input_hash);
-        let soundfont_artifact_id = find_artifact_by_hash(&*store, &request.soundfont_hash);
-        drop(store);
+                let wav_size = wav_bytes.len();
+                let duration_secs = crate::mcp_tools::rustysynth::calculate_wav_duration(&wav_bytes, sample_rate);
 
-        // Create artifact for tracking
-        let mut tags = request.tags.clone();
-        tags.push("type:audio".to_string());
-        tags.push("format:wav".to_string());
-        tags.push("tool:midi_to_wav".to_string());
+                // Store WAV in CAS
+                let wav_hash = local_models.store_cas_content(&wav_bytes, "audio/wav").await?;
 
-        let content_hash = ContentHash::new(&wav_hash);
-        let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
-        let metadata = serde_json::json!({
-            "type": "wav_render",
-            "source": {
-                "midi_hash": request.input_hash,
-                "midi_artifact_id": midi_artifact_id,
-            },
-            "soundfont": {
-                "hash": request.soundfont_hash,
-                "name": soundfont_name,
-                "artifact_id": soundfont_artifact_id,
-            },
-            "params": {
-                "sample_rate": sample_rate,
-            },
-            "output": {
-                "duration_seconds": duration_secs,
-                "channels": 2,
-                "bit_depth": 16,
-                "size_bytes": wav_size,
-            },
+                // Look up source artifact IDs
+                let store = artifact_store.read().map_err(|_| anyhow::anyhow!("Lock poisoned"))?;
+                let midi_artifact_id = find_artifact_by_hash(&*store, &request.input_hash);
+                let soundfont_artifact_id = find_artifact_by_hash(&*store, &request.soundfont_hash);
+                drop(store);
+
+                // Create artifact
+                let mut tags = request.tags.clone();
+                tags.push("type:audio".to_string());
+                tags.push("format:wav".to_string());
+                tags.push("tool:midi_to_wav".to_string());
+
+                let content_hash = ContentHash::new(&wav_hash);
+                let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+                let metadata = serde_json::json!({
+                    "type": "wav_render",
+                    "source": { "midi_hash": request.input_hash, "midi_artifact_id": midi_artifact_id },
+                    "soundfont": { "hash": request.soundfont_hash, "name": soundfont_name, "artifact_id": soundfont_artifact_id },
+                    "params": { "sample_rate": sample_rate },
+                    "output": { "duration_seconds": duration_secs, "channels": 2, "bit_depth": 16, "size_bytes": wav_size },
+                });
+
+                let mut artifact = Artifact::new(
+                    artifact_id.clone(),
+                    content_hash,
+                    request.creator.unwrap_or_else(|| "unknown".to_string()),
+                    metadata,
+                ).with_tags(tags);
+
+                let store = artifact_store.write().map_err(|_| anyhow::anyhow!("Lock poisoned"))?;
+                if let Some(set_id) = request.variation_set_id {
+                    let next_idx = store.next_variation_index(&set_id).unwrap_or(0);
+                    artifact = artifact.with_variation_set(VariationSetId::new(set_id), next_idx);
+                }
+                if let Some(parent_id) = request.parent_id {
+                    artifact = artifact.with_parent(ArtifactId::new(parent_id));
+                }
+                store.put(artifact)?;
+                store.flush()?;
+
+                Ok(MidiToWavResponse {
+                    artifact_id: artifact_id.as_str().to_string(),
+                    content_hash: wav_hash,
+                    size_bytes: wav_size,
+                    duration_secs,
+                    sample_rate,
+                })
+            }).await;
+
+            match result {
+                Ok(response) => {
+                    let _ = job_store.mark_complete(&job_id_clone, serde_json::to_value(response).unwrap());
+                }
+                Err(e) => {
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
         });
 
-        let mut artifact = Artifact::new(
-            artifact_id.clone(),
-            content_hash,
-            request.creator.unwrap_or_else(|| "unknown".to_string()),
-            metadata,
-        ).with_tags(tags);
+        self.job_store.store_handle(&job_id, handle);
 
-        // Acquire lock for artifact store operations
-        let store = self.artifact_store.write()
-            .map_err(|_| McpError::internal_error("Lock poisoned"))?;
-
-        if let Some(set_id) = request.variation_set_id {
-            let next_idx = store.next_variation_index(&set_id)
-                .unwrap_or(0);
-            artifact = artifact.with_variation_set(VariationSetId::new(set_id), next_idx);
-        }
-
-        if let Some(parent_id) = request.parent_id {
-            artifact = artifact.with_parent(ArtifactId::new(parent_id));
-        }
-
-        store.put(artifact)
-            .map_err(|e| McpError::internal_error(format!("Failed to store artifact: {}", e)))?;
-        store.flush()
-            .map_err(|e| McpError::internal_error(format!("Failed to flush artifact store: {}", e)))?;
-
-        let response = MidiToWavResponse {
-            artifact_id: artifact_id.as_str().to_string(),
-            content_hash: wav_hash.clone(),
-            size_bytes: wav_size,
-            duration_secs,
-            sample_rate,
+        let response = JobSpawnResponse {
+            job_id: job_id.as_str().to_string(),
+            status: JobStatus::Pending,
+            artifact_id: None,
+            content_hash: None,
+            message: Some("MIDI to WAV conversion started.".to_string()),
         };
 
-        let human_text = format!(
-            "MIDI rendered to WAV: {} bytes ({:.1}s, {} Hz)\nArtifact: {}",
-            wav_size,
-            duration_secs,
-            sample_rate,
-            artifact_id.as_str()
-        );
-
-        Ok(CallToolResult::success(vec![Content::text(human_text)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(CallToolResult::success(vec![Content::text(format!("Started job: {}", job_id.as_str()))])
+            .with_structured(serde_json::to_value(response).unwrap()))
     }
 
     #[tracing::instrument(
