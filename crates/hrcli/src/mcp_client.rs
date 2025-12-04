@@ -125,7 +125,6 @@ impl McpClient {
     async fn establish_session(&mut self) -> Result<()> {
         let sse_url = format!("{}/sse", self.base_url);
 
-        eprintln!("[MCP] Connecting to SSE endpoint: {}", sse_url);
 
         let response = timeout(Duration::from_secs(5), self.client.get(&sse_url).send())
             .await
@@ -139,7 +138,6 @@ impl McpClient {
             ));
         }
 
-        eprintln!("[MCP] SSE connection successful, starting listener...");
 
         let stream = response.bytes_stream();
 
@@ -151,9 +149,7 @@ impl McpClient {
         let responses = self.responses.clone();
         let callback = self.notification_callback.clone();
         tokio::spawn(async move {
-            eprintln!("[MCP] SSE listener task started");
             listen_for_responses(stream, responses, session_tx, callback).await;
-            eprintln!("[MCP] SSE listener task ended");
         });
 
         // Wait for session ID from the listener
@@ -162,15 +158,12 @@ impl McpClient {
             .context("Timeout waiting for session ID from SSE stream")?
             .context("Failed to receive session ID from listener")?;
 
-        eprintln!("[MCP] Got session ID: {}", session_id);
         self.session_id = Some(session_id);
 
-        eprintln!("[MCP] Starting MCP initialization handshake...");
 
         // Perform MCP initialization
         self.initialize().await.context("MCP initialization failed")?;
 
-        eprintln!("[MCP] MCP client fully connected and initialized");
 
         Ok(())
     }
@@ -465,7 +458,6 @@ async fn listen_for_responses(
             Ok(chunk) => {
                 chunk_count += 1;
                 let text = String::from_utf8_lossy(&chunk);
-                eprintln!("[MCP-LISTENER] Chunk {}: {:?}", chunk_count, &text[..text.len().min(100)]);
 
                 // Append to buffer and process complete lines
                 buffer.push_str(&text);
@@ -484,7 +476,6 @@ async fn listen_for_responses(
                             if let Some(sender) = session_sender.take() {
                                 if current_event_type.as_deref() == Some("endpoint") {
                                     if let Some(session_id) = extract_session_id_from_data(&current_data) {
-                                        eprintln!("[MCP-LISTENER] Extracted session ID: {}", session_id);
                                         let _ = sender.send(session_id);
                                         current_data.clear();
                                         current_event_type = None;
@@ -499,7 +490,6 @@ async fn listen_for_responses(
                             if current_event_type.as_deref() == Some("message") {
                                 match serde_json::from_str::<Value>(&current_data) {
                                     Ok(value) => {
-                                        eprintln!("[MCP-LISTENER] Parsed message: {:?}", &value.to_string()[..value.to_string().len().min(200)]);
 
                                         // Check if it's a notification (no id field) or response (has id)
                                         if value.get("id").is_none() {
@@ -531,15 +521,12 @@ async fn listen_for_responses(
                                             // It's a response with an id
                                             let mut resp_map = responses.lock().await;
                                             if let Some(sender) = resp_map.remove(&id) {
-                                                eprintln!("[MCP-LISTENER] Dispatching response for id: {}", id);
                                                 let _ = sender.send(value);
                                             } else {
-                                                eprintln!("[MCP-LISTENER] No waiting receiver for id: {}", id);
                                             }
                                         }
                                     }
                                     Err(e) => {
-                                        eprintln!("[MCP-LISTENER] Failed to parse JSON (len={}): {}", current_data.len(), e);
                                     }
                                 }
                             }
@@ -564,7 +551,6 @@ async fn listen_for_responses(
                 }
             }
             Err(e) => {
-                eprintln!("[MCP-LISTENER] Stream error: {}", e);
                 break; // SSE stream closed or error
             }
         }

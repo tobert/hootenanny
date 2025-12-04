@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
+use indicatif::{ProgressBar, ProgressStyle, MultiProgress};
 
 mod mcp_client;
 mod discovery;
@@ -82,8 +83,7 @@ async fn execute_tool(
     schemas: &[DynamicToolSchema],
     no_color: bool,
 ) -> Result<()> {
-    use std::sync::{Arc, Mutex};
-    use std::io::Write;
+    use std::sync::Arc;
 
     // Find the schema for this tool
     let schema = schemas.iter()
@@ -96,58 +96,51 @@ async fn execute_tool(
     }
     println!("{} {}", "Executing:".bright_cyan(), tool_name.bright_green().bold());
 
-    // Track current progress message for display
-    let current_progress = Arc::new(Mutex::new(Option::<String>::None));
-    let is_tty = atty::is(atty::Stream::Stderr);
+    // Set up indicatif for clean progress display
+    let multi = MultiProgress::new();
+    let pb = multi.add(ProgressBar::new(100));
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.cyan} [{bar:40.green/dim}] {pos}% {msg:.dim}")
+            .unwrap()
+            .progress_chars("█▓▒░ ")
+            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+    );
+    pb.set_message("Initializing...");
 
     // Create notification callback for progress and logs
-    let progress_clone = current_progress.clone();
+    let pb_clone = pb.clone();
     let callback: mcp_client::NotificationCallback = Arc::new(move |notification| {
         use mcp_client::{Notification, LogLevel};
 
         match notification {
             Notification::Progress(progress_notif) => {
-                if !is_tty {
-                    return; // Don't show progress if not a terminal
-                }
-
-                // Format progress message
-                let msg = if let Some(total) = progress_notif.total {
-                    let percentage = (progress_notif.progress / total * 100.0) as u32;
-                    if let Some(message) = &progress_notif.message {
-                        format!("⏳ {}% - {}", percentage, message)
-                    } else {
-                        format!("⏳ {}%", percentage)
-                    }
-                } else if let Some(message) = &progress_notif.message {
-                    format!("⏳ {}", message)
-                } else {
-                    format!("⏳ {:.0}", progress_notif.progress)
+                // Calculate position (0-100)
+                let (progress_val, total_val) = match progress_notif.total {
+                    Some(t) => (progress_notif.progress, t),
+                    None => (progress_notif.progress, 1.0),
                 };
+                let position = ((progress_val / total_val) * 100.0) as u64;
 
-                // Update progress (overwrite line with \r)
-                eprint!("\r{:<80}\r{}", "", msg);
-                let _ = std::io::stderr().flush();
+                pb_clone.set_position(position);
 
-                *progress_clone.lock().unwrap() = Some(msg);
+                if let Some(message) = &progress_notif.message {
+                    pb_clone.set_message(message.clone());
+                } else {
+                    pb_clone.set_message("");
+                }
             }
             Notification::Log(log_msg) => {
-                // Clear progress line if showing
-                if is_tty {
-                    if let Some(_) = progress_clone.lock().unwrap().as_ref() {
-                        eprint!("\r{:<80}\r", "");
-                    }
-                }
-
-                // Format log message with colored icon
-                let (icon, color_fn): (&str, fn(&str) -> String) = match log_msg.level {
-                    LogLevel::Debug => ("🐛", |s| s.bright_black().to_string()),
-                    LogLevel::Info => ("ℹ", |s| s.bright_blue().to_string()),
-                    LogLevel::Notice => ("●", |s| s.bright_cyan().to_string()),
-                    LogLevel::Warning => ("⚠", |s| s.bright_yellow().to_string()),
-                    LogLevel::Error => ("✗", |s| s.bright_red().to_string()),
-                    LogLevel::Critical | LogLevel::Alert | LogLevel::Emergency =>
-                        ("🔥", |s| s.bright_red().bold().to_string()),
+                // Format log message with colored icon and level badge
+                let (icon, badge) = match log_msg.level {
+                    LogLevel::Debug => ("🔍", "DEBUG"),
+                    LogLevel::Info => ("ℹ", "INFO"),
+                    LogLevel::Notice => ("●", "NOTE"),
+                    LogLevel::Warning => ("⚠", "WARN"),
+                    LogLevel::Error => ("✗", "ERROR"),
+                    LogLevel::Critical => ("🔥", "CRIT"),
+                    LogLevel::Alert => ("🚨", "ALERT"),
+                    LogLevel::Emergency => ("💥", "EMERG"),
                 };
 
                 let message = match &log_msg.message {
@@ -155,15 +148,14 @@ async fn execute_tool(
                     other => other.to_string(),
                 };
 
-                eprintln!("{} {}", color_fn(icon), message);
+                // Print log above progress bar (indicatif handles the positioning)
+                let log_line = if let Some(logger) = &log_msg.logger {
+                    format!("{} [{}] [{}] {}", icon, badge, logger, message)
+                } else {
+                    format!("{} [{}] {}", icon, badge, message)
+                };
 
-                // Restore progress if it was showing
-                if is_tty {
-                    if let Some(progress_msg) = progress_clone.lock().unwrap().as_ref() {
-                        eprint!("{}", progress_msg);
-                        let _ = std::io::stderr().flush();
-                    }
-                }
+                pb_clone.println(log_line);
             }
         }
     });
@@ -180,21 +172,17 @@ async fn execute_tool(
         .await
         .context("Tool execution failed")?;
 
-    // Clear progress line before showing results
-    if is_tty {
-        if current_progress.lock().unwrap().is_some() {
-            eprint!("\r{:<80}\r", "");
-        }
-    }
-
     // Format the response
     let formatter = DynamicFormatter::new(schema.clone(), no_color);
     let output = formatter.format(response)?;
 
-    println!("{}", output);
+    // Give async notifications time to arrive and display (for async jobs)
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    // Give async notifications time to arrive and display
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // Finish progress bar after notifications arrive
+    pb.finish_and_clear();
+
+    println!("{}", output);
 
     Ok(())
 }
