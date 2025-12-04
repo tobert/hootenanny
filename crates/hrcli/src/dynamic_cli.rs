@@ -47,6 +47,7 @@ impl DynamicCli {
                 json: remaining.contains(&"--json".to_string()),
             }),
             "completions" => return self.parse_completions_command(&remaining[1..]),
+            "__complete" => return self.parse_complete_command(&remaining[1..]),
             "interactive" | "repl" => return Ok(ParsedCommand::Interactive),
             _ => {}
         }
@@ -357,6 +358,19 @@ impl DynamicCli {
         })
     }
 
+    fn parse_complete_command(&self, args: &[String]) -> Result<ParsedCommand> {
+        // __complete <tool_name> <argument_name> <partial>
+        if args.len() < 3 {
+            return Err(anyhow::anyhow!("__complete requires 3 arguments: tool_name argument_name partial"));
+        }
+
+        Ok(ParsedCommand::Complete {
+            tool_name: args[0].clone(),
+            argument_name: args[1].clone(),
+            partial: args[2].clone(),
+        })
+    }
+
     pub fn print_help(&self, schemas: &[DynamicToolSchema]) {
         use owo_colors::OwoColorize;
 
@@ -412,6 +426,11 @@ pub enum ParsedCommand {
     },
     Completions {
         shell: String,
+    },
+    Complete {
+        tool_name: String,
+        argument_name: String,
+        partial: String,
     },
     Interactive,
 }

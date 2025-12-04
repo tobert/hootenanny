@@ -5,6 +5,7 @@ mod mcp_client;
 mod discovery;
 mod execution;
 mod dynamic_cli;
+mod completion;
 
 use discovery::{DiscoveryClient, DynamicToolSchema};
 use dynamic_cli::{DynamicCli, ParsedCommand};
@@ -57,6 +58,9 @@ async fn main() -> Result<()> {
         ParsedCommand::Completions { shell } => {
             generate_completions(&shell, &schemas)?;
         }
+        ParsedCommand::Complete { tool_name, argument_name, partial } => {
+            completion::complete_argument(&server_url, &tool_name, &argument_name, &partial).await?;
+        }
         ParsedCommand::Interactive => {
             run_interactive_mode(&server_url, schemas).await?;
         }
@@ -78,6 +82,9 @@ async fn execute_tool(
     schemas: &[DynamicToolSchema],
     no_color: bool,
 ) -> Result<()> {
+    use std::sync::{Arc, Mutex};
+    use std::io::Write;
+
     // Find the schema for this tool
     let schema = schemas.iter()
         .find(|s| s.name == tool_name)
@@ -89,10 +96,83 @@ async fn execute_tool(
     }
     println!("{} {}", "Executing:".bright_cyan(), tool_name.bright_green().bold());
 
-    // Connect to MCP server
+    // Track current progress message for display
+    let current_progress = Arc::new(Mutex::new(Option::<String>::None));
+    let is_tty = atty::is(atty::Stream::Stderr);
+
+    // Create notification callback for progress and logs
+    let progress_clone = current_progress.clone();
+    let callback: mcp_client::NotificationCallback = Arc::new(move |notification| {
+        use mcp_client::{Notification, LogLevel};
+
+        match notification {
+            Notification::Progress(progress_notif) => {
+                if !is_tty {
+                    return; // Don't show progress if not a terminal
+                }
+
+                // Format progress message
+                let msg = if let Some(total) = progress_notif.total {
+                    let percentage = (progress_notif.progress / total * 100.0) as u32;
+                    if let Some(message) = &progress_notif.message {
+                        format!("⏳ {}% - {}", percentage, message)
+                    } else {
+                        format!("⏳ {}%", percentage)
+                    }
+                } else if let Some(message) = &progress_notif.message {
+                    format!("⏳ {}", message)
+                } else {
+                    format!("⏳ {:.0}", progress_notif.progress)
+                };
+
+                // Update progress (overwrite line with \r)
+                eprint!("\r{:<80}\r{}", "", msg);
+                let _ = std::io::stderr().flush();
+
+                *progress_clone.lock().unwrap() = Some(msg);
+            }
+            Notification::Log(log_msg) => {
+                // Clear progress line if showing
+                if is_tty {
+                    if let Some(_) = progress_clone.lock().unwrap().as_ref() {
+                        eprint!("\r{:<80}\r", "");
+                    }
+                }
+
+                // Format log message with colored icon
+                let (icon, color_fn): (&str, fn(&str) -> String) = match log_msg.level {
+                    LogLevel::Debug => ("🐛", |s| s.bright_black().to_string()),
+                    LogLevel::Info => ("ℹ", |s| s.bright_blue().to_string()),
+                    LogLevel::Notice => ("●", |s| s.bright_cyan().to_string()),
+                    LogLevel::Warning => ("⚠", |s| s.bright_yellow().to_string()),
+                    LogLevel::Error => ("✗", |s| s.bright_red().to_string()),
+                    LogLevel::Critical | LogLevel::Alert | LogLevel::Emergency =>
+                        ("🔥", |s| s.bright_red().bold().to_string()),
+                };
+
+                let message = match &log_msg.message {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+
+                eprintln!("{} {}", color_fn(icon), message);
+
+                // Restore progress if it was showing
+                if is_tty {
+                    if let Some(progress_msg) = progress_clone.lock().unwrap().as_ref() {
+                        eprint!("{}", progress_msg);
+                        let _ = std::io::stderr().flush();
+                    }
+                }
+            }
+        }
+    });
+
+    // Connect to MCP server with notification callback
     let client = mcp_client::McpClient::connect(server_url)
         .await
-        .context("Failed to connect to MCP server")?;
+        .context("Failed to connect to MCP server")?
+        .with_notification_callback(callback);
 
     // Call the tool
     let params = serde_json::Value::Object(args.into_iter().collect());
@@ -100,6 +180,13 @@ async fn execute_tool(
         .call_tool(tool_name, params)
         .await
         .context("Tool execution failed")?;
+
+    // Clear progress line before showing results
+    if is_tty {
+        if current_progress.lock().unwrap().is_some() {
+            eprint!("\r{:<80}\r", "");
+        }
+    }
 
     // Format the response
     let formatter = DynamicFormatter::new(schema.clone(), no_color);
@@ -178,6 +265,7 @@ fn generate_bash_completions(schemas: &[DynamicToolSchema]) {
     println!("# Bash completion for hrcli");
     println!("_hrcli() {{");
     println!("    local cur=${{COMP_WORDS[COMP_CWORD]}}");
+    println!("    local prev=${{COMP_WORDS[COMP_CWORD-1]}}");
     println!("    local commands=\"{}\"",
         schemas.iter()
             .map(|s| s.name.as_str())
@@ -185,7 +273,26 @@ fn generate_bash_completions(schemas: &[DynamicToolSchema]) {
             .collect::<Vec<_>>()
             .join(" ")
     );
-    println!("    COMPREPLY=( $(compgen -W \"$commands\" -- $cur) )");
+    println!();
+    println!("    # If completing a subcommand name");
+    println!("    if [ $COMP_CWORD -eq 1 ]; then");
+    println!("        COMPREPLY=( $(compgen -W \"$commands\" -- $cur) )");
+    println!("        return 0");
+    println!("    fi");
+    println!();
+    println!("    # Get the tool name from position 1");
+    println!("    local tool_name=${{COMP_WORDS[1]}}");
+    println!();
+    println!("    # Try dynamic completion from server");
+    println!("    # Extract argument name from previous word if it's a flag");
+    println!("    if [[ \"$prev\" == --* ]]; then");
+    println!("        local arg_name=${{prev#--}}");
+    println!("        local completions=$(hrcli __complete \"$tool_name\" \"$arg_name\" \"$cur\" 2>/dev/null)");
+    println!("        if [ -n \"$completions\" ]; then");
+    println!("            COMPREPLY=( $(compgen -W \"$completions\" -- $cur) )");
+    println!("            return 0");
+    println!("        fi");
+    println!("    fi");
     println!("}}");
     println!("complete -F _hrcli hrcli");
 }

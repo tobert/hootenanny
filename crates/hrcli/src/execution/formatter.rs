@@ -17,6 +17,15 @@ impl DynamicFormatter {
 
     /// Format the response based on server-provided format hints
     pub fn format(&self, response: Value) -> Result<String> {
+        // Validate output against schema if available
+        if let Err(e) = self.validate_output(&response) {
+            eprintln!("{}", "⚠ Output validation warning:".bright_yellow());
+            eprintln!("  {}", e.to_string().bright_yellow());
+            eprintln!("\nInvalid output:");
+            eprintln!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+            std::process::exit(1);
+        }
+
         match &self.schema.output_format {
             OutputFormat::Plain => self.format_plain(response),
             OutputFormat::Json { pretty } => self.format_json(response, *pretty),
@@ -26,6 +35,39 @@ impl DynamicFormatter {
             }
             OutputFormat::Custom { formatter, config } => {
                 self.format_custom(response, formatter, config)
+            }
+        }
+    }
+
+    /// Validate output against output schema (if available)
+    fn validate_output(&self, response: &Value) -> Result<()> {
+        // Skip validation if no schema available
+        let schema_value = match &self.schema.output_schema {
+            Some(s) => s,
+            None => return Ok(()), // No schema, skip validation
+        };
+
+        // Compile the JSON schema (using is_valid for simple check to avoid lifetime issues)
+        match jsonschema::is_valid(schema_value, response) {
+            true => Ok(()),
+            false => {
+                // Re-compile to get detailed error messages
+                // We need to box/leak to satisfy 'static, which is safe for validation
+                let schema_box: &'static Value = Box::leak(Box::new(schema_value.clone()));
+                let compiled = jsonschema::JSONSchema::options()
+                    .compile(schema_box)
+                    .context("Failed to compile output schema")?;
+
+                let error_messages: Vec<String> = compiled
+                    .validate(response)
+                    .unwrap_err()
+                    .map(|e| format!("  • {}", e))
+                    .collect();
+
+                Err(anyhow::anyhow!(
+                    "Output does not match expected schema:\n{}",
+                    error_messages.join("\n")
+                ))
             }
         }
     }
