@@ -18,6 +18,7 @@ use uuid::Uuid;
 use super::SseSender;
 use crate::types::logging::LogLevel;
 use crate::types::protocol::Implementation;
+use std::collections::HashSet;
 
 /// An MCP session.
 #[derive(Debug)]
@@ -45,6 +46,9 @@ pub struct Session {
 
     /// Client's requested log level.
     pub log_level: LogLevel,
+
+    /// Resources this session is subscribed to.
+    pub subscriptions: HashSet<String>,
 }
 
 /// Statistics about active sessions.

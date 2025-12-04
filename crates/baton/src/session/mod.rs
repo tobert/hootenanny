@@ -34,6 +34,7 @@ impl Session {
             initialized: false,
             tx: None,
             log_level: crate::types::logging::LogLevel::default(),
+            subscriptions: std::collections::HashSet::new(),
         }
     }
 
@@ -75,6 +76,21 @@ impl Session {
     /// Check if a message at this level should be sent to the client.
     pub fn should_log(&self, level: crate::types::logging::LogLevel) -> bool {
         level >= self.log_level
+    }
+
+    /// Subscribe to a resource URI.
+    pub fn subscribe(&mut self, uri: &str) {
+        self.subscriptions.insert(uri.to_string());
+    }
+
+    /// Unsubscribe from a resource URI.
+    pub fn unsubscribe(&mut self, uri: &str) {
+        self.subscriptions.remove(uri);
+    }
+
+    /// Check if subscribed to a resource URI.
+    pub fn is_subscribed(&self, uri: &str) -> bool {
+        self.subscriptions.contains(uri)
     }
 
     /// Register an SSE connection.

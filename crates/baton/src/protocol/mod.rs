@@ -340,6 +340,8 @@ async fn dispatch_inner<H: Handler>(
         "resources/list" => handle_list_resources(state).await,
         "resources/templates/list" => handle_list_resource_templates(state).await,
         "resources/read" => handle_read_resource(state, message).await,
+        "resources/subscribe" => handle_subscribe(state, session_id, message).await,
+        "resources/unsubscribe" => handle_unsubscribe(state, session_id, message).await,
 
         // Prompts
         "prompts/list" => handle_list_prompts(state).await,
@@ -633,6 +635,60 @@ async fn handle_set_log_level<H: Handler>(
             session_id = %session_id,
             level = ?params.level,
             "Log level set"
+        );
+    }
+
+    Ok(serde_json::json!({}))
+}
+
+async fn handle_subscribe<H: Handler>(
+    state: &Arc<McpState<H>>,
+    session_id: &str,
+    request: &JsonRpcMessage,
+) -> Result<Value, ErrorData> {
+    use crate::types::subscription::SubscribeParams;
+
+    let params: SubscribeParams = request
+        .params
+        .as_ref()
+        .map(|p| serde_json::from_value(p.clone()))
+        .transpose()
+        .map_err(|e| ErrorData::invalid_params(format!("Invalid subscribe params: {}", e)))?
+        .ok_or_else(|| ErrorData::invalid_params("Missing subscribe params"))?;
+
+    if let Some(mut session) = state.sessions.get_mut(session_id) {
+        session.subscribe(&params.uri);
+        tracing::info!(
+            session_id = %session_id,
+            uri = %params.uri,
+            "Subscribed to resource"
+        );
+    }
+
+    Ok(serde_json::json!({}))
+}
+
+async fn handle_unsubscribe<H: Handler>(
+    state: &Arc<McpState<H>>,
+    session_id: &str,
+    request: &JsonRpcMessage,
+) -> Result<Value, ErrorData> {
+    use crate::types::subscription::UnsubscribeParams;
+
+    let params: UnsubscribeParams = request
+        .params
+        .as_ref()
+        .map(|p| serde_json::from_value(p.clone()))
+        .transpose()
+        .map_err(|e| ErrorData::invalid_params(format!("Invalid unsubscribe params: {}", e)))?
+        .ok_or_else(|| ErrorData::invalid_params("Missing unsubscribe params"))?;
+
+    if let Some(mut session) = state.sessions.get_mut(session_id) {
+        session.unsubscribe(&params.uri);
+        tracing::info!(
+            session_id = %session_id,
+            uri = %params.uri,
+            "Unsubscribed from resource"
         );
     }
 

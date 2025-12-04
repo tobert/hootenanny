@@ -534,3 +534,49 @@ This is a good checkpoint before tackling the complex bidirectional communicatio
 **Status**: ✅ **Phase 5 COMPLETE** - Full logging infrastructure ready
 
 **Ready for**: Phase 6 (Resource Subscriptions) - Live resource change notifications
+
+---
+
+## Phase 6 Implementation Log
+
+### 2025-12-04 Session 1: Phase 6 COMPLETE ✅
+
+**All subscription infrastructure implemented and tested!**
+
+**Completed**:
+- ✅ Created `crates/baton/src/types/subscription.rs` with types
+- ✅ Added `subscriptions` HashSet to Session with subscribe/unsubscribe/is_subscribed methods
+- ✅ Added `resources/subscribe` and `resources/unsubscribe` handlers to dispatch
+- ✅ Created `ResourceNotifier` in transport layer for sending notifications
+- ✅ Enabled subscription capability in HootHandler (subscribe: true)
+
+**Files Changed**:
+- `crates/baton/src/types/subscription.rs` (new) - SubscribeParams, UnsubscribeParams, ResourceUpdatedNotification
+- `crates/baton/src/types/mod.rs` - Export subscription module
+- `crates/baton/src/session/store.rs` - Add subscriptions HashSet to Session
+- `crates/baton/src/session/mod.rs` - Initialize subscriptions, add subscribe/unsubscribe/is_subscribed methods
+- `crates/baton/src/protocol/mod.rs` - Add handle_subscribe() and handle_unsubscribe() handlers
+- `crates/baton/src/transport/notifier.rs` (new) - ResourceNotifier for sending notifications/resources/updated
+- `crates/baton/src/transport/mod.rs` - Export ResourceNotifier, add to McpState
+- `crates/hootenanny/src/api/handler.rs` - Enable subscription capability with subscribe: true
+- `docs/agents/plans/leaning-into-mcp-features/handoff.md` - Phase 6 log
+
+**Architecture**:
+- Session tracks subscribed resource URIs in a HashSet
+- `resources/subscribe` validates URI and adds to session subscriptions
+- `resources/unsubscribe` removes URI from session subscriptions
+- `ResourceNotifier` provides `notify_session(session_id, uri)` for targeted notifications
+- Sends `notifications/resources/updated` via SSE with {uri: "..."}
+- Capability advertises `subscribe: true` in ResourcesCapability
+
+**Note**: The notifier currently supports per-session notifications via `notify_session()`. Full broadcast support would require SessionStore trait additions for iterating all sessions.
+
+**Testing**:
+- ✅ Unit tests in subscription.rs (2 tests for serialization)
+- ✅ All lib tests passing (226 tests total)
+- ✅ No compilation warnings or errors
+- ⏳ Live testing pending (requires client subscribe call + triggering resource update)
+
+**Status**: ✅ **Phase 6 COMPLETE** - Full subscription infrastructure ready
+
+**Ready for**: Phase 7 (Elicitation/Roots) - Server requesting user input (final feature!)

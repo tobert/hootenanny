@@ -13,12 +13,14 @@
 
 mod logger;
 mod message;
+mod notifier;
 mod sampling;
 mod sse;
 mod streamable;
 
 pub use logger::McpLogger;
 pub use message::message_handler;
+pub use notifier::ResourceNotifier;
 pub use sampling::{SamplingClient, SamplingError};
 pub use sse::sse_handler;
 pub use streamable::{streamable_handler, delete_handler};
@@ -47,6 +49,9 @@ pub struct McpState<H> {
 
     /// Logger for sending messages to clients.
     pub logger: McpLogger,
+
+    /// Notifier for resource subscription updates.
+    pub notifier: ResourceNotifier,
 }
 
 impl<H> McpState<H> {
@@ -56,6 +61,7 @@ impl<H> McpState<H> {
         Self {
             handler: Arc::new(handler),
             logger: McpLogger::new(sessions.clone()),
+            notifier: ResourceNotifier::new(sessions.clone()),
             sessions,
             server_name: server_name.into(),
             server_version: server_version.into(),
@@ -73,6 +79,7 @@ impl<H> McpState<H> {
         Self {
             handler: Arc::new(handler),
             logger: McpLogger::new(sessions.clone()),
+            notifier: ResourceNotifier::new(sessions.clone()),
             sessions,
             server_name: server_name.into(),
             server_version: server_version.into(),

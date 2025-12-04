@@ -550,12 +550,21 @@ impl Handler for HootHandler {
     }
 
     fn capabilities(&self) -> ServerCapabilities {
-        ServerCapabilities::default()
+        use baton::types::protocol::ResourcesCapability;
+
+        let mut caps = ServerCapabilities::default()
             .enable_tools()
-            .enable_resources()
             .enable_prompts()
             .enable_completions()
-            .enable_logging()
+            .enable_logging();
+
+        // Enable resources with subscriptions
+        caps.resources = Some(ResourcesCapability {
+            list_changed: Some(true),
+            subscribe: Some(true),
+        });
+
+        caps
     }
 
     fn resources(&self) -> Vec<Resource> {

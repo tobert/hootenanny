@@ -13,6 +13,7 @@
 //! - `progress` - Progress notifications for long-running operations
 //! - `completion` - Argument autocompletion for tools, prompts, and resources
 //! - `logging` - Structured logging to clients
+//! - `subscription` - Resource subscription management
 
 pub mod completion;
 pub mod content;
@@ -24,6 +25,7 @@ pub mod prompt;
 pub mod protocol;
 pub mod resource;
 pub mod sampling;
+pub mod subscription;
 pub mod tool;
 
 // Common types used across modules
