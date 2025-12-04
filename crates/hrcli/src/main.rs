@@ -169,10 +169,9 @@ async fn execute_tool(
     });
 
     // Connect to MCP server with notification callback
-    let client = mcp_client::McpClient::connect(server_url)
+    let client = mcp_client::McpClient::connect_with_callback(server_url, Some(callback))
         .await
-        .context("Failed to connect to MCP server")?
-        .with_notification_callback(callback);
+        .context("Failed to connect to MCP server")?;
 
     // Call the tool
     let params = serde_json::Value::Object(args.into_iter().collect());
@@ -193,6 +192,9 @@ async fn execute_tool(
     let output = formatter.format(response)?;
 
     println!("{}", output);
+
+    // Give async notifications time to arrive and display
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     Ok(())
 }

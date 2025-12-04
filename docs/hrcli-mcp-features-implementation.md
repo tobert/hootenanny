@@ -1,6 +1,6 @@
 # hrcli MCP Features Implementation Guide
 
-## Status: INFRASTRUCTURE COMPLETE ✅ - UI Integration Pending 🚧
+## Status: COMPLETE ✅
 
 ### Completed ✅
 - **Phase 1 Types**: All progress/log/completion types added to `crates/hrcli/src/mcp_client.rs`

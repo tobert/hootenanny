@@ -93,6 +93,11 @@ pub struct McpClient {
 impl McpClient {
     /// Connect to the MCP server via SSE
     pub async fn connect(base_url: &str) -> Result<Self> {
+        Self::connect_with_callback(base_url, None).await
+    }
+
+    /// Connect with an optional notification callback (must be set before connection)
+    pub async fn connect_with_callback(base_url: &str, callback: Option<NotificationCallback>) -> Result<Self> {
         let client = reqwest::Client::new();
         let mut mcp_client = Self {
             base_url: base_url.to_string(),
@@ -100,7 +105,7 @@ impl McpClient {
             session_id: None,
             responses: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(Mutex::new(1)),
-            notification_callback: None,
+            notification_callback: callback,
         };
 
         // Connect to SSE endpoint to get session ID and start listener
@@ -110,6 +115,7 @@ impl McpClient {
     }
 
     /// Set notification callback for progress and log messages
+    /// WARNING: This only works if called BEFORE connect() is awaited
     pub fn with_notification_callback(mut self, callback: NotificationCallback) -> Self {
         self.notification_callback = Some(callback);
         self
@@ -275,13 +281,19 @@ impl McpClient {
         let id = *next_id;
         *next_id += 1;
 
+        // Generate a unique progress token for this request
+        let progress_token = format!("progress_{}", id);
+
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": "tools/call",
             "params": {
                 "name": tool_name,
-                "arguments": arguments
+                "arguments": arguments,
+                "_meta": {
+                    "progressToken": progress_token
+                }
             }
         });
 
@@ -294,14 +306,22 @@ impl McpClient {
 
         // Return the result content
         if let Some(result) = response.get("result") {
+            // Check for structuredContent first (preferred)
+            if let Some(structured) = result.get("structuredContent") {
+                return Ok(structured.clone());
+            }
+
+            // Fall back to content array
             if let Some(content) = result.get("content") {
                 if let Some(arr) = content.as_array() {
                     if let Some(first) = arr.first() {
                         if let Some(text) = first.get("text") {
-                            // The text is a JSON string, so we need to parse it
-                            let parsed_text: Value = serde_json::from_str(text.as_str().unwrap_or(""))
-                                .context("Failed to parse text field in response")?;
-                            return Ok(parsed_text);
+                            let text_str = text.as_str().unwrap_or("");
+                            // Try to parse as JSON, but if it fails, return as plain string
+                            match serde_json::from_str::<Value>(text_str) {
+                                Ok(parsed) => return Ok(parsed),
+                                Err(_) => return Ok(serde_json::json!(text_str)),
+                            }
                         }
                     }
                 }
