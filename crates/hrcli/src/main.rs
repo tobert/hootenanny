@@ -172,19 +172,78 @@ async fn execute_tool(
         .await
         .context("Tool execution failed")?;
 
-    // Format the response
-    let formatter = DynamicFormatter::new(schema.clone(), no_color);
-    let output = formatter.format(response)?;
+    // Check if response contains a job_id - if so, auto-poll it
+    let final_response = if let Some(job_id) = response.get("job_id").and_then(|v| v.as_str()) {
+        pb.set_message(format!("Job started: {}", job_id));
 
-    // Give async notifications time to arrive and display (for async jobs)
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        // Poll the job until completion
+        poll_job_until_complete(&client, job_id, &pb).await?
+    } else {
+        // Immediate response - give async notifications time to arrive
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        response
+    };
 
-    // Finish progress bar after notifications arrive
+    // Finish progress bar
     pb.finish_and_clear();
+
+    // Format the final response
+    let formatter = DynamicFormatter::new(schema.clone(), no_color);
+    let output = formatter.format(final_response)?;
 
     println!("{}", output);
 
     Ok(())
+}
+
+/// Poll a job until it completes, updating progress bar
+async fn poll_job_until_complete(
+    client: &mcp_client::McpClient,
+    job_id: &str,
+    pb: &ProgressBar,
+) -> Result<serde_json::Value> {
+    use std::time::Duration;
+
+    loop {
+        // Poll with 1 second timeout
+        let poll_params = serde_json::json!({
+            "job_ids": [job_id],
+            "timeout_ms": 1000,
+            "mode": "any"
+        });
+
+        let poll_response = client
+            .call_tool("job_poll", poll_params)
+            .await
+            .context("Failed to poll job")?;
+
+        // Check if job completed
+        if let Some(completed) = poll_response.get("completed").and_then(|v| v.as_array()) {
+            if !completed.is_empty() {
+                // Job completed! Get the full status with result
+                pb.set_message("Job completed! Fetching result...");
+
+                let status_params = serde_json::json!({
+                    "job_id": job_id
+                });
+
+                let status_response = client
+                    .call_tool("job_status", status_params)
+                    .await
+                    .context("Failed to get job status")?;
+
+                // Extract the result field from status
+                if let Some(result) = status_response.get("result") {
+                    return Ok(result.clone());
+                } else {
+                    return Ok(status_response);
+                }
+            }
+        }
+
+        // Not complete yet, wait a bit and continue polling
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 fn show_discovered_tools(server_url: &str, schemas: &[DynamicToolSchema], json: bool) {
