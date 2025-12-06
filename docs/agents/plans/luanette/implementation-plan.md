@@ -77,6 +77,15 @@ Format: YYYY-MM-DD - Phase N progress: Brief summary of what was completed
   - Logs capture script events, attributes, and metrics
 - Note: trace_id/span_id return nil from spawn_blocking context (expected, Phase 4 will add span context propagation)
 
+2025-12-06 - Phase 4 in progress (Span Context Propagation):
+- Added StoredSpanContext struct to capture trace_id/span_id/sampled before spawn_blocking
+- Updated otel_bridge.rs to store/retrieve context from Lua registry
+- Updated runtime.rs execute/eval to capture context and pass to blocking functions
+- otel.trace_id(), otel.span_id(), otel.traceparent() now read from stored context
+- 20 tests passing
+- TODO: Test live to verify trace IDs propagate correctly
+- TODO: Add traceparent injection to outgoing MCP calls from Lua
+
 ---
 
 ## Overview

@@ -10,8 +10,71 @@
 
 use anyhow::Result;
 use mlua::{Lua, Table, Value as LuaValue};
-use opentelemetry::trace::TraceContextExt;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+/// Stored span context for use in blocking Lua execution.
+///
+/// Since Lua runs in spawn_blocking, we capture the span context
+/// before entering the blocking context and store it here.
+#[derive(Clone, Debug)]
+pub struct StoredSpanContext {
+    pub trace_id: String,
+    pub span_id: String,
+    pub sampled: bool,
+}
+
+impl StoredSpanContext {
+    /// Capture the current span context from the tracing system.
+    pub fn capture() -> Option<Self> {
+        use opentelemetry::trace::TraceContextExt;
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+        let context = tracing::Span::current().context();
+        let span = context.span();
+        let span_context = span.span_context();
+
+        if span_context.is_valid() {
+            Some(Self {
+                trace_id: span_context.trace_id().to_string(),
+                span_id: span_context.span_id().to_string(),
+                sampled: span_context.is_sampled(),
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Format as W3C traceparent header.
+    pub fn traceparent(&self) -> String {
+        let flags = if self.sampled { "01" } else { "00" };
+        format!("00-{}-{}-{}", self.trace_id, self.span_id, flags)
+    }
+}
+
+/// Lua registry key for stored span context.
+const SPAN_CONTEXT_KEY: &str = "otel_span_context";
+
+/// Store span context in Lua registry for access by otel.* functions.
+pub fn store_span_context(lua: &Lua, ctx: Option<StoredSpanContext>) -> Result<()> {
+    if let Some(ctx) = ctx {
+        let table = lua.create_table()?;
+        table.set("trace_id", ctx.trace_id)?;
+        table.set("span_id", ctx.span_id)?;
+        table.set("sampled", ctx.sampled)?;
+        lua.set_named_registry_value(SPAN_CONTEXT_KEY, table)?;
+    }
+    Ok(())
+}
+
+/// Get stored span context from Lua registry.
+fn get_stored_context(lua: &Lua) -> Option<(String, String, bool)> {
+    let table: Option<Table> = lua.named_registry_value(SPAN_CONTEXT_KEY).ok();
+    table.and_then(|t| {
+        let trace_id: String = t.get("trace_id").ok()?;
+        let span_id: String = t.get("span_id").ok()?;
+        let sampled: bool = t.get("sampled").ok()?;
+        Some((trace_id, span_id, sampled))
+    })
+}
 
 /// Register the `otel` global table with observability functions.
 pub fn register_otel_globals(lua: &Lua) -> Result<()> {
@@ -20,47 +83,23 @@ pub fn register_otel_globals(lua: &Lua) -> Result<()> {
     let otel_table = lua.create_table()?;
 
     // otel.trace_id() -> string or nil
-    let trace_id_fn = lua.create_function(|_, ()| {
-        let context = tracing::Span::current().context();
-        let span = context.span();
-        let span_context = span.span_context();
-
-        if span_context.is_valid() {
-            Ok(Some(span_context.trace_id().to_string()))
-        } else {
-            Ok(None)
-        }
+    let trace_id_fn = lua.create_function(|lua, ()| {
+        Ok(get_stored_context(lua).map(|(trace_id, _, _)| trace_id))
     })?;
     otel_table.set("trace_id", trace_id_fn)?;
 
     // otel.span_id() -> string or nil
-    let span_id_fn = lua.create_function(|_, ()| {
-        let context = tracing::Span::current().context();
-        let span = context.span();
-        let span_context = span.span_context();
-
-        if span_context.is_valid() {
-            Ok(Some(span_context.span_id().to_string()))
-        } else {
-            Ok(None)
-        }
+    let span_id_fn = lua.create_function(|lua, ()| {
+        Ok(get_stored_context(lua).map(|(_, span_id, _)| span_id))
     })?;
     otel_table.set("span_id", span_id_fn)?;
 
     // otel.traceparent() -> string or nil
-    let traceparent_fn = lua.create_function(|_, ()| {
-        let context = tracing::Span::current().context();
-        let span = context.span();
-        let span_context = span.span_context();
-
-        if span_context.is_valid() {
-            let trace_id = span_context.trace_id();
-            let span_id = span_context.span_id();
-            let flags = if span_context.is_sampled() { "01" } else { "00" };
-            Ok(Some(format!("00-{}-{}-{}", trace_id, span_id, flags)))
-        } else {
-            Ok(None)
-        }
+    let traceparent_fn = lua.create_function(|lua, ()| {
+        Ok(get_stored_context(lua).map(|(trace_id, span_id, sampled)| {
+            let flags = if sampled { "01" } else { "00" };
+            format!("00-{}-{}-{}", trace_id, span_id, flags)
+        }))
     })?;
     otel_table.set("traceparent", traceparent_fn)?;
 

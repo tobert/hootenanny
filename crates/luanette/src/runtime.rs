@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use tokio::time::timeout;
 
 use crate::clients::ClientManager;
-use crate::otel_bridge::register_otel_globals;
+use crate::otel_bridge::{register_otel_globals, store_span_context, StoredSpanContext};
 use crate::tool_bridge::{register_mcp_globals, McpBridgeContext};
 
 /// Configuration for the Lua sandbox.
@@ -75,15 +75,19 @@ impl LuaRuntime {
     ///
     /// The script must define a `main(params)` function that will be called
     /// with the provided parameters.
+    #[tracing::instrument(skip(self, source, params), fields(script.source_len = source.len()))]
     pub async fn execute(&self, source: &str, params: JsonValue) -> Result<ExecutionResult> {
         let source = source.to_string();
         let config_timeout = self.config.timeout;
         let mcp_context = self.mcp_context.clone();
 
+        // Capture span context before entering blocking context
+        let span_context = StoredSpanContext::capture();
+
         // Run Lua in blocking thread pool to avoid blocking the async runtime
         let result = timeout(config_timeout, async {
             tokio::task::spawn_blocking(move || {
-                execute_blocking(&source, params, mcp_context.as_ref())
+                execute_blocking(&source, params, mcp_context.as_ref(), span_context)
             })
             .await
             .context("Lua execution task panicked")?
@@ -98,14 +102,18 @@ impl LuaRuntime {
     ///
     /// Unlike `execute`, this doesn't require a main() function.
     /// The last expression in the code is returned.
+    #[tracing::instrument(skip(self, code), fields(code.len = code.len()))]
     pub async fn eval(&self, code: &str) -> Result<ExecutionResult> {
         let code = code.to_string();
         let config_timeout = self.config.timeout;
         let mcp_context = self.mcp_context.clone();
 
+        // Capture span context before entering blocking context
+        let span_context = StoredSpanContext::capture();
+
         let result = timeout(config_timeout, async {
             tokio::task::spawn_blocking(move || {
-                eval_blocking(&code, mcp_context.as_ref())
+                eval_blocking(&code, mcp_context.as_ref(), span_context)
             })
             .await
             .context("Lua eval task panicked")?
@@ -122,10 +130,11 @@ fn execute_blocking(
     source: &str,
     params: JsonValue,
     mcp_context: Option<&McpBridgeContext>,
+    span_context: Option<StoredSpanContext>,
 ) -> Result<ExecutionResult> {
     let start = Instant::now();
 
-    let lua = create_sandboxed_lua(mcp_context)?;
+    let lua = create_sandboxed_lua(mcp_context, span_context)?;
 
     // Load and execute the script to define functions
     lua.load(source)
@@ -156,10 +165,14 @@ fn execute_blocking(
 }
 
 /// Evaluate Lua code synchronously (called from spawn_blocking).
-fn eval_blocking(code: &str, mcp_context: Option<&McpBridgeContext>) -> Result<ExecutionResult> {
+fn eval_blocking(
+    code: &str,
+    mcp_context: Option<&McpBridgeContext>,
+    span_context: Option<StoredSpanContext>,
+) -> Result<ExecutionResult> {
     let start = Instant::now();
 
-    let lua = create_sandboxed_lua(mcp_context)?;
+    let lua = create_sandboxed_lua(mcp_context, span_context)?;
 
     // Evaluate the code
     let result: LuaValue = lua
@@ -177,7 +190,10 @@ fn eval_blocking(code: &str, mcp_context: Option<&McpBridgeContext>) -> Result<E
 }
 
 /// Create a sandboxed Lua VM with restricted globals.
-fn create_sandboxed_lua(mcp_context: Option<&McpBridgeContext>) -> Result<Lua> {
+fn create_sandboxed_lua(
+    mcp_context: Option<&McpBridgeContext>,
+    span_context: Option<StoredSpanContext>,
+) -> Result<Lua> {
     let lua = Lua::new();
 
     // Register standard library functions we want to allow
@@ -185,6 +201,10 @@ fn create_sandboxed_lua(mcp_context: Option<&McpBridgeContext>) -> Result<Lua> {
 
     // Remove dangerous globals
     remove_dangerous_globals(&lua)?;
+
+    // Store span context in registry for otel.* functions
+    store_span_context(&lua, span_context)
+        .context("Failed to store span context")?;
 
     // Register OpenTelemetry globals (otel.*)
     register_otel_globals(&lua)
