@@ -98,6 +98,36 @@ impl Tool {
         );
         self
     }
+
+    /// Set CLI icon (emoji or unicode symbol).
+    pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
+        self.annotations = Some(
+            self.annotations
+                .unwrap_or_default()
+                .with_icon(icon),
+        );
+        self
+    }
+
+    /// Set CLI category for grouping.
+    pub fn with_category(mut self, category: impl Into<String>) -> Self {
+        self.annotations = Some(
+            self.annotations
+                .unwrap_or_default()
+                .with_category(category),
+        );
+        self
+    }
+
+    /// Add CLI aliases.
+    pub fn with_aliases(mut self, aliases: Vec<String>) -> Self {
+        self.annotations = Some(
+            self.annotations
+                .unwrap_or_default()
+                .with_aliases(aliases),
+        );
+        self
+    }
 }
 
 /// JSON Schema for tool input/output.
@@ -184,6 +214,7 @@ impl Default for ToolSchema {
 
 /// Tool behavior annotations.
 /// Per MCP 2025-06-18 schema lines 2438-2463.
+/// Extended with optional CLI metadata (icon, category, aliases).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolAnnotations {
@@ -206,6 +237,18 @@ pub struct ToolAnnotations {
     /// If true, the tool interacts with external entities. Default: true.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub open_world_hint: Option<bool>,
+
+    /// CLI metadata: icon (emoji or unicode symbol).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+
+    /// CLI metadata: category for grouping in help output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+
+    /// CLI metadata: command aliases.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
 }
 
 impl ToolAnnotations {
@@ -230,6 +273,24 @@ impl ToolAnnotations {
     /// Set open-world hint.
     pub fn with_open_world(mut self, open_world: bool) -> Self {
         self.open_world_hint = Some(open_world);
+        self
+    }
+
+    /// Set CLI icon (emoji or unicode symbol).
+    pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    /// Set CLI category for grouping.
+    pub fn with_category(mut self, category: impl Into<String>) -> Self {
+        self.category = Some(category.into());
+        self
+    }
+
+    /// Add CLI aliases.
+    pub fn with_aliases(mut self, aliases: Vec<String>) -> Self {
+        self.aliases = aliases;
         self
     }
 }

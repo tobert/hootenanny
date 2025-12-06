@@ -51,124 +51,200 @@ impl Handler for HootHandler {
             // CAS tools
             Tool::new("cas_store", "Store content in the Content Addressable Storage")
                 .with_input_schema(schema_for::<CasStoreRequest>())
-                .with_output_schema(schema_for::<CasStoreResponse>()),
+                .with_output_schema(schema_for::<CasStoreResponse>())
+                .with_icon("💾")
+                .with_category("Storage"),
             Tool::new("cas_inspect", "Inspect content in the CAS by hash")
                 .with_input_schema(schema_for::<CasInspectRequest>())
                 .with_output_schema(schema_for::<CasInspectResponse>())
+                .with_icon("🔍")
+                .with_category("Storage")
                 .read_only(),
             Tool::new("cas_upload_file", "Upload a file to the CAS")
                 .with_input_schema(schema_for::<UploadFileRequest>())
-                .with_output_schema(schema_for::<CasUploadResponse>()),
+                .with_output_schema(schema_for::<CasUploadResponse>())
+                .with_icon("📤")
+                .with_category("Storage"),
+            Tool::new("artifact_upload", "Upload a file as an artifact with metadata and lineage tracking")
+                .with_input_schema(schema_for::<ArtifactUploadRequest>())
+                .with_output_schema(schema_for::<ArtifactUploadResponse>())
+                .with_icon("🎨")
+                .with_category("Storage"),
 
             // Orpheus tools
             Tool::new("orpheus_generate", "Generate MIDI with the Orpheus model")
                 .with_input_schema(schema_for::<OrpheusGenerateRequest>())
-                .with_output_schema(schema_for::<JobSpawnResponse>()),
+                .with_output_schema(schema_for::<JobSpawnResponse>())
+                .with_icon("🎼")
+                .with_category("Music Generation")
+                .with_aliases(vec!["gen".to_string()]),
             Tool::new("orpheus_generate_seeded", "Generate MIDI from a seed with Orpheus")
                 .with_input_schema(schema_for::<OrpheusGenerateSeededRequest>())
-                .with_output_schema(schema_for::<JobSpawnResponse>()),
+                .with_output_schema(schema_for::<JobSpawnResponse>())
+                .with_icon("🌱")
+                .with_category("Music Generation")
+                .with_aliases(vec!["gen-seed".to_string()]),
             Tool::new("orpheus_continue", "Generate continuation clip from MIDI (returns new material only, not concatenated)")
                 .with_input_schema(schema_for::<OrpheusContinueRequest>())
-                .with_output_schema(schema_for::<JobSpawnResponse>()),
+                .with_output_schema(schema_for::<JobSpawnResponse>())
+                .with_icon("➡️")
+                .with_category("Music Generation")
+                .with_aliases(vec!["continue".to_string()]),
             Tool::new("orpheus_bridge", "Generate a transition clip between MIDI sections (returns bridge only)")
                 .with_input_schema(schema_for::<OrpheusBridgeRequest>())
-                .with_output_schema(schema_for::<JobSpawnResponse>()),
-            // TODO: Implement orpheus_loops
-            // Tool::new("orpheus_loops", "Generate drum/percussion loops with Orpheus")
-            //     .with_input_schema(schema_for::<OrpheusLoopsRequest>()),
-            // TODO: Implement orpheus_classify
-            // Tool::new("orpheus_classify", "Classify MIDI as human-composed or AI-generated")
-            //     .with_input_schema(schema_for::<OrpheusClassifyRequest>())
-            //     .read_only(),
+                .with_output_schema(schema_for::<JobSpawnResponse>())
+                .with_icon("🌉")
+                .with_category("Music Generation")
+                .with_aliases(vec!["bridge".to_string()]),
+            Tool::new("orpheus_loops", "Generate drum/percussion loops with Orpheus")
+                .with_input_schema(schema_for::<OrpheusLoopsRequest>())
+                .with_output_schema(schema_for::<JobSpawnResponse>())
+                .with_icon("🥁")
+                .with_category("Music Generation")
+                .with_aliases(vec!["drums".to_string(), "loops".to_string()]),
+            Tool::new("orpheus_classify", "Classify MIDI as human-composed or AI-generated")
+                .with_input_schema(schema_for::<OrpheusClassifyRequest>())
+                .with_icon("🔬")
+                .with_category("Music Analysis")
+                .read_only(),
 
             // Job tools
             Tool::new("job_status", "Get the status of an async job")
                 .with_input_schema(schema_for::<GetJobStatusRequest>())
                 .with_output_schema(schema_for::<JobStatusResponse>())
+                .with_icon("📊")
+                .with_category("Job Management")
+                .with_aliases(vec!["status".to_string()])
                 .read_only(),
             Tool::new("job_list", "List all jobs")
                 .with_output_schema(schema_for::<JobListResponse>())
+                .with_icon("📋")
+                .with_category("Job Management")
+                .with_aliases(vec!["jobs".to_string()])
                 .read_only(),
             Tool::new("job_cancel", "Cancel a running job")
                 .with_input_schema(schema_for::<CancelJobRequest>())
-                .with_output_schema(schema_for::<JobCancelResponse>()),
+                .with_output_schema(schema_for::<JobCancelResponse>())
+                .with_icon("🛑")
+                .with_category("Job Management")
+                .with_aliases(vec!["cancel".to_string()]),
             Tool::new("job_poll", "Poll for job completion")
                 .with_input_schema(schema_for::<PollRequest>())
                 .with_output_schema(schema_for::<JobPollResponse>())
+                .with_icon("⏳")
+                .with_category("Job Management")
+                .with_aliases(vec!["poll".to_string()])
                 .read_only(),
             Tool::new("job_sleep", "Sleep for a specified duration")
                 .with_input_schema(schema_for::<SleepRequest>())
+                .with_icon("😴")
+                .with_category("Job Management")
                 .read_only()
                 .idempotent(),
 
             // Conversion tools
             Tool::new("convert_midi_to_wav", "Render MIDI to WAV using a SoundFont")
                 .with_input_schema(schema_for::<MidiToWavRequest>())
-                .with_output_schema(schema_for::<JobSpawnResponse>()),
+                .with_output_schema(schema_for::<JobSpawnResponse>())
+                .with_icon("🎵")
+                .with_category("Conversion")
+                .with_aliases(vec!["render".to_string(), "midi2wav".to_string()]),
 
             // SoundFont tools
             Tool::new("soundfont_inspect", "Inspect SoundFont presets and drum mappings")
                 .with_input_schema(schema_for::<SoundfontInspectRequest>())
                 .with_output_schema(schema_for::<SoundfontInspectResponse>())
+                .with_icon("🎹")
+                .with_category("SoundFont")
                 .read_only(),
             Tool::new("soundfont_preset_inspect", "Inspect a specific preset by bank/program")
                 .with_input_schema(schema_for::<SoundfontPresetInspectRequest>())
                 .with_output_schema(schema_for::<SoundfontPresetResponse>())
+                .with_icon("🎛️")
+                .with_category("SoundFont")
                 .read_only(),
 
             Tool::new("graph_bind", "Bind an identity in the audio graph")
                 .with_input_schema(schema_for::<GraphBindRequest>())
-                .with_output_schema(schema_for::<GraphBindResponse>()),
+                .with_output_schema(schema_for::<GraphBindResponse>())
+                .with_icon("🔗")
+                .with_category("Audio Graph"),
             Tool::new("graph_tag", "Tag an identity in the audio graph")
                 .with_input_schema(schema_for::<GraphTagRequest>())
-                .with_output_schema(schema_for::<GraphTagResponse>()),
+                .with_output_schema(schema_for::<GraphTagResponse>())
+                .with_icon("🏷️")
+                .with_category("Audio Graph"),
             Tool::new("graph_connect", "Connect nodes in the audio graph")
                 .with_input_schema(schema_for::<GraphConnectRequest>())
-                .with_output_schema(schema_for::<GraphConnectResponse>()),
+                .with_output_schema(schema_for::<GraphConnectResponse>())
+                .with_icon("🔌")
+                .with_category("Audio Graph"),
             Tool::new("graph_find", "Find identities in the audio graph")
                 .with_input_schema(schema_for::<GraphFindRequest>())
                 .with_output_schema(schema_for::<GraphFindResponse>())
+                .with_icon("🔎")
+                .with_category("Audio Graph")
                 .read_only(),
 
             // Graph context tools for sub-agent asset discovery
             Tool::new("graph_context", "Simple artifact discovery with filters (tag, creator, vibe). Returns bounded context for sub-agents. Use this for quick lookups; use graph_query for complex traversals.")
                 .with_input_schema(schema_for::<GraphContextRequest>())
                 .with_output_schema(schema_for::<GraphContextResponse>())
+                .with_icon("🗂️")
+                .with_category("Query")
                 .read_only(),
             Tool::new("add_annotation", "Add subjective annotations to artifacts with vibe keywords (e.g., 'warm, jazzy, vintage feel'). Makes artifacts searchable by mood/character.")
                 .with_input_schema(schema_for::<AddAnnotationRequest>())
-                .with_output_schema(schema_for::<AddAnnotationResponse>()),
+                .with_output_schema(schema_for::<AddAnnotationResponse>())
+                .with_icon("✍️")
+                .with_category("Metadata"),
             Tool::new("graph_query", "Execute GraphQL queries against the unified graph (artifacts, soundfonts, MIDI, audio). Query entry points: Artifact, SoundFont. Use @output for fields you want returned. Supports nested queries (annotations, tags, parent/children lineage).")
                 .with_input_schema(schema_for::<GraphQueryRequest>())
                 .with_output_schema(schema_for::<GraphQueryResponse>())
+                .with_icon("🔍")
+                .with_category("Query")
+                .with_aliases(vec!["query".to_string()])
                 .read_only(),
 
             // ABC notation tools
             Tool::new("abc_parse", "Parse ABC notation into a structured AST")
                 .with_input_schema(schema_for::<AbcParseRequest>())
                 .with_output_schema(schema_for::<AbcParseResponse>())
+                .with_icon("📝")
+                .with_category("ABC Notation")
                 .read_only(),
             Tool::new("abc_to_midi", "Convert ABC notation to MIDI")
                 .with_input_schema(schema_for::<AbcToMidiRequest>())
-                .with_output_schema(schema_for::<JobSpawnResponse>()),
+                .with_output_schema(schema_for::<JobSpawnResponse>())
+                .with_icon("🎶")
+                .with_category("ABC Notation")
+                .with_aliases(vec!["abc2midi".to_string()]),
             Tool::new("abc_validate", "Validate ABC notation and return feedback")
                 .with_input_schema(schema_for::<AbcValidateRequest>())
                 .with_output_schema(schema_for::<AbcValidateResponse>())
+                .with_icon("✅")
+                .with_category("ABC Notation")
                 .read_only(),
             Tool::new("abc_transpose", "Transpose ABC notation by semitones or to a target key")
                 .with_input_schema(schema_for::<AbcTransposeRequest>())
-                .with_output_schema(schema_for::<AbcTransposeResponse>()),
+                .with_output_schema(schema_for::<AbcTransposeResponse>())
+                .with_icon("🎚️")
+                .with_category("ABC Notation"),
 
             // Beat detection tools (BeatThis model)
             Tool::new("beatthis_analyze", "Detect beats and downbeats in audio. Returns beat times in seconds, estimated BPM, and optionally frame-level probabilities.")
                 .with_input_schema(schema_for::<AnalyzeBeatsRequest>())
                 .with_output_schema(schema_for::<BeatthisAnalyzeResponse>())
+                .with_icon("🎯")
+                .with_category("Music Analysis")
                 .read_only(),
 
             // Sampling tools (server-initiated LLM requests)
             Tool::new("sample_llm", "Request LLM inference from the connected client (requires client sampling support)")
                 .with_input_schema(schema_for::<SampleLlmRequest>())
                 .with_output_schema(schema_for::<SampleLlmResponse>())
+                .with_icon("🤖")
+                .with_category("LLM")
                 .read_only(),
 
             // TODO: Implement CLAP audio analysis
@@ -213,6 +289,11 @@ impl Handler for HootHandler {
                     .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
                 self.server.upload_file(request).await
             }
+            "artifact_upload" => {
+                let request: ArtifactUploadRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.artifact_upload(request).await
+            }
             "convert_midi_to_wav" => {
                 let request: MidiToWavRequest = serde_json::from_value(args)
                     .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
@@ -250,18 +331,16 @@ impl Handler for HootHandler {
                     .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
                 self.server.orpheus_bridge(request).await
             }
-            // TODO: Implement orpheus_loops
-            // "orpheus_loops" => {
-            //     let request: OrpheusLoopsRequest = serde_json::from_value(args)
-            //         .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
-            //     self.server.orpheus_loops(request).await
-            // }
-            // TODO: Implement orpheus_classify
-            // "orpheus_classify" => {
-            //     let request: OrpheusClassifyRequest = serde_json::from_value(args)
-            //         .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
-            //     self.server.orpheus_classify(request).await
-            // }
+            "orpheus_loops" => {
+                let request: OrpheusLoopsRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.orpheus_loops(request).await
+            }
+            "orpheus_classify" => {
+                let request: OrpheusClassifyRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.orpheus_classify(request).await
+            }
 
             // Job tools
             "job_status" => {

@@ -79,6 +79,8 @@ fn json_object_or_null_schema(_gen: &mut schemars::SchemaGenerator) -> schemars:
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct JobListResponse {
     pub jobs: Vec<JobSummary>,
+
+    #[schemars(schema_with = "usize_schema")]
     pub total: usize,
 }
 
