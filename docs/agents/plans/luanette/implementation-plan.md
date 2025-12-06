@@ -3,9 +3,9 @@
 ## Implementation Status
 
 ### Phase Checklist
-- [ ] Phase 1: Minimal MCP Server Scaffold (~2-3 hours)
-- [ ] Phase 2: Upstream Client Manager (~4-5 hours)
-- [ ] Phase 3: Lua Runtime with OpenTelemetry (~5-6 hours)
+- [x] Phase 1: Minimal MCP Server Scaffold (~2-3 hours) ✅
+- [x] Phase 2: Upstream Client Manager (~4-5 hours) ✅
+- [x] Phase 3: Lua Runtime with OpenTelemetry (~5-6 hours) ✅
 - [ ] Phase 4: Tool Bridge with Traceparent Propagation (~6-7 hours)
 - [ ] Phase 5: Music Standard Library (~4-5 hours)
 - [ ] Phase 6: Job System (~3-4 hours)
@@ -18,6 +18,64 @@
 Add notes here when signing off from a session.
 Format: YYYY-MM-DD - Phase N progress: Brief summary of what was completed
 -->
+
+2024-12-06 - Phase 1 complete:
+- Created crates/luanette with Cargo.toml, main.rs, handler.rs, runtime.rs, schema.rs
+- Implemented sandboxed Lua runtime with mlua 0.10 (lua54 feature)
+- Exposed lua_eval and lua_describe tools via baton::Handler
+- Server runs on port 8081, responds to MCP initialize
+- 11 unit tests passing (runtime + handler)
+- Tested with hrcli: `lua_eval --code 'return 2 + 2'` returns `{ result: 4, duration_ms: 0 }`
+- Sandbox blocks: os.execute, io.*, debug.*, dofile, loadfile
+- Allows: math.*, string.*, table.*, os.clock/date/time/getenv, log.* (tracing)
+
+2024-12-06 - Detour: baton::client module (MCP client consolidation):
+- Created baton::client module with McpClient (Streamable HTTP) and SseClient (SSE transport)
+- Added "client" feature flag to baton Cargo.toml
+- Both transports support: initialize, list_tools, call_tool, complete_argument
+- Traceparent propagation for distributed tracing
+- Migrated luanette to use baton::client::McpClient
+- Migrated llm-mcp-bridge to use baton::client::McpClient (lazy init to avoid circular deps)
+- Migrated hrcli to use baton::client::SseClient (thin wrapper with CLI-specific ToolInfo)
+- Reduced mcp_client.rs from 589 lines to 120 lines in hrcli
+- TODO: Revisit AgentManager lazy MCP client initialization design
+
+2024-12-06 - Phase 2 complete (Upstream Client Manager):
+- Added --hootenanny-url CLI argument to luanette
+- Created ClientManager with namespace mapping (clients/manager.rs)
+- ClientManager supports: add_upstream, call_tool, all_tools, refresh_tools
+- Wired ClientManager into LuanetteHandler
+
+2025-12-06 - Phase 2 continued (mcp.* Lua Globals):
+- Created tool_bridge.rs with McpBridgeContext for async-to-sync bridging
+- McpBridgeContext uses tokio::runtime::Handle::block_on() for MCP calls from Lua
+- register_mcp_globals() creates mcp.* namespace tables with tool functions
+- Updated LuaRuntime with with_mcp_bridge() constructor
+- JSON <-> Lua table conversion with proper array/object handling
+- 15 tests passing (runtime + handler + manager + tool_bridge)
+- Tested live with hootenanny:
+  - mcp.hootenanny.job_list({}) → returns job list
+  - mcp.hootenanny.agent_chat_backends({}) → returns backend config
+  - mcp.hootenanny.cas_store({content_base64="...", mime_type="text/plain"}) → stores content, returns hash
+- Phase 2 complete!
+
+2025-12-06 - Phase 3 complete (Lua Runtime with OpenTelemetry):
+- Added OpenTelemetry dependencies (opentelemetry 0.28, tracing-opentelemetry 0.29)
+- Created telemetry.rs with OTLP exporter for traces, logs, and metrics
+- Added --otlp-endpoint CLI argument (default: 127.0.0.1:35991)
+- Created otel_bridge.rs with `otel.*` Lua namespace:
+  - otel.trace_id() → current trace ID (nil if outside span)
+  - otel.span_id() → current span ID (nil if outside span)
+  - otel.traceparent() → W3C traceparent header
+  - otel.event(name, attrs?) → add event to current span
+  - otel.set_attribute(key, value) → set span attribute
+  - otel.record_metric(name, value, attrs?) → record metric
+- Registered otel globals in sandboxed Lua VM
+- 20 tests passing (runtime + handler + manager + tool_bridge + otel_bridge)
+- Verified telemetry export to otlp-mcp:
+  - Traces show span hierarchy (mcp.dispatch → mcp.tool.call → call_tool)
+  - Logs capture script events, attributes, and metrics
+- Note: trace_id/span_id return nil from spawn_blocking context (expected, Phase 4 will add span context propagation)
 
 ---
 

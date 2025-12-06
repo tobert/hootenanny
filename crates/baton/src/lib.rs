@@ -1,15 +1,17 @@
-//! baton - MCP (Model Context Protocol) Server Library
+//! baton - MCP (Model Context Protocol) Library for Rust
 //!
 //! A Rust implementation of the MCP 2025-06-18 specification for building
-//! MCP servers with axum.
+//! MCP servers and clients with axum.
 //!
 //! # Features
 //!
+//! - **Server**: Build MCP servers with the `Handler` trait
+//! - **Client**: Connect to MCP servers (enable `client` feature)
 //! - **Tools**: Expose callable tools to MCP clients
 //! - **Resources**: Serve content via URI-based resources
 //! - **Prompts**: Provide prompt templates with arguments
 //!
-//! # Example
+//! # Server Example
 //!
 //! ```rust,ignore
 //! use baton::{Handler, Tool, CallToolResult, Content, Implementation};
@@ -42,12 +44,26 @@
 //! ));
 //! let router = baton::router(state);
 //! ```
+//!
+//! # Client Example (requires `client` feature)
+//!
+//! ```rust,ignore
+//! use baton::client::McpClient;
+//!
+//! let client = McpClient::new("http://localhost:8080/mcp");
+//! client.initialize().await?;
+//! let tools = client.list_tools().await?;
+//! let result = client.call_tool("my_tool", json!({"key": "value"})).await?;
+//! ```
 
 pub mod protocol;
 pub mod schema_helpers;
 pub mod session;
 pub mod transport;
 pub mod types;
+
+#[cfg(feature = "client")]
+pub mod client;
 
 // Re-export commonly used types at crate root
 pub use types::content::Content;

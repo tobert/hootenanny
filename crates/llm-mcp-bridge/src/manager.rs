@@ -24,12 +24,17 @@ pub struct AgentManager {
     sessions: Arc<RwLock<HashMap<String, SessionHandle>>>,
     handles: Arc<RwLock<HashMap<String, JoinHandle<()>>>>,
     mcp_client: Arc<McpToolClient>,
+    mcp_initialized: Arc<RwLock<bool>>,
     db: Arc<ConversationDb>,
 }
 
 impl AgentManager {
+    /// Create a new agent manager.
+    ///
+    /// Note: MCP client initialization is deferred until first use to avoid
+    /// circular dependencies when running inside hootenanny.
     pub fn new(config: BridgeConfig, db: ConversationDb) -> Result<Self> {
-        let mcp_client = Arc::new(McpToolClient::new(&config.mcp_url));
+        let mcp_client = McpToolClient::new(&config.mcp_url);
 
         let mut backends = HashMap::new();
         for backend_config in config.backends {
@@ -47,9 +52,31 @@ impl AgentManager {
             backends,
             sessions: Arc::new(RwLock::new(HashMap::new())),
             handles: Arc::new(RwLock::new(HashMap::new())),
-            mcp_client,
+            mcp_client: Arc::new(mcp_client),
+            mcp_initialized: Arc::new(RwLock::new(false)),
             db: Arc::new(db),
         })
+    }
+
+    /// Ensure the MCP client is initialized.
+    ///
+    /// Called lazily before first MCP operation to avoid circular dependencies
+    /// when running inside hootenanny (which would try to connect to itself).
+    ///
+    /// TODO: Revisit this design - consider whether the client should support
+    /// explicit lazy initialization, or if hootenanny's architecture should change.
+    async fn ensure_mcp_initialized(&self) -> Result<()> {
+        let mut initialized = self.mcp_initialized.write().await;
+        if *initialized {
+            return Ok(());
+        }
+
+        self.mcp_client
+            .initialize()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize MCP client: {}", e))?;
+        *initialized = true;
+        Ok(())
     }
 
     /// Access the database for resource queries
@@ -104,6 +131,9 @@ impl AgentManager {
 
     /// Send a message to a session (starts async agent loop)
     pub async fn send_message(&self, request: AgentChatSendRequest) -> Result<()> {
+        // Ensure MCP client is initialized before first use
+        self.ensure_mcp_initialized().await?;
+
         let session = {
             let sessions = self.sessions.read().await;
             sessions

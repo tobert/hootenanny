@@ -8,6 +8,7 @@ name = "hrcli"
 path = "src/main.rs"
 
 [dependencies]
+baton = { path = "../baton", features = ["client"] }
 bytes = "1"
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"

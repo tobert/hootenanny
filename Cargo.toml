@@ -5,5 +5,6 @@ members = [
     "crates/hootenanny", "crates/hrcli",
     "crates/audio-graph-mcp",
     "crates/llmchat", "crates/llm-mcp-bridge",
+    "crates/luanette",
 ]
 resolver = "2"

@@ -9,7 +9,7 @@ description = "LLM ↔ MCP tool bridge with agent loop"
 async-openai = "0.28"
 
 # MCP integration
-baton = { path = "../baton" }
+baton = { path = "../baton", features = ["client"] }
 llmchat = { path = "../llmchat" }
 
 # Async runtime

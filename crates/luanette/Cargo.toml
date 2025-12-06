@@ -1,0 +1,55 @@
+[package]
+name = "luanette"
+version = "0.1.0"
+edition = "2021"
+description = "Lua scripting MCP server for composing upstream MCP tools"
+authors = ["Al Tobey <tobert@gmail.com>"]
+license = "MIT"
+
+[[bin]]
+name = "luanette"
+path = "src/main.rs"
+
+[dependencies]
+# MCP Framework
+baton = { path = "../baton", features = ["client"] }
+
+# Lua Runtime
+mlua = { version = "0.10", features = ["lua54", "async", "send", "serialize"] }
+
+# Async Runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Web Server
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+
+# Error Handling
+anyhow = "1"
+thiserror = "1"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-opentelemetry = "0.29"
+opentelemetry = "0.28"
+opentelemetry_sdk = { version = "0.28", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.28", features = ["grpc-tonic", "trace", "logs", "metrics"] }
+opentelemetry-appender-tracing = "0.28"
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+tokio-util = "0.7"
+
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["json"] }
