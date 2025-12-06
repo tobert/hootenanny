@@ -26,7 +26,6 @@ opentelemetry-appender-tracing = "0.28"
 
 # Add path dependency to our new crates
 abc = { path = "../abc" }
-resonode = { path = "../resonode" }
 audio-graph-mcp = { path = "../audio-graph-mcp" }
 llmchat = { path = "../llmchat" }
 llm-mcp-bridge = { path = "../llm-mcp-bridge" }

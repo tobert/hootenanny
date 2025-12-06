@@ -3,7 +3,7 @@ members = [
     "crates/abc",
     "crates/baton",
     "crates/hootenanny", "crates/hrcli",
-    "crates/resonode", "crates/audio-graph-mcp",
+    "crates/audio-graph-mcp",
     "crates/llmchat", "crates/llm-mcp-bridge",
 ]
 resolver = "2"
