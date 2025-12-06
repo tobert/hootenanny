@@ -4,8 +4,33 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{Accidental, Bar, Element, Key, Mode, NoteName, Tune, UnitLength};
+use crate::ast::{Accidental, Bar, Element, Key, Mode, NoteName, Tune, UnitLength, Voice};
 use crate::MidiParams;
+
+/// Get the combined pitch offset from voice properties (transpose + octave)
+fn get_voice_pitch_offset(voice: &Voice, voice_defs: &[crate::ast::VoiceDef]) -> i16 {
+    // Find the voice definition that matches this voice
+    let voice_def = voice.id.as_ref().and_then(|vid| {
+        voice_defs.iter().find(|vd| &vd.id == vid)
+    });
+
+    let transpose_offset = voice_def
+        .and_then(|vd| vd.transpose)
+        .map(|t| t as i16)
+        .unwrap_or(0);
+
+    let octave_offset = voice_def
+        .and_then(|vd| vd.octave)
+        .map(|o| (o as i16) * 12)
+        .unwrap_or(0);
+
+    transpose_offset + octave_offset
+}
+
+/// Apply pitch offset and clamp to valid MIDI range
+fn apply_pitch_offset(base_pitch: u8, offset: i16) -> u8 {
+    ((base_pitch as i16) + offset).clamp(0, 127) as u8
+}
 
 /// Expand repeats in a voice's elements.
 ///
@@ -90,6 +115,9 @@ pub fn generate(tune: &Tune, params: &MidiParams) -> Vec<u8> {
 
     // Process all voices (merge into single track for format 0)
     for voice in &tune.voices {
+        // Get pitch offset from voice properties (transpose, octave)
+        let pitch_offset = get_voice_pitch_offset(voice, &tune.header.voice_defs);
+
         // Expand repeats before processing
         let elements = expand_repeats(&voice.elements);
 
@@ -102,9 +130,10 @@ pub fn generate(tune: &Tune, params: &MidiParams) -> Vec<u8> {
         for element in &elements {
             match element {
                 Element::Note(note) => {
-                    // Determine pitch with accidentals
-                    let midi_pitch =
+                    // Determine pitch with accidentals, then apply voice offset
+                    let base_pitch =
                         note_to_midi_pitch(note.pitch, note.octave, note.accidental, &bar_accidentals);
+                    let midi_pitch = apply_pitch_offset(base_pitch, pitch_offset);
                     let ticks = note.duration.to_ticks(unit_ticks);
 
                     if let Some(held_ticks) = held_notes.remove(&midi_pitch) {
@@ -138,8 +167,9 @@ pub fn generate(tune: &Tune, params: &MidiParams) -> Vec<u8> {
 
                     // Note on for all notes
                     for note in &chord.notes {
-                        let midi_pitch =
+                        let base_pitch =
                             note_to_midi_pitch(note.pitch, note.octave, note.accidental, &bar_accidentals);
+                        let midi_pitch = apply_pitch_offset(base_pitch, pitch_offset);
                         writer.note_on(midi_pitch, params.velocity);
 
                         if let Some(acc) = note.accidental {
@@ -152,8 +182,9 @@ pub fn generate(tune: &Tune, params: &MidiParams) -> Vec<u8> {
 
                     // Note off for all notes
                     for note in &chord.notes {
-                        let midi_pitch =
+                        let base_pitch =
                             note_to_midi_pitch(note.pitch, note.octave, note.accidental, &bar_accidentals);
+                        let midi_pitch = apply_pitch_offset(base_pitch, pitch_offset);
                         writer.note_off(midi_pitch);
                     }
                 }
@@ -187,12 +218,13 @@ pub fn generate(tune: &Tune, params: &MidiParams) -> Vec<u8> {
 
                     for elem in &tuplet.elements {
                         if let Element::Note(note) = elem {
-                            let midi_pitch = note_to_midi_pitch(
+                            let base_pitch = note_to_midi_pitch(
                                 note.pitch,
                                 note.octave,
                                 note.accidental,
                                 &bar_accidentals,
                             );
+                            let midi_pitch = apply_pitch_offset(base_pitch, pitch_offset);
                             let base_ticks = note.duration.to_ticks(unit_ticks);
                             let ticks = (base_ticks * scale_num) / scale_den;
 
@@ -242,6 +274,9 @@ fn generate_multitrack(tune: &Tune, params: &MidiParams) -> Vec<u8> {
             continue;
         }
 
+        // Get pitch offset from voice properties (transpose, octave)
+        let pitch_offset = get_voice_pitch_offset(voice, &tune.header.voice_defs);
+
         // Use different MIDI channel per voice (0-15, skip 9 which is percussion)
         let channel = if voice_idx >= 9 { voice_idx + 1 } else { voice_idx } as u8 % 16;
         let mut writer = MidiWriter::new(params.ticks_per_beat, channel);
@@ -253,9 +288,10 @@ fn generate_multitrack(tune: &Tune, params: &MidiParams) -> Vec<u8> {
         for element in &elements {
             match element {
                 Element::Note(note) => {
-                    let midi_pitch = note_to_midi_pitch(
+                    let base_pitch = note_to_midi_pitch(
                         note.pitch, note.octave, note.accidental, &bar_accidentals
                     );
+                    let midi_pitch = apply_pitch_offset(base_pitch, pitch_offset);
                     let ticks = note.duration.to_ticks(unit_ticks);
 
                     if let Some(held_ticks) = held_notes.remove(&midi_pitch) {
@@ -281,9 +317,10 @@ fn generate_multitrack(tune: &Tune, params: &MidiParams) -> Vec<u8> {
                 Element::Chord(chord) => {
                     let ticks = chord.duration.to_ticks(unit_ticks);
                     for note in &chord.notes {
-                        let midi_pitch = note_to_midi_pitch(
+                        let base_pitch = note_to_midi_pitch(
                             note.pitch, note.octave, note.accidental, &bar_accidentals
                         );
+                        let midi_pitch = apply_pitch_offset(base_pitch, pitch_offset);
                         writer.note_on_channel(midi_pitch, params.velocity, channel);
                         if let Some(acc) = note.accidental {
                             bar_accidentals.insert(note.pitch, acc);
@@ -291,9 +328,10 @@ fn generate_multitrack(tune: &Tune, params: &MidiParams) -> Vec<u8> {
                     }
                     writer.advance(ticks);
                     for note in &chord.notes {
-                        let midi_pitch = note_to_midi_pitch(
+                        let base_pitch = note_to_midi_pitch(
                             note.pitch, note.octave, note.accidental, &bar_accidentals
                         );
+                        let midi_pitch = apply_pitch_offset(base_pitch, pitch_offset);
                         writer.note_off_channel(midi_pitch, channel);
                     }
                 }
@@ -320,9 +358,10 @@ fn generate_multitrack(tune: &Tune, params: &MidiParams) -> Vec<u8> {
                     let scale_den = tuplet.p as u32;
                     for elem in &tuplet.elements {
                         if let Element::Note(note) = elem {
-                            let midi_pitch = note_to_midi_pitch(
+                            let base_pitch = note_to_midi_pitch(
                                 note.pitch, note.octave, note.accidental, &bar_accidentals
                             );
+                            let midi_pitch = apply_pitch_offset(base_pitch, pitch_offset);
                             let base_ticks = note.duration.to_ticks(unit_ticks);
                             let ticks = (base_ticks * scale_num) / scale_den;
                             writer.note_channel(midi_pitch, params.velocity, ticks, channel);
