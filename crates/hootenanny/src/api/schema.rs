@@ -1,3 +1,4 @@
+use baton::schema_helpers::*;
 use serde::{Deserialize, Serialize};
 use schemars;
 
@@ -18,6 +19,7 @@ pub struct CancelJobRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PollRequest {
     #[schemars(description = "Timeout in milliseconds (capped at 10000ms to prevent SSE disconnects)")]
+    #[schemars(schema_with = "u64_schema")]
     pub timeout_ms: u64,
 
     #[schemars(description = "Job IDs to poll (empty = just timeout/sleep)")]
@@ -31,6 +33,7 @@ pub struct PollRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SleepRequest {
     #[schemars(description = "Milliseconds to sleep (max 30000 = 30 seconds)")]
+    #[schemars(schema_with = "u64_schema")]
     pub milliseconds: u64,
 }
 
@@ -52,9 +55,11 @@ pub struct OrpheusGenerateRequest {
     pub top_p: Option<f32>,
 
     #[schemars(description = "Max tokens to generate (default: 1024). Lower = shorter output")]
+    #[schemars(schema_with = "optional_u32_schema")]
     pub max_tokens: Option<u32>,
 
     #[schemars(description = "Number of variations to generate (default: 1)")]
+    #[schemars(schema_with = "optional_u32_schema")]
     pub num_variations: Option<u32>,
 
     // Artifact/variation tracking fields
@@ -88,9 +93,11 @@ pub struct OrpheusGenerateSeededRequest {
     pub top_p: Option<f32>,
 
     #[schemars(description = "Max tokens to generate (default: 1024). Lower = shorter output")]
+    #[schemars(schema_with = "optional_u32_schema")]
     pub max_tokens: Option<u32>,
 
     #[schemars(description = "Number of variations to generate (default: 1)")]
+    #[schemars(schema_with = "optional_u32_schema")]
     pub num_variations: Option<u32>,
 
     // Artifact/variation tracking fields
@@ -124,9 +131,11 @@ pub struct OrpheusContinueRequest {
     pub top_p: Option<f32>,
 
     #[schemars(description = "Max tokens to generate (default: 1024). Lower = shorter output")]
+    #[schemars(schema_with = "optional_u32_schema")]
     pub max_tokens: Option<u32>,
 
     #[schemars(description = "Number of variations to generate (default: 1)")]
+    #[schemars(schema_with = "optional_u32_schema")]
     pub num_variations: Option<u32>,
 
     // Artifact/variation tracking fields
@@ -409,6 +418,29 @@ pub struct UploadFileRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ArtifactUploadRequest {
+    #[schemars(description = "Absolute path to file to upload")]
+    pub file_path: String,
+
+    #[schemars(description = "MIME type of the file (e.g., 'audio/wav', 'audio/midi', 'audio/soundfont')")]
+    pub mime_type: String,
+
+    #[schemars(description = "Optional variation set ID to group related artifacts")]
+    pub variation_set_id: Option<String>,
+
+    #[schemars(description = "Optional parent artifact ID")]
+    pub parent_id: Option<String>,
+
+    #[schemars(description = "Optional tags for organizing artifacts")]
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[schemars(description = "Creator identifier (agent or user ID)")]
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MidiToWavRequest {
     #[schemars(description = "CAS hash of MIDI file to render (required)")]
     pub input_hash: String,
@@ -417,6 +449,7 @@ pub struct MidiToWavRequest {
     pub soundfont_hash: String,
 
     #[schemars(description = "Sample rate (default: 44100)")]
+    #[schemars(schema_with = "optional_u32_schema")]
     pub sample_rate: Option<u32>,
 
     // Artifact tracking fields
@@ -523,15 +556,19 @@ pub struct AbcToMidiRequest {
     pub abc: String,
 
     #[schemars(description = "Override tempo (BPM)")]
+    #[schemars(schema_with = "optional_u16_schema")]
     pub tempo_override: Option<u16>,
 
     #[schemars(description = "Semitones to transpose")]
+    #[schemars(schema_with = "optional_i8_schema")]
     pub transpose: Option<i8>,
 
     #[schemars(description = "MIDI velocity (1-127)")]
+    #[schemars(schema_with = "optional_u8_schema")]
     pub velocity: Option<u8>,
 
     #[schemars(description = "MIDI channel (0-15, default 0). Use 9 for GM drums.")]
+    #[schemars(schema_with = "optional_u8_schema")]
     pub channel: Option<u8>,
 
     // Standard artifact fields
@@ -560,6 +597,7 @@ pub struct AbcTransposeRequest {
     pub abc: String,
 
     #[schemars(description = "Semitones to transpose (positive = up)")]
+    #[schemars(schema_with = "optional_i8_schema")]
     pub semitones: Option<i8>,
 
     #[schemars(description = "Target key (e.g., 'Am', 'Bb')")]
@@ -651,6 +689,7 @@ pub struct GraphContextRequest {
     pub creator: Option<String>,
 
     #[schemars(description = "Maximum number of artifacts to include (default: 20). Keep low for sub-agent context injection.")]
+    #[schemars(schema_with = "optional_usize_schema")]
     pub limit: Option<usize>,
 
     #[schemars(description = "Include full metadata (default: false). Enable to see MIDI/audio technical details.")]
@@ -692,6 +731,7 @@ pub struct GraphQueryRequest {
     pub variables: serde_json::Value,
 
     #[schemars(description = "Maximum number of results to return (default: 100)")]
+    #[schemars(schema_with = "optional_usize_schema")]
     pub limit: Option<usize>,
 }
 
@@ -710,6 +750,7 @@ pub struct SampleLlmRequest {
     pub prompt: String,
 
     #[schemars(description = "Maximum tokens to generate (default: 500)")]
+    #[schemars(schema_with = "optional_u32_schema")]
     pub max_tokens: Option<u32>,
 
     #[schemars(description = "Temperature 0.0-2.0 (default: 1.0). Higher = more random")]

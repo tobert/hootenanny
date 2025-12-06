@@ -1,3 +1,4 @@
+use baton::schema_helpers::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -110,6 +111,7 @@ pub struct AgentChatPollRequest {
 
     /// Index to start from (for incremental polling)
     #[schemars(description = "Output index to poll from (default: 0)")]
+    #[schemars(schema_with = "usize_schema")]
     #[serde(default)]
     pub since_index: usize,
 
@@ -148,6 +150,7 @@ pub struct AgentChatHistoryRequest {
 
     /// Maximum messages to return
     #[schemars(description = "Max messages (default: all)")]
+    #[schemars(schema_with = "optional_usize_schema")]
     #[serde(default)]
     pub limit: Option<usize>,
 }
@@ -165,6 +168,7 @@ pub struct AgentChatSummaryRequest {
 pub struct AgentChatListRequest {
     /// Max sessions to return
     #[schemars(description = "Max sessions (default: 20)")]
+    #[schemars(schema_with = "usize_schema")]
     #[serde(default = "default_list_limit")]
     pub limit: usize,
 

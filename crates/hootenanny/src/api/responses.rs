@@ -3,6 +3,7 @@
 //! These types define the structured content returned by tools per MCP 2025-06-18 spec.
 //! Each implements JsonSchema for output schema generation.
 
+use baton::schema_helpers::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -96,7 +97,48 @@ pub struct JobPollResponse {
     pub failed: Vec<String>,
     pub pending: Vec<String>,
     pub reason: String,
+
+    #[schemars(schema_with = "u64_schema")]
     pub elapsed_ms: u64,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<GpuInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GpuInfo {
+    /// GPU utilization percentage (0-100)
+    #[schemars(schema_with = "u8_schema")]
+    pub utilization: u8,
+
+    /// VRAM used in gigabytes
+    pub vram_used_gb: f64,
+    /// VRAM total in gigabytes
+    pub vram_total_gb: f64,
+    /// VRAM usage percentage
+    pub vram_percent: f64,
+    /// Historical context
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history: Option<GpuHistory>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GpuHistory {
+    /// Last 5 utilization samples (10s at 2s poll interval)
+    #[schemars(schema_with = "vec_u8_schema")]
+    pub utilization_10s: Vec<u8>,
+
+    /// 1-minute mean statistics
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mean_1m: Option<GpuMeanStats>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GpuMeanStats {
+    /// Mean GPU utilization over 1 minute
+    pub utilization: f64,
+    /// Mean VRAM usage percentage over 1 minute
+    pub vram_percent: f64,
 }
 
 /// Response from job_cancel tool
@@ -110,7 +152,9 @@ pub struct JobCancelResponse {
 /// Response from job_sleep tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct JobSleepResponse {
+    #[schemars(schema_with = "u64_schema")]
     pub slept_ms: u64,
+
     pub completed_at: i64,
 }
 
@@ -122,7 +166,10 @@ pub struct JobSleepResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CasStoreResponse {
     pub hash: String,
+
+    #[schemars(schema_with = "u64_schema")]
     pub size_bytes: u64,
+
     pub mime_type: String,
 }
 
@@ -130,7 +177,10 @@ pub struct CasStoreResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CasInspectResponse {
     pub hash: String,
+
+    #[schemars(schema_with = "u64_schema")]
     pub size_bytes: u64,
+
     pub mime_type: String,
     pub exists: bool,
 
@@ -142,7 +192,23 @@ pub struct CasInspectResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CasUploadResponse {
     pub hash: String,
+
+    #[schemars(schema_with = "u64_schema")]
     pub size_bytes: u64,
+
+    pub mime_type: String,
+    pub source_path: String,
+}
+
+/// Response from artifact_upload tool
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ArtifactUploadResponse {
+    pub artifact_id: String,
+    pub content_hash: String,
+
+    #[schemars(schema_with = "u64_schema")]
+    pub size_bytes: u64,
+
     pub mime_type: String,
     pub source_path: String,
 }
@@ -185,6 +251,8 @@ pub struct GraphConnectResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GraphFindResponse {
     pub identities: Vec<IdentitySummary>,
+
+    #[schemars(schema_with = "usize_schema")]
     pub count: usize,
 }
 
@@ -204,7 +272,10 @@ pub struct GraphContextResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ContextSummary {
+    #[schemars(schema_with = "usize_schema")]
     pub total: usize,
+
+    #[schemars(schema_with = "hashmap_string_usize_schema")]
     pub by_type: std::collections::HashMap<String, usize>,
 }
 
@@ -212,6 +283,8 @@ pub struct ContextSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GraphQueryResponse {
     pub results: Vec<serde_json::Value>,
+
+    #[schemars(schema_with = "usize_schema")]
     pub count: usize,
 }
 
@@ -250,6 +323,8 @@ pub struct AbcValidateResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AbcTransposeResponse {
     pub abc: String,
+
+    #[schemars(schema_with = "i8_schema")]
     pub transposed_by: i8,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -288,7 +363,11 @@ pub struct SoundfontPresetResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InstrumentInfo {
     pub name: String,
+
+    #[schemars(schema_with = "optional_u8_tuple_schema")]
     pub key_range: Option<(u8, u8)>,
+
+    #[schemars(schema_with = "optional_u8_tuple_schema")]
     pub velocity_range: Option<(u8, u8)>,
 }
 
@@ -301,8 +380,13 @@ pub struct InstrumentInfo {
 pub struct MidiToWavResponse {
     pub artifact_id: String,
     pub content_hash: String,
+
+    #[schemars(schema_with = "usize_schema")]
     pub size_bytes: usize,
+
     pub duration_secs: f64,
+
+    #[schemars(schema_with = "u32_schema")]
     pub sample_rate: u32,
 }
 

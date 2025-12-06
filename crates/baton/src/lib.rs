@@ -44,6 +44,7 @@
 //! ```
 
 pub mod protocol;
+pub mod schema_helpers;
 pub mod session;
 pub mod transport;
 pub mod types;
