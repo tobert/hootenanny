@@ -1,13 +1,16 @@
 //! Message Handler
 //!
 //! Handles POST /message requests containing JSON-RPC messages.
+//! Supports W3C Trace Context propagation via traceparent header.
 
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response, sse::Event},
     Json,
 };
+use opentelemetry::global;
+use opentelemetry_http::HeaderExtractor;
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
@@ -37,17 +40,23 @@ struct ErrorResponse {
 /// Handle incoming JSON-RPC messages.
 ///
 /// Per MCP Streamable HTTP spec:
-/// 1. Validate session exists
-/// 2. Parse JSON-RPC request
-/// 3. Dispatch to appropriate handler
-/// 4. Send response via SSE channel
-/// 5. Return 202 Accepted
+/// 1. Extract W3C Trace Context from traceparent header
+/// 2. Validate session exists
+/// 3. Parse JSON-RPC request
+/// 4. Dispatch to appropriate handler with trace context
+/// 5. Send response via SSE channel
+/// 6. Return 202 Accepted
 #[tracing::instrument(skip(state, body), fields(session_id = %params.session_id))]
 pub async fn message_handler<H: Handler>(
     State(state): State<Arc<McpState<H>>>,
     Query(params): Query<MessageParams>,
+    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
+    // Extract W3C Trace Context from incoming traceparent header
+    let parent_context = global::get_text_map_propagator(|propagator| {
+        propagator.extract(&HeaderExtractor(&headers))
+    });
     // Get session, touch it, and clone SSE sender before releasing lock.
     // This avoids holding the DashMap lock across async .await points.
     let tx: Option<SseSender> = {
@@ -107,12 +116,12 @@ pub async fn message_handler<H: Handler>(
         "Processing MCP message"
     );
 
-    // Dispatch to protocol handler (no parent context for SSE messages)
+    // Dispatch to protocol handler with parent trace context
     let result = crate::protocol::dispatch(
         &state,
         &params.session_id,
         &message,
-        opentelemetry::Context::current(),
+        parent_context,
     )
     .await;
 
@@ -154,4 +163,59 @@ pub async fn message_handler<H: Handler>(
 
     // Return 202 Accepted (response sent via SSE)
     StatusCode::ACCEPTED.into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::HeaderMap;
+    use opentelemetry::trace::{TraceContextExt, TraceId, SpanId};
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
+
+    #[test]
+    fn test_message_handler_traceparent_extraction() {
+        // Set up the global propagator for W3C Trace Context
+        opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
+
+        // Create a W3C traceparent header
+        // Format: 00-{trace_id}-{span_id}-{flags}
+        let trace_id = TraceId::from_hex("abcdef1234567890abcdef1234567890").unwrap();
+        let span_id = SpanId::from_hex("1234567890abcdef").unwrap();
+        let traceparent = format!("00-{}-{}-01", trace_id, span_id);
+
+        // Create headers with traceparent
+        let mut headers = HeaderMap::new();
+        headers.insert("traceparent", traceparent.parse().unwrap());
+
+        // Extract trace context (same logic as message_handler)
+        let parent_context = opentelemetry::global::get_text_map_propagator(|propagator| {
+            propagator.extract(&opentelemetry_http::HeaderExtractor(&headers))
+        });
+
+        // Verify the extracted context has the correct trace_id and span_id
+        let span_ref = parent_context.span();
+        let span_context = span_ref.span_context();
+        assert!(span_context.is_valid(), "Extracted span context should be valid");
+        assert_eq!(span_context.trace_id(), trace_id, "Trace ID should match");
+        assert_eq!(span_context.span_id(), span_id, "Span ID should match");
+        assert!(span_context.is_sampled(), "Should be sampled (flag 01)");
+    }
+
+    #[test]
+    fn test_message_handler_traceparent_extraction_without_header() {
+        // Set up the global propagator for W3C Trace Context
+        opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
+
+        // Create empty headers
+        let headers = HeaderMap::new();
+
+        // Extract trace context (should return empty context)
+        let parent_context = opentelemetry::global::get_text_map_propagator(|propagator| {
+            propagator.extract(&opentelemetry_http::HeaderExtractor(&headers))
+        });
+
+        // Verify the extracted context is invalid (no traceparent header)
+        let span_ref = parent_context.span();
+        let span_context = span_ref.span_context();
+        assert!(!span_context.is_valid(), "Span context should be invalid without traceparent");
+    }
 }

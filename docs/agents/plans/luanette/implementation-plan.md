@@ -569,9 +569,10 @@ local result = mcp.hootenanny.cas_upload_file {
 
 ### Modified Files
 - **`Cargo.toml`** (workspace root) - Add `"crates/luanette"` member
-- **`crates/baton/Cargo.toml`** - Add OpenTelemetry dependencies for trace context extraction
-- **`crates/baton/src/transport/streamable.rs`** - Add W3C traceparent header extraction
-- **`crates/baton/src/transport/sse.rs`** - Add traceparent extraction (optional, for SSE transport)
+- **`crates/baton/Cargo.toml`** - Add OpenTelemetry dependencies for trace context extraction (✅ DONE)
+- **`crates/baton/src/transport/streamable.rs`** - Add W3C traceparent header extraction (✅ DONE)
+- **`crates/baton/src/transport/message.rs`** - Add traceparent extraction for SSE transport (✅ DONE)
+- **`crates/baton/src/protocol/mod.rs`** - Accept parent context parameter (✅ DONE)
 - **`docs/BOTS.md`** - Add luanette documentation section
 
 ## Reference Files to Study
@@ -582,8 +583,9 @@ local result = mcp.hootenanny.cas_upload_file {
 - `/home/atobey/src/halfremembered-mcp/crates/hootenanny/src/api/schema.rs` - Schema examples
 - `/home/atobey/src/halfremembered-mcp/crates/hootenanny/src/mcp_tools/local_models.rs:86-105` - Traceparent injection pattern
 - `/home/atobey/src/halfremembered-mcp/crates/hootenanny/src/telemetry.rs` - OpenTelemetry setup
-- `/home/atobey/src/halfremembered-mcp/crates/baton/src/protocol/mod.rs` - Existing span creation patterns
-- `/home/atobey/src/halfremembered-mcp/crates/baton/src/transport/streamable.rs` - HTTP transport layer (needs traceparent extraction)
+- `/home/atobey/src/halfremembered-mcp/crates/baton/src/protocol/mod.rs` - Span creation and parent context patterns
+- `/home/atobey/src/halfremembered-mcp/crates/baton/src/transport/streamable.rs` - HTTP transport traceparent extraction
+- `/home/atobey/src/halfremembered-mcp/crates/baton/src/transport/message.rs` - SSE transport traceparent extraction
 
 ## Implementation Patterns
 
@@ -655,14 +657,17 @@ opentelemetry-http = "0.28"
 tracing-opentelemetry = "0.29"  # Note: 0.29 for compatibility with hootenanny
 ```
 
-**Implementation completed:**
-- ✅ Added W3C traceparent extraction in `streamable_handler()`
+**Implementation completed (commits: 928a8d6, a74aef0):**
+- ✅ Added W3C traceparent extraction in `streamable_handler()` (HTTP transport)
+- ✅ Added W3C traceparent extraction in `message_handler()` (SSE transport)
 - ✅ Updated `dispatch()` signature to accept `opentelemetry::Context` parameter
 - ✅ Used `span.set_parent()` to link incoming traces
-- ✅ Message handler uses `Context::current()` for SSE messages
-- ✅ Unit tests added and passing:
-  - `test_traceparent_extraction` - Validates W3C header parsing
-  - `test_traceparent_extraction_without_header` - Validates graceful degradation
+- ✅ Both transports now propagate distributed traces correctly
+- ✅ Unit tests added and passing (4 tests total):
+  - `test_traceparent_extraction` - Validates W3C header parsing (streamable)
+  - `test_traceparent_extraction_without_header` - Graceful degradation (streamable)
+  - `test_message_handler_traceparent_extraction` - W3C parsing (SSE)
+  - `test_message_handler_traceparent_extraction_without_header` - Graceful degradation (SSE)
 
 ### Luanette
 ```toml
