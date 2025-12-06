@@ -5,99 +5,36 @@ use crate::mcp_client::McpClient;
 
 pub struct DiscoveryClient {
     pub server_url: String,
-    pub capabilities: Vec<String>,
 }
 
 impl DiscoveryClient {
     pub fn new(server_url: String) -> Self {
         Self {
             server_url,
-            capabilities: vec![
-                "extended_schemas".to_string(),
-                "parameter_handlers".to_string(),
-                "output_formats".to_string(),
-                "ui_hints".to_string(),
-                "interactive_prompts".to_string(),
-                "batch_operations".to_string(),
-                "streaming".to_string(),
-            ],
         }
     }
 
-    /// Discover tools with extended metadata if available
+    /// Discover tools from MCP server
     pub async fn discover_tools(&self) -> Result<(Vec<DynamicToolSchema>, ServerCapabilities)> {
         // Connect to MCP server
         let client = McpClient::connect(&self.server_url)
             .await
             .context("Failed to connect to MCP server")?;
 
-        // Try to get extended schemas first
-        match self.try_extended_discovery(&client).await {
-            Ok((schemas, caps)) => Ok((schemas, caps)),
-            Err(_) => {
-                // Fallback to standard MCP discovery
-                self.standard_discovery(&client).await
-            }
-        }
+        // Use standard MCP discovery with metadata from annotations
+        self.standard_discovery(&client).await
     }
 
-    /// Try to discover using extended protocol
-    async fn try_extended_discovery(&self, client: &McpClient) -> Result<(Vec<DynamicToolSchema>, ServerCapabilities)> {
-        // Check if server supports extended schemas
-        let probe_request = json!({
-            "method": "hrcli/probe",
-            "params": {
-                "version": env!("CARGO_PKG_VERSION"),
-                "capabilities": self.capabilities
-            }
-        });
-
-        // Try custom method to check for extended support
-        let probe_response = client.call_custom("hrcli/probe", probe_request).await?;
-
-        if probe_response.get("supported").and_then(|s| s.as_bool()).unwrap_or(false) {
-            // Server supports extended protocol!
-            self.fetch_extended_schemas(client).await
-        } else {
-            // Server doesn't support extended protocol
-            self.standard_discovery(client).await
-        }
-    }
-
-    /// Fetch extended schemas from server
-    async fn fetch_extended_schemas(&self, client: &McpClient) -> Result<(Vec<DynamicToolSchema>, ServerCapabilities)> {
-        let request = json!({
-            "version": env!("CARGO_PKG_VERSION"),
-            "capabilities": self.capabilities,
-            "include": {
-                "metadata": true,
-                "parameter_handlers": true,
-                "output_formats": true,
-                "ui_hints": true,
-                "examples": true
-            }
-        });
-
-        let response = client.call_custom("hrcli/list_tools_extended", request).await?;
-
-        // Parse extended response
-        let extended: ExtendedSchemaResponse = serde_json::from_value(response)
-            .context("Failed to parse extended schema response")?;
-
-        Ok((extended.schemas, extended.server_capabilities))
-    }
-
-    /// Standard MCP discovery with inference
+    /// Standard MCP discovery with metadata from annotations
     async fn standard_discovery(&self, client: &McpClient) -> Result<(Vec<DynamicToolSchema>, ServerCapabilities)> {
         // Get basic tool list
         let tools = client.list_tools().await?;
 
-        // Convert to dynamic schemas with inference
+        // Convert to dynamic schemas
         let mut schemas = Vec::new();
         for tool in tools {
-            // Try to get tool-specific metadata
-            let metadata = self.try_fetch_tool_metadata(client, &tool.name).await
-                .unwrap_or_default();
+            // Extract metadata from MCP annotations or infer from tool name
+            let metadata = self.extract_metadata_from_tool(&tool);
 
             let schema = DynamicToolSchema {
                 name: tool.name.clone(),
@@ -126,68 +63,54 @@ impl DiscoveryClient {
         Ok((schemas, capabilities))
     }
 
-    /// Try to fetch tool-specific metadata
-    async fn try_fetch_tool_metadata(&self, client: &McpClient, tool_name: &str) -> Result<ToolMetadata> {
-        // Try custom method for tool metadata
-        let request = json!({
-            "tool": tool_name,
-            "include_all": true
-        });
+    /// Extract metadata from MCP tool annotations or infer from name
+    fn extract_metadata_from_tool(&self, tool: &crate::mcp_client::ToolInfo) -> ToolMetadata {
+        // Start with defaults
+        let mut metadata = ToolMetadata::default();
 
-        match client.call_custom("hrcli/get_tool_metadata", request).await {
-            Ok(response) => {
-                serde_json::from_value(response)
-                    .context("Failed to parse tool metadata")
-            }
-            Err(_) => {
-                // No metadata available, use defaults
-                Ok(self.infer_metadata(tool_name))
-            }
+        // Extract from annotations if present
+        if let Some(annotations) = &tool.annotations {
+            metadata.ui_hints.icon = annotations.icon.clone();
+            metadata.cli.category = annotations.category.clone();
+            metadata.cli.aliases = annotations.aliases.clone();
         }
+
+        // If no icon in annotations, try to infer from tool name prefix
+        if metadata.ui_hints.icon.is_none() {
+            metadata.ui_hints.icon = Some(self.infer_icon_from_name(&tool.name));
+        }
+
+        // If no category in annotations, use default "Tools"
+        if metadata.cli.category.is_none() {
+            metadata.cli.category = Some("Tools".to_string());
+        }
+
+        metadata
     }
 
-    /// Infer metadata from tool name and description
-    fn infer_metadata(&self, tool_name: &str) -> ToolMetadata {
-        let help = match tool_name {
-            "play" => HelpTexts {
-                brief: Some("Play a musical event".to_string()),
-                detailed: Some("Express musical ideas in the conversation tree".to_string()),
-                usage: Some("Use to add musical utterances".to_string()),
-                human_context: Some("Creates a musical moment you can hear".to_string()),
-                ai_context: Some("Maps abstract concepts to concrete sounds".to_string()),
-                see_also: vec!["add_node".to_string(), "fork_branch".to_string()],
-            },
-            "fork_branch" => HelpTexts {
-                brief: Some("Create alternate timeline".to_string()),
-                detailed: Some("Branch the conversation to explore alternatives".to_string()),
-                usage: Some("Use to try different musical directions".to_string()),
-                human_context: Some("Like git branching for music".to_string()),
-                ai_context: Some("Enables parallel exploration of possibilities".to_string()),
-                see_also: vec!["play".to_string(), "get_tree_status".to_string()],
-            },
-            _ => HelpTexts::default(),
-        };
-
-        let ui_hints = UiHints {
-            icon: match tool_name {
-                "play" => Some("🎵".to_string()),
-                "fork_branch" => Some("🔱".to_string()),
-                "add_node" => Some("🌳".to_string()),
-                "get_tree_status" => Some("📊".to_string()),
-                _ => Some("🔧".to_string()),
-            },
-            color: match tool_name {
-                "play" => Some("cyan".to_string()),
-                "fork_branch" => Some("yellow".to_string()),
-                _ => None,
-            },
-            ..Default::default()
-        };
-
-        ToolMetadata {
-            help,
-            ui_hints,
-            ..Default::default()
+    /// Infer icon from tool name prefix
+    fn infer_icon_from_name(&self, tool_name: &str) -> String {
+        // Infer from prefix patterns
+        if tool_name.starts_with("orpheus_") {
+            "🎼".to_string()
+        } else if tool_name.starts_with("job_") {
+            "⚙️".to_string()
+        } else if tool_name.starts_with("cas_") {
+            "💾".to_string()
+        } else if tool_name.starts_with("graph_") {
+            "🔗".to_string()
+        } else if tool_name.starts_with("abc_") {
+            "📝".to_string()
+        } else if tool_name.starts_with("soundfont_") {
+            "🎹".to_string()
+        } else if tool_name.starts_with("artifact_") {
+            "🎨".to_string()
+        } else if tool_name.starts_with("convert_") {
+            "🔄".to_string()
+        } else if tool_name.starts_with("beatthis_") {
+            "🎯".to_string()
+        } else {
+            "🔧".to_string()
         }
     }
 
@@ -308,13 +231,3 @@ Suggested Responses:
 }
 
 use std::collections::HashMap;
-
-// Extension trait for McpClient to support custom methods
-impl McpClient {
-    /// Call a custom MCP method (for extended protocol)
-    pub async fn call_custom(&self, _method: &str, _params: Value) -> Result<Value> {
-        // This would need to be implemented in mcp_client.rs
-        // For now, return an error to trigger fallback
-        Err(anyhow::anyhow!("Custom methods not yet implemented"))
-    }
-}

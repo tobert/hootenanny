@@ -17,6 +17,19 @@ pub struct ToolInfo {
     pub parameters: String,
     #[serde(default, rename = "inputSchema")]
     pub input_schema: Option<Value>,
+    #[serde(default)]
+    pub annotations: Option<ToolAnnotations>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolAnnotations {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
 }
 
 // Progress notification types
@@ -257,11 +270,16 @@ impl McpClient {
                 String::new()
             };
 
+            // Extract annotations if present
+            let annotations = tool.get("annotations")
+                .and_then(|v| serde_json::from_value::<ToolAnnotations>(v.clone()).ok());
+
             tool_infos.push(ToolInfo {
                 name,
                 description,
                 parameters,
                 input_schema: tool.get("inputSchema").cloned(),
+                annotations,
             });
         }
 
