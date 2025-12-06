@@ -5,6 +5,7 @@
 pub mod api;
 pub mod artifact_store;
 pub mod cas;
+pub mod gpu_monitor;
 pub mod job_system;
 pub mod mcp_tools;
 pub mod persistence;

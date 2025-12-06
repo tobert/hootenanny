@@ -1,4 +1,5 @@
 use crate::artifact_store::FileStore;
+use crate::gpu_monitor::GpuMonitor;
 use crate::job_system::JobStore;
 use crate::mcp_tools::local_models::LocalModels;
 use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
@@ -11,6 +12,7 @@ pub struct EventDualityServer {
     pub job_store: JobStore,
     pub audio_graph_db: Arc<AudioGraphDb>,
     pub graph_adapter: Arc<AudioGraphAdapter>,
+    pub gpu_monitor: Arc<GpuMonitor>,
 }
 
 impl std::fmt::Debug for EventDualityServer {
@@ -28,6 +30,7 @@ impl EventDualityServer {
         job_store: Arc<JobStore>,
         audio_graph_db: Arc<AudioGraphDb>,
         graph_adapter: Arc<AudioGraphAdapter>,
+        gpu_monitor: Arc<GpuMonitor>,
     ) -> Self {
         Self {
             local_models,
@@ -35,6 +38,7 @@ impl EventDualityServer {
             job_store: (*job_store).clone(),
             audio_graph_db,
             graph_adapter,
+            gpu_monitor,
         }
     }
 }

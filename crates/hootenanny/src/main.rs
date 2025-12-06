@@ -1,6 +1,7 @@
 mod api;
 mod artifact_store;
 mod cas;
+mod gpu_monitor;
 mod job_system;
 mod mcp_tools;
 mod persistence;
@@ -100,6 +101,11 @@ async fn main() -> Result<()> {
     let job_store = Arc::new(job_system::JobStore::new());
     tracing::info!("   Job store ready (shared across connections)");
 
+    // --- GPU Monitor Initialization ---
+    tracing::info!("🎮 Initializing GPU Monitor...");
+    let gpu_monitor = Arc::new(gpu_monitor::GpuMonitor::start());
+    tracing::info!("   GPU monitor ready (polling every 2s)");
+
     // --- Audio Graph Initialization ---
     tracing::info!("🎛️  Initializing Audio Graph...");
     let audio_graph_db = Arc::new(AudioGraphDb::in_memory().context("Failed to create audio graph db")?);
@@ -135,6 +141,7 @@ async fn main() -> Result<()> {
         job_store.clone(),
         audio_graph_db.clone(),
         graph_adapter.clone(),
+        gpu_monitor.clone(),
     ));
 
     // --- LLM Agent Bridge Initialization ---

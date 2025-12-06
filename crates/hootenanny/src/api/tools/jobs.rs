@@ -1,4 +1,4 @@
-use crate::api::responses::{JobStatusResponse, JobListResponse, JobSummary, JobCancelResponse, JobPollResponse, JobSleepResponse};
+use crate::api::responses::{JobStatusResponse, JobListResponse, JobSummary, JobCancelResponse, JobPollResponse, JobSleepResponse, GpuInfo, GpuHistory};
 use crate::api::service::EventDualityServer;
 use crate::api::schema::{GetJobStatusRequest, CancelJobRequest, PollRequest, SleepRequest};
 use crate::job_system::{JobId, JobStatus};
@@ -216,12 +216,39 @@ impl EventDualityServer {
             tracing::Span::current().record("poll.elapsed_ms", elapsed_ms);
             tracing::Span::current().record("poll.reason", reason);
 
+            // Get GPU stats with history
+            let stats_with_history = self.gpu_monitor.stats_with_history().await;
+            let gpu = stats_with_history.current.map(|stats| {
+                let history = if !stats_with_history.utilization_10s.is_empty() {
+                    Some(GpuHistory {
+                        utilization_10s: stats_with_history.utilization_10s.clone(),
+                        mean_1m: stats_with_history.mean_1m.as_ref().map(|m| {
+                            crate::api::responses::GpuMeanStats {
+                                utilization: m.utilization,
+                                vram_percent: m.vram_percent,
+                            }
+                        }),
+                    })
+                } else {
+                    None
+                };
+
+                GpuInfo {
+                    utilization: stats.utilization_percent,
+                    vram_used_gb: stats.vram_used_gb(),
+                    vram_total_gb: stats.vram_total_gb(),
+                    vram_percent: stats.vram_percent(),
+                    history,
+                }
+            });
+
             let response = JobPollResponse {
                 completed: completed.iter().map(|id| id.as_str().to_string()).collect(),
                 failed: failed.iter().map(|id| id.as_str().to_string()).collect(),
                 pending: pending.iter().map(|id| id.as_str().to_string()).collect(),
                 reason: reason.to_string(),
                 elapsed_ms,
+                gpu,
             };
 
             let json = serde_json::to_string_pretty(&response)
