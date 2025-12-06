@@ -346,4 +346,144 @@ impl LocalModels {
             anyhow::bail!("No variations array in bridge response");
         }
     }
+
+    /// Call the Orpheus classifier service (port 2001) to classify MIDI
+    pub async fn run_orpheus_classifier(
+        &self,
+        midi_hash: String,
+    ) -> Result<serde_json::Value> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+        let midi_bytes = self.resolve_cas(&midi_hash)?;
+
+        let mut request_body = serde_json::Map::new();
+        request_body.insert("midi".to_string(), serde_json::json!(BASE64.encode(&midi_bytes)));
+
+        let builder = self.client.post("http://127.0.0.1:2001/predict")
+            .json(&request_body);
+        let builder = self.inject_trace_context(builder);
+
+        let resp = match builder.send().await {
+            Ok(r) => r,
+            Err(e) if e.is_connect() => {
+                anyhow::bail!("Classifier service unavailable at port 2001 - is it running? Error: {}", e)
+            }
+            Err(e) if e.is_timeout() => {
+                anyhow::bail!("Classifier service timeout")
+            }
+            Err(e) => anyhow::bail!("HTTP error calling classifier service: {}", e),
+        };
+
+        let status = resp.status();
+
+        if !status.is_success() {
+            let error_body = resp.text().await
+                .unwrap_or_else(|_| "<failed to read error body>".to_string());
+            anyhow::bail!("Classifier API error {}: {}", status, error_body);
+        }
+
+        let resp_json: serde_json::Value = resp.json().await
+            .context("Failed to parse classifier response as JSON")?;
+
+        Ok(resp_json)
+    }
+
+    /// Call the Orpheus loops service (port 2003) to generate drum loops
+    pub async fn run_orpheus_loops(
+        &self,
+        seed_hash: Option<String>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        max_tokens: Option<u32>,
+        num_variations: Option<u32>,
+        client_job_id: Option<String>,
+    ) -> Result<OrpheusGenerateResult> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+        let mut request_body = serde_json::Map::new();
+
+        if let Some(ref hash) = seed_hash {
+            let seed_bytes = self.resolve_cas(hash)?;
+            request_body.insert("seed".to_string(), serde_json::json!(BASE64.encode(&seed_bytes)));
+        }
+
+        request_body.insert("temperature".to_string(), serde_json::json!(temperature.unwrap_or(1.0)));
+        request_body.insert("top_p".to_string(), serde_json::json!(top_p.unwrap_or(0.95)));
+        request_body.insert("max_tokens".to_string(), serde_json::json!(max_tokens.unwrap_or(1024)));
+        request_body.insert("num_variations".to_string(), serde_json::json!(num_variations.unwrap_or(1) as i64));
+
+        if let Some(job_id) = client_job_id {
+            request_body.insert("client_job_id".to_string(), serde_json::json!(job_id));
+        }
+
+        let builder = self.client.post("http://127.0.0.1:2003/predict")
+            .json(&request_body);
+        let builder = self.inject_trace_context(builder);
+
+        let resp = match builder.send().await {
+            Ok(r) => r,
+            Err(e) if e.is_connect() => {
+                anyhow::bail!("Loops service unavailable at port 2003 - is it running? Error: {}", e)
+            }
+            Err(e) if e.is_timeout() => {
+                anyhow::bail!("Loops service timeout")
+            }
+            Err(e) => anyhow::bail!("HTTP error calling loops service: {}", e),
+        };
+
+        let status = resp.status();
+
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = resp.headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(5);
+
+            anyhow::bail!("GPU busy, retry after {}s", retry_after);
+        }
+
+        if !status.is_success() {
+            let error_body = resp.text().await
+                .unwrap_or_else(|_| "<failed to read error body>".to_string());
+            anyhow::bail!("Loops API error {}: {}", status, error_body);
+        }
+
+        let resp_json: serde_json::Value = resp.json().await
+            .context("Failed to parse loops response as JSON")?;
+
+        if let Some(variations) = resp_json.get("variations").and_then(|v| v.as_array()) {
+            let mut output_hashes = Vec::new();
+            let mut num_tokens_list = Vec::new();
+
+            for variation in variations {
+                if let Some(midi_b64) = variation.get("midi_base64").and_then(|v| v.as_str()) {
+                    let midi_bytes = BASE64.decode(midi_b64)
+                        .context("Failed to decode loops MIDI")?;
+
+                    let hash = self.store_cas(&midi_bytes, "audio/midi")?;
+                    output_hashes.push(hash);
+
+                    let tokens = variation.get("num_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0) as u64;
+                    num_tokens_list.push(tokens);
+                }
+            }
+
+            let summary = format!("Generated {} drum loop variations ({} tokens total)",
+                output_hashes.len(),
+                num_tokens_list.iter().sum::<u64>()
+            );
+
+            Ok(OrpheusGenerateResult {
+                status: "success".to_string(),
+                output_hashes,
+                num_tokens: num_tokens_list,
+                summary,
+            })
+        } else {
+            anyhow::bail!("No variations array in loops response");
+        }
+    }
 }

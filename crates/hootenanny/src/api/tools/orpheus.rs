@@ -1,5 +1,5 @@
 use crate::api::responses::{JobSpawnResponse, JobStatus};
-use crate::api::schema::{OrpheusGenerateRequest, OrpheusGenerateSeededRequest, OrpheusContinueRequest, OrpheusBridgeRequest};
+use crate::api::schema::{OrpheusGenerateRequest, OrpheusGenerateSeededRequest, OrpheusContinueRequest, OrpheusBridgeRequest, OrpheusClassifyRequest, OrpheusLoopsRequest};
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::mcp_tools::local_models::OrpheusGenerateParams;
@@ -806,5 +806,140 @@ impl EventDualityServer {
     ) -> Result<CallToolResult, McpError> {
         // TODO: Add progress notifications
         self.orpheus_bridge(request).await
+    }
+
+    #[tracing::instrument(
+        name = "mcp.tool.orpheus_classify",
+        skip(self, request),
+        fields(
+            midi.hash = %request.midi_hash,
+        )
+    )]
+    pub async fn orpheus_classify(
+        &self,
+        request: OrpheusClassifyRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self.local_models.run_orpheus_classifier(request.midi_hash)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Orpheus classifier failed: {}", e)))?;
+
+        let json = serde_json::to_string_pretty(&result)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)])
+            .with_structured(result))
+    }
+
+    #[tracing::instrument(
+        name = "mcp.tool.orpheus_loops",
+        skip(self, request),
+        fields(
+            job.id = tracing::field::Empty,
+            variations = request.num_variations.unwrap_or(1),
+        )
+    )]
+    pub async fn orpheus_loops(
+        &self,
+        request: OrpheusLoopsRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let job_id = self.job_store.create_job("orpheus_loops".to_string());
+        tracing::Span::current().record("job.id", job_id.as_str());
+
+        let local_models = Arc::clone(&self.local_models);
+        let artifact_store = Arc::clone(&self.artifact_store);
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
+
+        let handle = tokio::spawn(async move {
+            let _ = job_store.mark_running(&job_id_clone);
+
+            let result: anyhow::Result<JobSpawnResponse> = (async {
+                let orpheus_result = local_models.run_orpheus_loops(
+                    request.seed_hash.clone(),
+                    request.temperature,
+                    request.top_p,
+                    request.max_tokens,
+                    request.num_variations,
+                    Some(job_id_clone.as_str().to_string()),
+                ).await?;
+
+                // Create artifacts
+                let mut artifacts_result = Vec::new();
+                let store = artifact_store.write().map_err(|_| anyhow::anyhow!("Lock poisoned"))?;
+
+                for (i, hash) in orpheus_result.output_hashes.iter().enumerate() {
+                    let tokens = orpheus_result.num_tokens.get(i).copied();
+                    let content_hash = ContentHash::new(hash);
+                    let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+                    let creator = request.creator.clone().unwrap_or_else(|| "agent_orpheus".to_string());
+
+                    let mut tags = request.tags.clone();
+                    tags.extend_from_slice(&["type:midi".to_string(), "source:orpheus".to_string(), "tool:orpheus_loops".to_string()]);
+
+                    let mut artifact = Artifact::new(
+                        artifact_id.clone(),
+                        content_hash,
+                        &creator,
+                        serde_json::json!({
+                            "type": "orpheus_loops",
+                            "params": {
+                                "temperature": request.temperature,
+                                "top_p": request.top_p,
+                                "max_tokens": request.max_tokens,
+                            },
+                            "generation": {
+                                "tokens": tokens,
+                                "job_id": job_id_clone.as_str(),
+                            },
+                        })
+                    ).with_tags(tags);
+
+                    if let Some(ref set_id) = request.variation_set_id {
+                        let index = store.next_variation_index(set_id)?;
+                        artifact = artifact.with_variation_set(VariationSetId::new(set_id.clone()), index);
+                    }
+
+                    if let Some(ref parent_id) = request.parent_id {
+                        artifact = artifact.with_parent(ArtifactId::new(parent_id.clone()));
+                    }
+
+                    store.put(artifact)?;
+                    artifacts_result.push(artifact_id.as_str().to_string());
+                }
+
+                store.flush()?;
+                drop(store);
+
+                Ok(JobSpawnResponse {
+                    job_id: job_id_clone.as_str().to_string(),
+                    status: JobStatus::Completed,
+                    artifact_id: artifacts_result.first().map(|s| s.to_string()),
+                    content_hash: orpheus_result.output_hashes.first().map(|s| s.to_string()),
+                    message: Some(orpheus_result.summary),
+                })
+            }).await;
+
+            match result {
+                Ok(response) => {
+                    let _ = job_store.mark_complete(&job_id_clone, serde_json::to_value(response).unwrap());
+                }
+                Err(e) => {
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
+        });
+
+        self.job_store.store_handle(&job_id, handle);
+
+        let response = JobSpawnResponse {
+            job_id: job_id.as_str().to_string(),
+            status: JobStatus::Pending,
+            artifact_id: None,
+            content_hash: None,
+            message: Some("Generation started. Use job_poll() to retrieve results.".to_string()),
+        };
+
+        Ok(CallToolResult::success(vec![Content::text(format!("Started job: {}", job_id.as_str()))])
+            .with_structured(serde_json::to_value(response).unwrap()))
     }
 }

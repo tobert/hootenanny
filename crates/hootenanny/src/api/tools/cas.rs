@@ -1,6 +1,6 @@
-use crate::api::responses::{CasStoreResponse, CasInspectResponse, CasUploadResponse, MidiToWavResponse, SoundfontInspectResponse, PresetInfo, SoundfontPresetResponse, InstrumentInfo, JobSpawnResponse, JobStatus};
+use crate::api::responses::{CasStoreResponse, CasInspectResponse, CasUploadResponse, ArtifactUploadResponse, MidiToWavResponse, SoundfontInspectResponse, PresetInfo, SoundfontPresetResponse, InstrumentInfo, JobSpawnResponse, JobStatus};
 use crate::api::service::EventDualityServer;
-use crate::api::schema::{CasStoreRequest, CasInspectRequest, UploadFileRequest, MidiToWavRequest, SoundfontInspectRequest, SoundfontPresetInspectRequest};
+use crate::api::schema::{CasStoreRequest, CasInspectRequest, UploadFileRequest, ArtifactUploadRequest, MidiToWavRequest, SoundfontInspectRequest, SoundfontPresetInspectRequest};
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::mcp_tools::rustysynth::{render_midi_to_wav, inspect_soundfont, inspect_preset};
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
@@ -117,6 +117,91 @@ impl EventDualityServer {
 
         let response = CasUploadResponse {
             hash: hash.clone(),
+            size_bytes: file_bytes.len() as u64,
+            mime_type: request.mime_type.clone(),
+            source_path: request.file_path.clone(),
+        };
+
+        let json = serde_json::to_string_pretty(&response)
+            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
+
+        Ok(CallToolResult::success(vec![Content::text(json)])
+            .with_structured(serde_json::to_value(&response).unwrap()))
+    }
+
+    #[tracing::instrument(
+        name = "mcp.tool.artifact_upload",
+        skip(self, request),
+        fields(
+            file.path = %request.file_path,
+            file.mime_type = %request.mime_type,
+            file.size = tracing::field::Empty,
+            cas.hash = tracing::field::Empty,
+            artifact.id = tracing::field::Empty,
+        )
+    )]
+    pub async fn artifact_upload(
+        &self,
+        request: ArtifactUploadRequest,
+    ) -> Result<CallToolResult, McpError> {
+        // Read file from disk
+        let file_bytes = tokio::fs::read(&request.file_path)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Failed to read file: {}", e)))?;
+
+        let span = tracing::Span::current();
+        span.record("file.size", file_bytes.len());
+
+        // Store in CAS
+        let hash = self.local_models.store_cas_content(&file_bytes, &request.mime_type)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Failed to store file in CAS: {}", e)))?;
+
+        span.record("cas.hash", &*hash);
+
+        // Create artifact
+        let mut tags = request.tags.clone();
+        if !tags.iter().any(|t| t.starts_with("type:")) {
+            // Infer type tag from MIME type
+            if request.mime_type.starts_with("audio/") {
+                tags.push(format!("type:{}", request.mime_type.strip_prefix("audio/").unwrap_or("audio")));
+            }
+        }
+        tags.push("tool:artifact_upload".to_string());
+
+        let content_hash = ContentHash::new(&hash);
+        let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+
+        let metadata = serde_json::json!({
+            "type": "uploaded_file",
+            "source_path": request.file_path,
+            "mime_type": request.mime_type,
+            "size_bytes": file_bytes.len(),
+        });
+
+        span.record("artifact.id", artifact_id.as_str());
+
+        let mut artifact = Artifact::new(
+            artifact_id.clone(),
+            content_hash,
+            request.creator.unwrap_or_else(|| "unknown".to_string()),
+            metadata,
+        ).with_tags(tags);
+
+        let store = self.artifact_store.write().map_err(|_| McpError::internal_error("Lock poisoned"))?;
+        if let Some(set_id) = request.variation_set_id {
+            let next_idx = store.next_variation_index(&set_id).unwrap_or(0);
+            artifact = artifact.with_variation_set(VariationSetId::new(set_id), next_idx);
+        }
+        if let Some(parent_id) = request.parent_id {
+            artifact = artifact.with_parent(ArtifactId::new(parent_id));
+        }
+        store.put(artifact).map_err(|e| McpError::internal_error(format!("Failed to store artifact: {}", e)))?;
+        store.flush().map_err(|e| McpError::internal_error(format!("Failed to flush artifact store: {}", e)))?;
+
+        let response = ArtifactUploadResponse {
+            artifact_id: artifact_id.as_str().to_string(),
+            content_hash: hash.clone(),
             size_bytes: file_bytes.len() as u64,
             mime_type: request.mime_type.clone(),
             source_path: request.file_path.clone(),
