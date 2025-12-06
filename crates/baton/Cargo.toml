@@ -25,6 +25,9 @@ async-trait = "0.1"
 
 # Telemetry
 tracing = "0.1"
+tracing-opentelemetry = "0.29"
+opentelemetry = "0.28"
+opentelemetry-http = "0.28"
 
 # Error handling
 thiserror = "2"
@@ -34,3 +37,4 @@ tokio-util = { version = "0.7", features = ["rt"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+opentelemetry_sdk = "0.28"

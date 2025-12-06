@@ -3,6 +3,7 @@
 //! Implements the MCP Streamable HTTP transport:
 //! - POST / - Send JSON-RPC request, receive response directly or as SSE stream
 //! - Session ID via Mcp-Session-Id header
+//! - W3C Trace Context propagation via traceparent header
 
 use axum::{
     extract::State,
@@ -10,6 +11,8 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use opentelemetry::global;
+use opentelemetry_http::HeaderExtractor;
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -41,6 +44,11 @@ pub async fn streamable_handler<H: Handler>(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
+    // Extract W3C Trace Context from incoming traceparent header
+    let parent_context = global::get_text_map_propagator(|propagator| {
+        propagator.extract(&HeaderExtractor(&headers))
+    });
+
     // Get session ID from header, or create new session
     let session_id_hint = headers
         .get(SESSION_HEADER)
@@ -102,8 +110,8 @@ pub async fn streamable_handler<H: Handler>(
         "Processing MCP request (streamable)"
     );
 
-    // Dispatch to protocol handler (now accepts JsonRpcMessage directly)
-    let result = crate::protocol::dispatch(&state, &session_id, &message).await;
+    // Dispatch to protocol handler with parent trace context
+    let result = crate::protocol::dispatch(&state, &session_id, &message, parent_context).await;
 
     // Build response JSON
     let response_json = match result {
@@ -174,4 +182,59 @@ pub async fn delete_handler<H: Handler>(
     tracing::info!(session_id = %session_id, "Session terminated");
 
     StatusCode::NO_CONTENT.into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::HeaderMap;
+    use opentelemetry::trace::{TraceContextExt, TraceId, SpanId};
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
+
+    #[test]
+    fn test_traceparent_extraction() {
+        // Set up the global propagator for W3C Trace Context
+        opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
+
+        // Create a W3C traceparent header
+        // Format: 00-{trace_id}-{span_id}-{flags}
+        let trace_id = TraceId::from_hex("4bf92f3577b34da6a3ce929d0e0e4736").unwrap();
+        let span_id = SpanId::from_hex("00f067aa0ba902b7").unwrap();
+        let traceparent = format!("00-{}-{}-01", trace_id, span_id);
+
+        // Create headers with traceparent
+        let mut headers = HeaderMap::new();
+        headers.insert("traceparent", traceparent.parse().unwrap());
+
+        // Extract trace context (this is what streamable_handler does)
+        let parent_context = opentelemetry::global::get_text_map_propagator(|propagator| {
+            propagator.extract(&opentelemetry_http::HeaderExtractor(&headers))
+        });
+
+        // Verify the extracted context has the correct trace_id and span_id
+        let span_ref = parent_context.span();
+        let span_context = span_ref.span_context();
+        assert!(span_context.is_valid(), "Extracted span context should be valid");
+        assert_eq!(span_context.trace_id(), trace_id, "Trace ID should match");
+        assert_eq!(span_context.span_id(), span_id, "Span ID should match");
+        assert!(span_context.is_sampled(), "Should be sampled (flag 01)");
+    }
+
+    #[test]
+    fn test_traceparent_extraction_without_header() {
+        // Set up the global propagator for W3C Trace Context
+        opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
+
+        // Create empty headers
+        let headers = HeaderMap::new();
+
+        // Extract trace context (should return empty context)
+        let parent_context = opentelemetry::global::get_text_map_propagator(|propagator| {
+            propagator.extract(&opentelemetry_http::HeaderExtractor(&headers))
+        });
+
+        // Verify the extracted context is invalid (no traceparent header)
+        let span_ref = parent_context.span();
+        let span_context = span_ref.span_context();
+        assert!(!span_context.is_valid(), "Span context should be invalid without traceparent");
+    }
 }

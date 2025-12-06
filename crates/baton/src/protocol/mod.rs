@@ -259,10 +259,14 @@ pub trait Handler: Send + Sync + 'static {
 /// - `rpc.jsonrpc.version` = "2.0"
 /// - `rpc.jsonrpc.request_id` = the request ID (if present)
 /// - `mcp.session_id` = the MCP session identifier
+///
+/// The `parent_context` parameter is used to link this span to an incoming
+/// distributed trace via W3C Trace Context (traceparent header).
 pub async fn dispatch<H: Handler>(
     state: &Arc<McpState<H>>,
     session_id: &str,
     message: &JsonRpcMessage,
+    parent_context: opentelemetry::Context,
 ) -> Result<Value, ErrorData> {
     // Format request_id for OTEL (cast to string per spec)
     let request_id_str = message
@@ -285,6 +289,10 @@ pub async fn dispatch<H: Handler>(
         rpc.jsonrpc.error_code = tracing::field::Empty,
         rpc.jsonrpc.error_message = tracing::field::Empty,
     );
+
+    // Attach parent trace context to this span for distributed tracing
+    use tracing_opentelemetry::OpenTelemetrySpanExt;
+    span.set_parent(parent_context);
 
     async {
         let result = dispatch_inner(state, session_id, message).await;

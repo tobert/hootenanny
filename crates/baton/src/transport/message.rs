@@ -107,8 +107,14 @@ pub async fn message_handler<H: Handler>(
         "Processing MCP message"
     );
 
-    // Dispatch to protocol handler
-    let result = crate::protocol::dispatch(&state, &params.session_id, &message).await;
+    // Dispatch to protocol handler (no parent context for SSE messages)
+    let result = crate::protocol::dispatch(
+        &state,
+        &params.session_id,
+        &message,
+        opentelemetry::Context::current(),
+    )
+    .await;
 
     // For notifications, no response is expected - just return 202
     if is_notification {
