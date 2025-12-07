@@ -6,12 +6,18 @@
 - [x] Phase 1: Minimal MCP Server Scaffold (~2-3 hours) ✅
 - [x] Phase 2: Upstream Client Manager (~4-5 hours) ✅
 - [x] Phase 3: Lua Runtime with OpenTelemetry (~5-6 hours) ✅
-- [ ] Phase 4: Tool Bridge with Traceparent Propagation (~6-7 hours)
-- [ ] Phase 5: Music Standard Library (~4-5 hours)
-- [ ] Phase 6: Job System (~3-4 hours)
-- [ ] Phase 7: Discovery & Describe (~2-3 hours)
-- [ ] Phase 8: Error Handling (~2-3 hours)
-- [ ] Phase 9: Integration Testing & Examples (~3-4 hours)
+- [x] Phase 4: Tool Bridge with Traceparent Propagation (~6-7 hours) ✅
+- [x] Phase 5: Music Standard Library (~4-5 hours) ✅
+- [x] Phase 6: Job System (~3-4 hours) ✅
+- [x] Phase 7: Discovery & Describe (~2-3 hours) ✅
+- [x] Phase 8: Error Handling (~2-3 hours) ✅
+- [x] Phase 9: Integration Testing & Examples (~3-4 hours) ✅
+- [x] Phase 10: Progress Reporting (~3-4 hours) ✅
+- [x] Phase 11: Resources (~2-3 hours) ✅
+- [x] Phase 12: Prompts (~2-3 hours) ✅
+- [x] Phase 13: Completions (~2-3 hours) ✅
+- [ ] Phase 14: Sampler Bridge (~3-4 hours)
+- [ ] Phase 15: Documentation & Examples (~2 hours)
 
 ### Session Sign-offs
 <!--
@@ -77,14 +83,205 @@ Format: YYYY-MM-DD - Phase N progress: Brief summary of what was completed
   - Logs capture script events, attributes, and metrics
 - Note: trace_id/span_id return nil from spawn_blocking context (expected, Phase 4 will add span context propagation)
 
-2025-12-06 - Phase 4 in progress (Span Context Propagation):
+2025-12-06 - Phase 4 complete (Span Context Propagation + Traceparent Injection):
 - Added StoredSpanContext struct to capture trace_id/span_id/sampled before spawn_blocking
 - Updated otel_bridge.rs to store/retrieve context from Lua registry
 - Updated runtime.rs execute/eval to capture context and pass to blocking functions
 - otel.trace_id(), otel.span_id(), otel.traceparent() now read from stored context
-- 20 tests passing
-- TODO: Test live to verify trace IDs propagate correctly
-- TODO: Add traceparent injection to outgoing MCP calls from Lua
+- Added call_tool_with_traceparent to baton::client::McpClient
+- Added call_tool_with_traceparent to ClientManager
+- Updated tool_bridge.rs to read traceparent from Lua registry and pass to MCP calls
+- 20 luanette tests + 74 baton tests passing
+- Verified live traceparent propagation:
+  - Lua script calls mcp.hootenanny.job_list({})
+  - otel.trace_id() returns luanette's trace ID (e.g., 91efc72c...)
+  - Request to hootenanny includes traceparent header with same trace_id/span_id
+  - Confirmed via OTLP telemetry: traceparent header correctly sent to upstream
+- Phase 4 complete!
+
+2025-12-06 - Phase 5 complete (Music Standard Library):
+- Created src/stdlib/ module structure with mod.rs, midi.rs, temp.rs
+- Added midly 0.5 and tempfile 3 dependencies
+- Implemented midi.* Lua namespace:
+  - midi.read(filepath) - Parse MIDI file to Lua table (tracks, events, delta times)
+  - midi.write(filepath, table) - Write Lua table back to MIDI file
+  - midi.transpose(events, semitones) - Transpose note events with clamping
+  - midi.quantize(events, grid) - Quantize event deltas to grid
+  - midi.merge(tracks) - Merge multiple tracks by absolute time
+  - midi.filter(events, predicate) - Filter events with Lua predicate function
+- Implemented temp.* Lua namespace:
+  - temp.path(filename) - Get unique temp path in per-VM temp directory
+  - temp.dir() - Get temp directory path
+  - temp.list() - List created temp files
+  - temp.exists(path) - Check if path exists
+  - temp.remove(path) - Remove a file
+- TempManager automatically cleans up temp directory when Lua VM drops
+- 27 tests passing (runtime + handler + otel + tool_bridge + midi + temp)
+- Phase 5 complete!
+
+2025-12-06 - Session sign-off (Phases 4-5 complete):
+- Completed Phase 4: Traceparent propagation from Lua to upstream MCP calls
+- Completed Phase 5: Music standard library (midi.*, temp.*)
+- Next: Phase 6 (Job System) - copy JobStore pattern from hootenanny/src/job_system.rs
+- Phase 6 tasks:
+  1. Copy job_system.rs to luanette (JobStore, JobInfo, JobStatus, JobId)
+  2. Add JobStore to LuanetteHandler
+  3. Implement lua_execute tool that fetches script from CAS and runs async
+  4. Add job_status, job_poll, job_cancel, job_list tools
+  5. Wire job tools into handler dispatch
+
+2025-12-06 - Phase 6 complete (Job System):
+- Created src/job_system.rs with JobStore, JobInfo, JobStatus, JobId types
+- Added JobStore to LuanetteHandler (Arc<JobStore> shared state)
+- Implemented job_execute tool (renamed from lua_execute for consistency):
+  - Fetches script from hootenanny CAS via cas_inspect
+  - Decodes base64 content to get Lua source
+  - Creates job, spawns tokio task for async execution
+  - Returns job_id immediately for polling
+- Implemented job management tools (all job_* prefixed):
+  - job_execute: Execute CAS script async, returns job_id
+  - job_status: Get status of specific job by ID
+  - job_poll: Poll for job completion with timeout (capped at 30s)
+    - Supports "any" mode (return on first complete) and "all" mode (wait for all)
+  - job_cancel: Cancel a running job (aborts tokio task)
+  - job_list: List all jobs with optional status filter
+- Added schema types for all job tools (schema.rs)
+- Added base64 dependency for CAS content decoding
+- 34 tests passing (includes 5 new job_system tests)
+- Next: Phase 7 (Discovery & Describe) - script_store, lua_describe, script_search
+
+2025-12-06 - Phase 7 complete (Discovery & Describe):
+- Implemented script_store tool:
+  - Stores Lua scripts in CAS via hootenanny cas_store
+  - Auto-adds "type:lua" tag for discoverability
+  - Returns hash for use with job_execute
+  - Optionally creates artifact if tags/creator specified
+- Implemented script_search tool:
+  - Queries hootenanny graph_context for type:lua artifacts
+  - Supports filtering by tag, creator, vibe
+  - Returns ScriptInfo with hash, artifact_id, tags, creator, name, description
+- Updated lua_describe (already CAS-enabled):
+  - Fetches script from CAS via fetch_script_from_cas()
+  - Executes describe() function if present
+  - Returns structured LuaDescribeResponse
+- Added schema types: ScriptStoreRequest/Response, ScriptSearchRequest/Response, ScriptInfo
+- 34 tests passing
+- Next: Phase 8 (Error Handling) - Enhanced stack traces, troubleshooting hints
+
+2025-12-07 - Scaffolding wiring complete:
+- Wired up all dead code from earlier phases:
+  - ClientManager: has_namespace(), url_for_namespace(), remove_upstream() now used
+  - JobStore: stats() exposed via job_stats tool and lua://jobs/stats resource
+  - ParamDefinition: used for script parameter validation in job_execute
+- New tools: job_stats, tools_refresh, upstream_remove
+- New resources: lua://jobs/stats, lua://namespaces, lua://namespaces/{name}, lua://tools/{namespace}
+- lua_describe now returns typed LuaDescribeResponse with output schema
+- Parameter validation: job_execute validates params against script's describe() schema
+- Removed unused telemetry helpers (current_trace_id, current_span_id, current_traceparent)
+- Removed Levenshtein-based tool name suggestions (over-engineered)
+- LuaRuntime::new/with_defaults now #[cfg(test)] only
+- Integration tests updated to use with_mcp_bridge
+- All tests passing (95 total), zero dead_code warnings, zero clippy warnings
+
+2025-12-07 - Phase 13 complete (Completions):
+- Added `complete()` method with CompletionRef dispatch
+- Tool argument completions:
+  - script_hash: queries hootenanny for recent Lua scripts
+  - job_id/job_ids: returns active job IDs from JobStore
+  - status: static list of job statuses
+  - tag: common Lua script tags
+- Prompt argument completions:
+  - hash: recent script hashes
+  - style: simple/detailed/production
+  - operation: MIDI workflow operations
+- Resource URI completions: example names
+- Helper methods: get_recent_script_hashes(), get_active_job_ids()
+- Updated capabilities() to enable_completions()
+- All 101 tests passing
+
+2025-12-07 - Phase 12 complete (Prompts):
+- Added `prompts()` with 4 domain-specific prompts:
+  - `write-script`: Generate Lua script with task, style args. Includes available tools.
+  - `debug-script`: Debug failing script (fetches from CAS, shows error context)
+  - `explain-script`: Explain script purpose, inputs, outputs
+  - `midi-workflow`: Generate MIDI workflow for generate/transpose/quantize/continue/bridge
+- Added `get_prompt()` with dispatch to helper methods
+- Prompts are context-aware: fetch script content, query available tools
+- Updated capabilities() to enable_prompts()
+- All 101 tests passing
+
+2025-12-07 - Phase 11 complete (Resources):
+- Added `resources()` returning static resources:
+  - `lua://jobs` - List of recent jobs
+  - `lua://tools` - List of available MCP tools from upstreams
+- Added `resource_templates()` for parameterized resources:
+  - `lua://scripts/{hash}` - Script source from CAS
+  - `lua://jobs/{id}` - Job details and result
+  - `lua://examples/{name}` - Bundled example scripts
+- Implemented `read_resource()` with URI scheme dispatch
+- Helper methods: read_jobs_list, read_job_by_id, read_script_by_hash, read_tools_list, read_example_by_name
+- Examples bundled via include_str!() for zero-copy embedding
+- Updated capabilities() to enable_resources()
+- All 101 tests passing
+
+2025-12-07 - Phase 10 complete (Progress Reporting):
+- Added `call_tool_with_context` override to LuanetteHandler
+- Implemented `job_execute_with_progress` with milestone notifications:
+  - 0.0: "Fetching script from CAS..."
+  - 0.1: "Script fetched, creating job..."
+  - 0.2: "Executing script..."
+  - 1.0: "Complete" (or error message)
+- Implemented `lua_eval_with_progress` for direct eval with progress
+- Added imports: ToolContext, ProgressNotification, ProgressToken from baton
+- Progress sent via context.send_progress() for seamless MCP integration
+- Client logging via context.log_debug() for tool execution tracing
+- Note: `progress.*` Lua namespace deferred - requires async bridge complexity
+- All 101 tests passing
+
+2025-12-07 - Phase 9 complete (Integration Testing & Examples):
+- Created 5 example Lua scripts in crates/luanette/examples/:
+  - hello.lua: Basic greeting with describe() and main()
+  - tool_call.lua: Calling upstream MCP tools via mcp.hootenanny.*
+  - otel_example.lua: OpenTelemetry features (trace_id, events, metrics)
+  - midi_process.lua: MIDI processing with midi.* and temp.*
+  - multi_variation.lua: Complex workflow generating multiple variations
+- Added live server integration tests in tests/integration.rs:
+  - test_live_health_endpoint: Verify /health endpoint
+  - test_live_mcp_initialize: Test MCP initialize handshake
+  - test_live_tools_list: Verify tools/list returns expected tools
+  - test_live_lua_eval: Execute simple Lua code via HTTP
+  - test_live_lua_eval_with_main: Execute script with main(params)
+  - test_live_lua_eval_error_handling: Verify error responses
+  - test_live_otel_functions: Test otel.* namespace functions
+- Tests run with: cargo test --test integration -- --ignored
+- Fixed test_runtime_error assertion to match error format
+- All tests passing: 40 lib tests + 21 integration tests (7 ignored without server)
+- Luanette MVP complete! 🌙
+
+2025-12-06 - Phase 8 complete (Error Handling):
+- Created src/error.rs module with AI-friendly error formatting:
+  - LuaErrorKind enum: SyntaxError, RuntimeError, MissingMain, NilCall, TypeError, IndexError, Timeout
+  - LuaError struct: kind, message, stack_trace, hints, suggestions
+  - StackFrame struct for clean stack traces
+- Enhanced stack trace parsing:
+  - Extracts source file, line number, and function name
+  - Filters out internal stdlib/runtime lines
+  - Parses [string "chunk"]:N: and script.lua:N: formats
+- Troubleshooting hints by error kind:
+  - SyntaxError: Missing 'end', unclosed strings, typos
+  - MissingMain: Requires main(params) function with example
+  - NilCall: Tool doesn't exist, check spelling
+  - TypeError: Type mismatches, use type() to inspect
+  - Timeout: Exceeded limit, check for infinite loops
+- Tool name suggestions for typos:
+  - Extracts field name from "nil value (field 'X')" errors
+  - Uses Levenshtein distance to find similar tool names
+  - Suggests up to 3 similar tools from available tools
+- Integrated with handler.rs:
+  - Passes available tool names from ClientManager for suggestions
+  - Used in lua_eval and lua_describe error paths
+- 40 tests passing (6 new error.rs tests)
+- Next: Phase 9 (Integration Testing & Examples) - E2E tests, example scripts, docs
 
 ---
 
