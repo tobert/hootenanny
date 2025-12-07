@@ -216,10 +216,10 @@ impl EventDualityServer {
             tracing::Span::current().record("poll.elapsed_ms", elapsed_ms);
             tracing::Span::current().record("poll.reason", reason);
 
-            // Get GPU stats from observer service
+            // Get GPU stats from observer service (condensed for context efficiency)
             let gpu = match self.gpu_monitor.fetch_status().await {
                 Ok(status) => Some(GpuInfo {
-                    summary: status.summary,
+                    summary: status.summary,  // One-liner with all key info
                     health: status.health,
                     utilization: status.gpu.util_pct as u8,
                     status: status.gpu.status,
@@ -228,20 +228,21 @@ impl EventDualityServer {
                     temp_c: status.gpu.temp_c as u8,
                     power_w: status.gpu.power_w as u16,
                     oom_risk: status.gpu.oom_risk,
-                    sparklines: Some(GpuSparklines {
-                        util: status.sparklines.util.spark,
-                        temp: status.sparklines.temp.spark,
-                        power: status.sparklines.power.spark,
-                        vram: status.sparklines.vram.spark,
-                        util_avg: status.sparklines.util.avg,
-                        util_peak: status.sparklines.util.peak,
-                    }),
-                    services: Some(status.services.into_iter().map(|s| GpuServiceInfo {
-                        name: s.name,
-                        port: s.port,
-                        vram_gb: s.vram_gb,
-                        model: s.model,
-                    }).collect()),
+                    // Only include sparklines if there's interesting activity
+                    sparklines: if status.sparklines.util.peak > 10.0 {
+                        Some(GpuSparklines {
+                            util: status.sparklines.util.spark,
+                            temp: status.sparklines.temp.spark,
+                            power: status.sparklines.power.spark,
+                            vram: status.sparklines.vram.spark,
+                            util_avg: status.sparklines.util.avg,
+                            util_peak: status.sparklines.util.peak,
+                        })
+                    } else {
+                        None
+                    },
+                    // Skip per-service breakdown - summary already has "N services XGB"
+                    services: None,
                 }),
                 Err(e) => {
                     tracing::warn!("Failed to fetch GPU status: {:#}", e);
