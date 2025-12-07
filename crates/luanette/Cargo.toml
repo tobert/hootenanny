@@ -6,6 +6,10 @@ description = "Lua scripting MCP server for composing upstream MCP tools"
 authors = ["Al Tobey <tobert@gmail.com>"]
 license = "MIT"
 
+[lib]
+name = "luanette"
+path = "src/lib.rs"
+
 [[bin]]
 name = "luanette"
 path = "src/main.rs"
@@ -50,6 +54,13 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 tokio-util = "0.7"
+base64 = "0.22"
+
+# MIDI Processing
+midly = "0.5"
+
+# Temp Files
+tempfile = "3"
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }

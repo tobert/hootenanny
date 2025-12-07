@@ -43,11 +43,6 @@ impl StoredSpanContext {
         }
     }
 
-    /// Format as W3C traceparent header.
-    pub fn traceparent(&self) -> String {
-        let flags = if self.sampled { "01" } else { "00" };
-        format!("00-{}-{}-{}", self.trace_id, self.span_id, flags)
-    }
 }
 
 /// Lua registry key for stored span context.
@@ -108,17 +103,15 @@ pub fn register_otel_globals(lua: &Lua) -> Result<()> {
         if let Some(attr_table) = attrs {
             // Build key-value pairs from Lua table
             let mut fields: Vec<(String, String)> = Vec::new();
-            for pair in attr_table.pairs::<String, LuaValue>() {
-                if let Ok((k, v)) = pair {
-                    let value_str = match v {
-                        LuaValue::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
-                        LuaValue::Integer(i) => i.to_string(),
-                        LuaValue::Number(n) => n.to_string(),
-                        LuaValue::Boolean(b) => b.to_string(),
-                        _ => continue,
-                    };
-                    fields.push((k, value_str));
-                }
+            for (k, v) in attr_table.pairs::<String, LuaValue>().flatten() {
+                let value_str = match v {
+                    LuaValue::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
+                    LuaValue::Integer(i) => i.to_string(),
+                    LuaValue::Number(n) => n.to_string(),
+                    LuaValue::Boolean(b) => b.to_string(),
+                    _ => continue,
+                };
+                fields.push((k, value_str));
             }
 
             // Use tracing event with dynamic fields
@@ -156,17 +149,15 @@ pub fn register_otel_globals(lua: &Lua) -> Result<()> {
     let metric_fn = lua.create_function(|_, (name, value, attrs): (String, f64, Option<Table>)| {
         if let Some(attr_table) = attrs {
             let mut fields: Vec<(String, String)> = Vec::new();
-            for pair in attr_table.pairs::<String, LuaValue>() {
-                if let Ok((k, v)) = pair {
-                    let value_str = match v {
-                        LuaValue::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
-                        LuaValue::Integer(i) => i.to_string(),
-                        LuaValue::Number(n) => n.to_string(),
-                        LuaValue::Boolean(b) => b.to_string(),
-                        _ => continue,
-                    };
-                    fields.push((k, value_str));
-                }
+            for (k, v) in attr_table.pairs::<String, LuaValue>().flatten() {
+                let value_str = match v {
+                    LuaValue::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
+                    LuaValue::Integer(i) => i.to_string(),
+                    LuaValue::Number(n) => n.to_string(),
+                    LuaValue::Boolean(b) => b.to_string(),
+                    _ => continue,
+                };
+                fields.push((k, value_str));
             }
             let attrs_str: Vec<String> = fields
                 .iter()

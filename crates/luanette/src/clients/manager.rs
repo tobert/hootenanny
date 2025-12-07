@@ -19,15 +19,12 @@ pub struct UpstreamConfig {
 }
 
 /// Cached tool information for an upstream server.
-pub struct CachedUpstream {
+struct CachedUpstream {
     /// The MCP client
-    pub client: Arc<McpClient>,
-
-    /// Namespace for this upstream
-    pub namespace: String,
+    client: Arc<McpClient>,
 
     /// Discovered tools
-    pub tools: Vec<ToolInfo>,
+    tools: Vec<ToolInfo>,
 }
 
 /// Manages connections to multiple upstream MCP servers.
@@ -73,7 +70,6 @@ impl ClientManager {
 
         let cached = CachedUpstream {
             client: Arc::new(client),
-            namespace: config.namespace.clone(),
             tools,
         };
 
@@ -122,6 +118,22 @@ impl ClientManager {
         tool_name: &str,
         arguments: serde_json::Value,
     ) -> Result<serde_json::Value> {
+        self.call_tool_with_traceparent(namespace, tool_name, arguments, None)
+            .await
+    }
+
+    /// Call a tool on an upstream server with explicit traceparent.
+    ///
+    /// Use this when calling from a blocking context where span context
+    /// isn't available (e.g., from Lua scripts in spawn_blocking).
+    #[tracing::instrument(skip(self, arguments, traceparent), fields(tool = %tool_name))]
+    pub async fn call_tool_with_traceparent(
+        &self,
+        namespace: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+        traceparent: Option<&str>,
+    ) -> Result<serde_json::Value> {
         let upstreams = self.upstreams.read().await;
 
         let cached = upstreams
@@ -138,7 +150,9 @@ impl ClientManager {
             );
         }
 
-        cached.client.call_tool(tool_name, arguments)
+        cached
+            .client
+            .call_tool_with_traceparent(tool_name, arguments, traceparent)
             .await
             .context("Failed to call upstream tool")
     }

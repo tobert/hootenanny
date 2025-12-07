@@ -142,6 +142,26 @@ impl McpClient {
         )
     )]
     pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<Value, ClientError> {
+        self.call_tool_with_traceparent(name, arguments, None).await
+    }
+
+    /// Call a tool on the MCP server with explicit traceparent.
+    ///
+    /// Use this when calling from a blocking context where the current span
+    /// isn't available (e.g., from `spawn_blocking`).
+    #[tracing::instrument(
+        skip(self, arguments, traceparent),
+        fields(
+            tool.name = %name,
+            mcp.session_id = %self.session_id,
+        )
+    )]
+    pub async fn call_tool_with_traceparent(
+        &self,
+        name: &str,
+        arguments: Value,
+        traceparent: Option<&str>,
+    ) -> Result<Value, ClientError> {
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "id": self.next_id(),
@@ -152,7 +172,7 @@ impl McpClient {
             }
         });
 
-        let response = self.send_request(request).await?;
+        let response = self.send_request_with_traceparent(request, traceparent).await?;
 
         if let Some(error) = response.get("error") {
             let message = error
@@ -243,7 +263,20 @@ impl McpClient {
 
     /// Send a JSON-RPC request with trace context.
     async fn send_request(&self, request: Value) -> Result<Value, ClientError> {
-        let traceparent = self.current_traceparent();
+        self.send_request_with_traceparent(request, None).await
+    }
+
+    /// Send a JSON-RPC request with explicit or automatic trace context.
+    ///
+    /// If `traceparent` is None, attempts to extract from current span.
+    async fn send_request_with_traceparent(
+        &self,
+        request: Value,
+        traceparent: Option<&str>,
+    ) -> Result<Value, ClientError> {
+        let traceparent = traceparent
+            .map(|s| s.to_string())
+            .or_else(|| self.current_traceparent());
 
         let mut req_builder = self
             .client

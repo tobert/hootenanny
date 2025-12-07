@@ -1,8 +1,11 @@
 mod clients;
+mod error;
 mod handler;
+mod job_system;
 mod otel_bridge;
 mod runtime;
 mod schema;
+mod stdlib;
 mod telemetry;
 mod tool_bridge;
 
@@ -10,6 +13,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use clients::{ClientManager, UpstreamConfig};
 use handler::LuanetteHandler;
+use job_system::JobStore;
 use runtime::{LuaRuntime, SandboxConfig};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -66,8 +70,11 @@ async fn main() -> Result<()> {
     };
     let runtime = Arc::new(LuaRuntime::with_mcp_bridge(sandbox_config, client_manager.clone()));
 
-    // Create the handler with runtime and client manager
-    let handler = LuanetteHandler::new(runtime, client_manager.clone());
+    // Create job store for async script execution
+    let job_store = Arc::new(JobStore::new());
+
+    // Create the handler with runtime, client manager, and job store
+    let handler = LuanetteHandler::new(runtime, client_manager.clone(), job_store);
 
     // Create baton MCP state
     let mcp_state = Arc::new(baton::McpState::new(

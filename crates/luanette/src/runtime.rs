@@ -9,6 +9,7 @@ use tokio::time::timeout;
 
 use crate::clients::ClientManager;
 use crate::otel_bridge::{register_otel_globals, store_span_context, StoredSpanContext};
+use crate::stdlib;
 use crate::tool_bridge::{register_mcp_globals, McpBridgeContext};
 
 /// Configuration for the Lua sandbox.
@@ -45,7 +46,8 @@ pub struct LuaRuntime {
 }
 
 impl LuaRuntime {
-    /// Create a new Lua runtime with the given configuration.
+    /// Create a new Lua runtime with the given configuration (test-only).
+    #[cfg(test)]
     pub fn new(config: SandboxConfig) -> Self {
         Self {
             config,
@@ -53,7 +55,8 @@ impl LuaRuntime {
         }
     }
 
-    /// Create a new Lua runtime with default configuration.
+    /// Create a new Lua runtime with default configuration (test-only).
+    #[cfg(test)]
     pub fn with_defaults() -> Self {
         Self::new(SandboxConfig::default())
     }
@@ -209,6 +212,10 @@ fn create_sandboxed_lua(
     // Register OpenTelemetry globals (otel.*)
     register_otel_globals(&lua)
         .context("Failed to register OpenTelemetry globals")?;
+
+    // Register stdlib (midi.*, temp.*)
+    stdlib::register_all(&lua)
+        .context("Failed to register standard library")?;
 
     // Register MCP globals if context is available
     if let Some(ctx) = mcp_context {

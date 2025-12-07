@@ -1,14 +1,18 @@
 //! Bridge between Lua scripts and upstream MCP tools.
 //!
 //! Registers `mcp.*` Lua globals that call upstream MCP servers via ClientManager.
+//! Automatically propagates traceparent from stored span context to upstream calls.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use mlua::{Lua, Table, Value as LuaValue};
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 
 use crate::clients::ClientManager;
+
+/// Lua registry key for stored span context (must match otel_bridge.rs).
+const SPAN_CONTEXT_KEY: &str = "otel_span_context";
 
 /// Context passed to Lua for MCP tool calls.
 ///
@@ -37,13 +41,26 @@ impl McpBridgeContext {
         namespace: &str,
         tool_name: &str,
         arguments: JsonValue,
+        traceparent: Option<&str>,
     ) -> Result<JsonValue> {
         self.runtime_handle.block_on(async {
             self.clients
-                .call_tool(namespace, tool_name, arguments)
+                .call_tool_with_traceparent(namespace, tool_name, arguments, traceparent)
                 .await
         })
     }
+}
+
+/// Get W3C traceparent from stored span context in Lua registry.
+fn get_traceparent_from_lua(lua: &Lua) -> Option<String> {
+    let table: Option<Table> = lua.named_registry_value(SPAN_CONTEXT_KEY).ok();
+    table.and_then(|t| {
+        let trace_id: String = t.get("trace_id").ok()?;
+        let span_id: String = t.get("span_id").ok()?;
+        let sampled: bool = t.get("sampled").ok()?;
+        let flags = if sampled { "01" } else { "00" };
+        Some(format!("00-{}-{}-{}", trace_id, span_id, flags))
+    })
 }
 
 /// Register the `mcp` global table with namespace sub-tables.
@@ -103,13 +120,21 @@ fn create_namespace_table(
         let tool_name_clone = tool_name.clone();
 
         let func = lua.create_function(move |lua, args: LuaValue| {
-            let json_args = lua_to_json(&args).map_err(|e| mlua::Error::external(e))?;
+            let json_args = lua_to_json(&args).map_err(mlua::Error::external)?;
+
+            // Get traceparent from stored span context for distributed tracing
+            let traceparent = get_traceparent_from_lua(lua);
 
             let result = ctx_clone
-                .call_tool(&namespace_clone, &tool_name_clone, json_args)
-                .map_err(|e| mlua::Error::external(e))?;
+                .call_tool(
+                    &namespace_clone,
+                    &tool_name_clone,
+                    json_args,
+                    traceparent.as_deref(),
+                )
+                .map_err(mlua::Error::external)?;
 
-            json_to_lua(lua, &result).map_err(|e| mlua::Error::external(e))
+            json_to_lua(lua, &result).map_err(mlua::Error::external)
         })?;
 
         ns_table.set(tool_name.as_str(), func)?;
