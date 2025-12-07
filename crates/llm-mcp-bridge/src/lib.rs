@@ -11,7 +11,7 @@ pub use agent_loop::run_agent_loop;
 pub use config::{BackendConfig, BridgeConfig};
 pub use handler::AgentChatHandler;
 pub use manager::{AgentManager, SessionInfo, SessionStatusResponse};
-pub use mcp_client::{McpToolClient, OpenAiFunction, ToolInfo};
+pub use mcp_client::{McpToolClient, OpenAiFunction, ToolInfo, to_openai_functions};
 pub use provider::{ChatCompletionResponse, FinishReason, GenerationConfig, OpenAiProvider};
 pub use session::{AgentSession, SessionHandle};
 pub use types::*;

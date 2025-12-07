@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use llmchat::{ConversationDb, NewToolCall, Role, ToolCallId};
 
-use crate::mcp_client::McpToolClient;
+use crate::mcp_client::{McpToolClient, to_openai_functions};
 use crate::provider::{FinishReason, GenerationConfig, OpenAiProvider};
 use crate::session::SessionHandle;
 use crate::types::OutputChunk;
@@ -39,7 +39,7 @@ pub async fn run_agent_loop(
 
     let tools = if enable_tools {
         let tool_infos = mcp_client.list_tools().await?;
-        let functions = mcp_client.to_openai_functions(&tool_infos);
+        let functions = to_openai_functions(&tool_infos);
         Some(OpenAiProvider::convert_tools(&functions))
     } else {
         None
