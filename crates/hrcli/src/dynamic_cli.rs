@@ -408,7 +408,6 @@ impl DynamicCli {
 
         println!("\n  {}:", "Meta Commands".bright_yellow());
         println!("    • {:15} {}", "discover".bright_green(), "Discover available tools");
-        println!("    • {:15} {}", "cache".bright_green(), "Manage schema cache");
         println!("    • {:15} {}", "completions".bright_green(), "Generate shell completions");
         println!("    • {:15} {}", "interactive".bright_green(), "Start REPL mode");
     }
