@@ -618,7 +618,7 @@ async fn handle_complete<H: Handler>(
 
     let result = state.handler.complete(params).await?;
 
-    serde_json::to_value(&serde_json::json!({ "completion": result }))
+    serde_json::to_value(serde_json::json!({ "completion": result }))
         .map_err(|e| ErrorData::internal_error(e.to_string()))
 }
 

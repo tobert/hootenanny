@@ -6,10 +6,11 @@
 use serde::{Deserialize, Serialize};
 
 /// Log levels (matching syslog severity)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Debug,
+    #[default]
     Info,
     Notice,
     Warning,
@@ -17,12 +18,6 @@ pub enum LogLevel {
     Critical,
     Alert,
     Emergency,
-}
-
-impl Default for LogLevel {
-    fn default() -> Self {
-        LogLevel::Info
-    }
 }
 
 impl From<tracing::Level> for LogLevel {
