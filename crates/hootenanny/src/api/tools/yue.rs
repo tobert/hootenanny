@@ -122,7 +122,7 @@ impl EventDualityServer {
                 // Add to variation set if specified
                 if let Some(set_id) = variation_set_id {
                     let next_idx = {
-                        let mut store = artifact_store.write()
+                        let store = artifact_store.write()
                             .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
                         store.next_variation_index(&set_id)?
                     };
@@ -136,7 +136,7 @@ impl EventDualityServer {
 
                 // Persist artifact
                 {
-                    let mut store = artifact_store.write()
+                    let store = artifact_store.write()
                         .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
                     store.put(artifact)?;
                     store.flush()?;

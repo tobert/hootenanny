@@ -780,7 +780,6 @@ impl EventDualityServer {
 
     /// Stub implementations for other progress-aware methods
     /// TODO: Implement full progress reporting for these
-
     pub async fn orpheus_generate_seeded_with_progress(
         &self,
         request: OrpheusGenerateSeededRequest,

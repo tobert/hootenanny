@@ -236,7 +236,7 @@ pub fn inspect_soundfont(soundfont_bytes: &[u8], include_drum_map: bool) -> Resu
                 for region in preset.get_regions() {
                     let key_lo = region.get_key_range_start();
                     let key_hi = region.get_key_range_end();
-                    let instrument_idx = region.get_instrument_id() as usize;
+                    let instrument_idx = region.get_instrument_id();
 
                     let instrument_name = if instrument_idx < instruments.len() {
                         instruments[instrument_idx].get_name().to_string()

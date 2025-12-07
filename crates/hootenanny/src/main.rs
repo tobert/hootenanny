@@ -61,12 +61,11 @@ async fn main() -> Result<()> {
 
     // Determine state directory - default to persistent location
     let state_dir = cli.state_dir.unwrap_or_else(|| {
-        let default_base = if let Ok(home) = std::env::var("HOME") {
+        if let Ok(home) = std::env::var("HOME") {
             PathBuf::from(home).join(".local/share/hrmcp")
         } else {
             PathBuf::from("/tank/halfremembered/hrmcp/default")
-        };
-        default_base
+        }
     });
 
     std::fs::create_dir_all(&state_dir).context("Failed to create state directory")?;

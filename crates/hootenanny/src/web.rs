@@ -247,8 +247,8 @@ async fn list_artifacts(
 
     let filtered: Vec<ArtifactSummary> = all
         .into_iter()
-        .filter(|a| query.tag.as_ref().map_or(true, |t| a.has_tag(t)))
-        .filter(|a| query.creator.as_ref().map_or(true, |c| &a.creator == c))
+        .filter(|a| query.tag.as_ref().is_none_or(|t| a.has_tag(t)))
+        .filter(|a| query.creator.as_ref().is_none_or(|c| &a.creator == c))
         .take(query.limit.unwrap_or(100))
         .map(|a| ArtifactSummary {
             id: a.id.as_str().to_string(),

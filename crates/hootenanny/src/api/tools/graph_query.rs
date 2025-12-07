@@ -41,7 +41,7 @@ impl EventDualityServer {
         let limit = request.limit.unwrap_or(100);
         let results: Vec<_> = results_iter
             .take(limit)
-            .map(|row| result_to_json(row))
+            .map(result_to_json)
             .collect();
 
         // Build response

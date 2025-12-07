@@ -94,7 +94,7 @@ impl EventDualityServer {
 
         // Persist artifact
         {
-            let mut store = self.artifact_store.write()
+            let store = self.artifact_store.write()
                 .map_err(|e| McpError::internal_error(format!("Failed to acquire artifact store lock: {}", e)))?;
             store.put(artifact)
                 .map_err(|e| McpError::internal_error(format!("Failed to store artifact: {}", e)))?;

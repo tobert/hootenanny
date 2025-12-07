@@ -200,7 +200,7 @@ impl EventDualityServer {
             s
         } else if let Some(target) = &request.target_key {
             abc::semitones_to_key(&parse_result.value.header.key, target)
-                .map_err(|e| McpError::invalid_params(e))?
+                .map_err(McpError::invalid_params)?
         } else {
             return Err(McpError::invalid_params(
                 "Must specify either semitones or target_key"
