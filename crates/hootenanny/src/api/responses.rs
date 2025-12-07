@@ -424,3 +424,16 @@ pub struct SampleLlmResponse {
     pub model: String,
     pub stop_reason: Option<String>,
 }
+
+// ============================================================================
+// Music AI Model Responses
+// ============================================================================
+
+/// Response from CLAP audio analysis
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ClapAnalyzeResponse {
+    pub artifact_id: String,
+    pub content_hash: String,
+    pub tasks: Vec<String>,
+    pub summary: String,
+}

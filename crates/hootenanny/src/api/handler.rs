@@ -247,14 +247,29 @@ impl Handler for HootHandler {
                 .with_category("LLM")
                 .read_only(),
 
-            // TODO: Implement CLAP audio analysis
-            // Tool::new("clap_analyze", "Analyze audio: extract embeddings, classify genre/mood, compare similarity")
-            //     .with_input_schema(schema_for::<ClapAnalyzeRequest>())
-            //     .read_only(),
+            // CLAP audio analysis
+            Tool::new("clap_analyze", "Analyze audio: extract embeddings, classify genre/mood, compare similarity")
+                .with_input_schema(schema_for::<ClapAnalyzeRequest>())
+                .with_output_schema(schema_for::<ClapAnalyzeResponse>())
+                .with_icon("🔊")
+                .with_category("Music Analysis")
+                .read_only(),
 
-            // TODO: Implement MusicGen text-to-music
-            // Tool::new("musicgen_generate", "Generate music from text description using MusicGen")
-            //     .with_input_schema(schema_for::<MusicgenGenerateRequest>()),
+            // MusicGen text-to-music
+            Tool::new("musicgen_generate", "Generate music from text description using MusicGen")
+                .with_input_schema(schema_for::<MusicgenGenerateRequest>())
+                .with_output_schema(schema_for::<JobSpawnResponse>())
+                .with_icon("🎹")
+                .with_category("Music Generation")
+                .with_aliases(vec!["musicgen".to_string()]),
+
+            // YuE text-to-song with vocals
+            Tool::new("yue_generate", "Generate a complete song with vocals from lyrics using YuE")
+                .with_input_schema(schema_for::<YueGenerateRequest>())
+                .with_output_schema(schema_for::<JobSpawnResponse>())
+                .with_icon("🎤")
+                .with_category("Music Generation")
+                .with_aliases(vec!["yue".to_string(), "song".to_string()]),
 
             // TODO: Implement Anticipatory Music Transformer
             // Tool::new("anticipatory_generate", "Generate polyphonic MIDI with Stanford's Anticipatory Music Transformer")
@@ -264,10 +279,6 @@ impl Handler for HootHandler {
             // Tool::new("anticipatory_embed", "Extract hidden state embeddings from MIDI")
             //     .with_input_schema(schema_for::<AnticipatoryEmbedRequest>())
             //     .read_only(),
-
-            // TODO: Implement YuE text-to-song with vocals
-            // Tool::new("yue_generate", "Generate a complete song with vocals from lyrics using YuE")
-            //     .with_input_schema(schema_for::<YueGenerateRequest>()),
         ]
     }
 
@@ -608,9 +619,25 @@ impl Handler for HootHandler {
                 self.server.sample_llm(request, context).await
             }
 
+            // Music AI model tools
+            "clap_analyze" => {
+                let request: ClapAnalyzeRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.clap_analyze(request).await
+            }
+            "musicgen_generate" => {
+                let request: MusicgenGenerateRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.musicgen_generate(request).await
+            }
+            "yue_generate" => {
+                let request: YueGenerateRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.yue_generate(request).await
+            }
+
             // TODO: Add other tools when their modules are implemented:
-            // - musicgen_generate, anticipatory_generate, anticipatory_continue
-            // - yue_generate, beatthis_analyze, clap_analyze
+            // - anticipatory_generate, anticipatory_continue
 
             // Fall through to standard implementation for tools without progress or no token
             _ => self.call_tool(name, args).await

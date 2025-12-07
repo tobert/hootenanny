@@ -243,6 +243,13 @@ pub struct ClapAnalyzeRequest {
     #[schemars(description = "Custom text labels for zero_shot classification")]
     #[serde(default)]
     pub text_candidates: Vec<String>,
+
+    #[schemars(description = "Optional parent artifact ID")]
+    pub parent_id: Option<String>,
+
+    #[schemars(description = "Creator identifier (agent or user ID)")]
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
 }
 
 fn default_clap_tasks() -> Vec<String> {

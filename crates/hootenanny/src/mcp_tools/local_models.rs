@@ -486,4 +486,165 @@ impl LocalModels {
             anyhow::bail!("No variations array in loops response");
         }
     }
+
+    /// Call MusicGen service (port 2006) to generate music from text prompt
+    pub async fn run_musicgen_generate(
+        &self,
+        prompt: String,
+        duration: f32,
+        temperature: f32,
+        top_k: u32,
+        top_p: f32,
+        guidance_scale: f32,
+        do_sample: bool,
+        client_job_id: Option<String>,
+    ) -> Result<serde_json::Value> {
+        let url = "http://127.0.0.1:2006/predict";
+
+        let body = serde_json::json!({
+            "prompt": prompt,
+            "duration": duration,
+            "temperature": temperature,
+            "top_k": top_k,
+            "top_p": top_p,
+            "guidance_scale": guidance_scale,
+            "do_sample": do_sample,
+            "client_job_id": client_job_id,
+        });
+
+        let builder = self.client
+            .post(url)
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(120));
+
+        let builder = self.inject_trace_context(builder);
+        let resp = builder.send()
+            .await
+            .context("Failed to call MusicGen API")?;
+
+        let status = resp.status();
+
+        if status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+            let error_body = resp.text().await
+                .unwrap_or_else(|_| "Service busy".to_string());
+            anyhow::bail!("MusicGen service busy: {}", error_body);
+        }
+
+        if !status.is_success() {
+            let error_body = resp.text().await
+                .unwrap_or_else(|_| "<failed to read error body>".to_string());
+            anyhow::bail!("MusicGen API error {}: {}", status, error_body);
+        }
+
+        let resp_json: serde_json::Value = resp.json().await
+            .context("Failed to parse MusicGen response as JSON")?;
+
+        Ok(resp_json)
+    }
+
+    /// Call CLAP service (port 2007) to analyze audio
+    pub async fn run_clap_analyze(
+        &self,
+        audio_base64: String,
+        tasks: Vec<String>,
+        audio_b_base64: Option<String>,
+        text_candidates: Option<Vec<String>>,
+        client_job_id: Option<String>,
+    ) -> Result<serde_json::Value> {
+        let url = "http://127.0.0.1:2007/predict";
+
+        let body = serde_json::json!({
+            "audio": audio_base64,
+            "tasks": tasks,
+            "audio_b": audio_b_base64,
+            "text_candidates": text_candidates,
+            "client_job_id": client_job_id,
+        });
+
+        let builder = self.client
+            .post(url)
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(60));
+
+        let builder = self.inject_trace_context(builder);
+        let resp = builder.send()
+            .await
+            .context("Failed to call CLAP API")?;
+
+        let status = resp.status();
+
+        if status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+            let error_body = resp.text().await
+                .unwrap_or_else(|_| "Service busy".to_string());
+            anyhow::bail!("CLAP service busy: {}", error_body);
+        }
+
+        if !status.is_success() {
+            let error_body = resp.text().await
+                .unwrap_or_else(|_| "<failed to read error body>".to_string());
+            anyhow::bail!("CLAP API error {}: {}", status, error_body);
+        }
+
+        let resp_json: serde_json::Value = resp.json().await
+            .context("Failed to parse CLAP response as JSON")?;
+
+        Ok(resp_json)
+    }
+
+    /// Call YuE service (port 2008) to generate song from lyrics
+    pub async fn run_yue_generate(
+        &self,
+        lyrics: String,
+        genre: String,
+        max_new_tokens: u32,
+        run_n_segments: u32,
+        seed: u64,
+        client_job_id: Option<String>,
+    ) -> Result<serde_json::Value> {
+        let url = "http://127.0.0.1:2008/predict";
+
+        let body = serde_json::json!({
+            "lyrics": lyrics,
+            "genre": genre,
+            "max_new_tokens": max_new_tokens,
+            "run_n_segments": run_n_segments,
+            "seed": seed,
+            "client_job_id": client_job_id,
+        });
+
+        let builder = self.client
+            .post(url)
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(600)); // YuE is very slow!
+
+        let builder = self.inject_trace_context(builder);
+        let resp = builder.send()
+            .await
+            .context("Failed to call YuE API")?;
+
+        let status = resp.status();
+
+        if status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+            let error_body = resp.text().await
+                .unwrap_or_else(|_| "Validation error".to_string());
+            anyhow::bail!("YuE validation error: {}", error_body);
+        }
+
+        if status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+            let error_body = resp.text().await
+                .unwrap_or_else(|_| "Service busy".to_string());
+            anyhow::bail!("YuE service busy: {}", error_body);
+        }
+
+        if !status.is_success() {
+            let error_body = resp.text().await
+                .unwrap_or_else(|_| "<failed to read error body>".to_string());
+            anyhow::bail!("YuE API error {}: {}", status, error_body);
+        }
+
+        let resp_json: serde_json::Value = resp.json().await
+            .context("Failed to parse YuE response as JSON")?;
+
+        Ok(resp_json)
+    }
 }
