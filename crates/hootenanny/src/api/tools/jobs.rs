@@ -221,12 +221,12 @@ impl EventDualityServer {
                 Ok(status) => Some(GpuInfo {
                     summary: status.summary,
                     health: status.health,
-                    utilization: status.gpu.util_pct,
+                    utilization: status.gpu.util_pct as u8,
                     status: status.gpu.status,
                     vram_used_gb: status.gpu.vram_used_gb,
                     vram_total_gb: status.gpu.vram_total_gb,
-                    temp_c: status.gpu.temp_c,
-                    power_w: status.gpu.power_w,
+                    temp_c: status.gpu.temp_c as u8,
+                    power_w: status.gpu.power_w as u16,
                     oom_risk: status.gpu.oom_risk,
                     sparklines: Some(GpuSparklines {
                         util: status.sparklines.util.spark,

@@ -23,9 +23,9 @@ pub struct GpuStatus {
     pub status: String,
     pub vram_used_gb: f64,
     pub vram_total_gb: f64,
-    pub util_pct: u8,
-    pub temp_c: u8,
-    pub power_w: u16,
+    pub util_pct: f64,
+    pub temp_c: f64,
+    pub power_w: f64,
     pub bandwidth_gbs: f64,
     pub bottleneck: String,
     pub oom_risk: String,
@@ -154,6 +154,24 @@ impl Default for GpuMonitor {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn test_fetch_real_observer() {
+        let monitor = GpuMonitor::new();
+        match monitor.fetch_status().await {
+            Ok(status) => {
+                println!("✅ Got status: {}", status.summary);
+                println!("   Health: {}", status.health);
+                println!("   GPU: {}% util, {:.1}/{:.1}GB VRAM",
+                    status.gpu.util_pct, status.gpu.vram_used_gb, status.gpu.vram_total_gb);
+                assert!(!status.summary.is_empty());
+            }
+            Err(e) => {
+                println!("❌ Failed to fetch: {:#}", e);
+                // Don't fail the test - observer might not be running in CI
+            }
+        }
+    }
+
     #[test]
     fn test_deserialize_observer_status() {
         let json = r#"{
@@ -205,9 +223,9 @@ mod tests {
 
         let status: ObserverStatus = serde_json::from_str(json).unwrap();
         assert_eq!(status.health, "good");
-        assert_eq!(status.gpu.util_pct, 1);
+        assert_eq!(status.gpu.util_pct, 1.0);
         assert_eq!(status.gpu.vram_used_gb, 49.5);
-        assert_eq!(status.gpu.temp_c, 28);
+        assert_eq!(status.gpu.temp_c, 28.0);
         assert_eq!(status.services.len(), 1);
         assert_eq!(status.services[0].name, "orpheus-base");
         assert_eq!(status.sparklines.util.spark, "▁▁▁▁▁▁▁▁▁▁");
