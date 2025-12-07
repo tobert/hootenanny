@@ -102,12 +102,15 @@ async fn spawn_test_server_configured(
             ).unwrap()
         );
 
+        let gpu_monitor = Arc::new(hootenanny::gpu_monitor::GpuMonitor::new());
+
         let event_duality_server = Arc::new(EventDualityServer::new(
             local_models,
             artifact_store,
             job_store,
             audio_graph_db,
             graph_adapter,
+            gpu_monitor,
         ));
 
         let hoot_handler = HootHandler::new(event_duality_server);
@@ -297,12 +300,15 @@ async fn spawn_persistent_server(
             ).unwrap()
         );
 
+        let gpu_monitor = Arc::new(hootenanny::gpu_monitor::GpuMonitor::new());
+
         let event_duality_server = Arc::new(EventDualityServer::new(
             local_models,
             artifact_store,
             job_store,
             audio_graph_db,
             graph_adapter,
+            gpu_monitor,
         ));
 
         let hoot_handler = HootHandler::new(event_duality_server);

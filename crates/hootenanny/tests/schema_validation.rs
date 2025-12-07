@@ -44,12 +44,15 @@ fn create_test_handler() -> HootHandler {
         ).unwrap(),
     );
 
+    let gpu_monitor = Arc::new(hootenanny::gpu_monitor::GpuMonitor::new());
+
     let server = Arc::new(EventDualityServer::new(
         local_models,
         artifact_store,
         Arc::new(job_store),
         audio_graph_db,
         graph_adapter,
+        gpu_monitor,
     ));
 
     HootHandler::new(server)
