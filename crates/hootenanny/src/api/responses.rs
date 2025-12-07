@@ -107,40 +107,67 @@ pub struct JobPollResponse {
     pub gpu: Option<GpuInfo>,
 }
 
+/// GPU and system info from the observer service
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GpuInfo {
+    /// One-line summary (e.g. "GPU idle 1.0% | 49.5/96GB | 28°C")
+    pub summary: String,
+    /// Health status: good, warning, critical
+    pub health: String,
     /// GPU utilization percentage (0-100)
     #[schemars(schema_with = "u8_schema")]
     pub utilization: u8,
-
+    /// GPU status: idle, active, busy
+    pub status: String,
     /// VRAM used in gigabytes
     pub vram_used_gb: f64,
     /// VRAM total in gigabytes
     pub vram_total_gb: f64,
-    /// VRAM usage percentage
-    pub vram_percent: f64,
-    /// Historical context
+    /// GPU temperature in Celsius
+    #[schemars(schema_with = "u8_schema")]
+    pub temp_c: u8,
+    /// Power draw in watts
+    #[schemars(schema_with = "u16_schema")]
+    pub power_w: u16,
+    /// OOM risk assessment: none, low, medium, high
+    pub oom_risk: String,
+    /// Sparkline visualizations (60s history)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub history: Option<GpuHistory>,
+    pub sparklines: Option<GpuSparklines>,
+    /// Running services with VRAM usage
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub services: Option<Vec<GpuServiceInfo>>,
 }
 
+/// Sparkline data for GPU metrics
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct GpuHistory {
-    /// Last 5 utilization samples (10s at 2s poll interval)
-    #[schemars(schema_with = "vec_u8_schema")]
-    pub utilization_10s: Vec<u8>,
-
-    /// 1-minute mean statistics
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mean_1m: Option<GpuMeanStats>,
+pub struct GpuSparklines {
+    /// Utilization sparkline (e.g. "▁▁▂▃▂▁▁▁▁▁")
+    pub util: String,
+    /// Temperature sparkline
+    pub temp: String,
+    /// Power sparkline
+    pub power: String,
+    /// VRAM sparkline
+    pub vram: String,
+    /// Utilization average over window
+    pub util_avg: f64,
+    /// Utilization peak over window
+    pub util_peak: f64,
 }
 
+/// Service info from observer
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct GpuMeanStats {
-    /// Mean GPU utilization over 1 minute
-    pub utilization: f64,
-    /// Mean VRAM usage percentage over 1 minute
-    pub vram_percent: f64,
+pub struct GpuServiceInfo {
+    /// Service name
+    pub name: String,
+    /// Port number
+    #[schemars(schema_with = "u16_schema")]
+    pub port: u16,
+    /// VRAM used by this service (GB)
+    pub vram_gb: f64,
+    /// Model name
+    pub model: String,
 }
 
 /// Response from job_cancel tool

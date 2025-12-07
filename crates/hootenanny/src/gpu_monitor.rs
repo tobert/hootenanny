@@ -87,7 +87,7 @@ pub struct GpuMonitor {
 }
 
 impl GpuMonitor {
-    /// Create a new GPU monitor client
+    /// Create a new GPU monitor client (connects to localhost:2099)
     pub fn new() -> Self {
         Self::with_url("http://127.0.0.1:2099")
     }
@@ -150,142 +150,66 @@ impl Default for GpuMonitor {
     }
 }
 
-// Legacy compatibility types for existing code
-
-/// Legacy GPU stats (for backward compatibility with job_poll responses)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GpuStats {
-    pub utilization_percent: u8,
-    pub vram_used_bytes: u64,
-    pub vram_total_bytes: u64,
-}
-
-impl GpuStats {
-    pub fn vram_used_gb(&self) -> f64 {
-        self.vram_used_bytes as f64 / 1_073_741_824.0
-    }
-
-    pub fn vram_total_gb(&self) -> f64 {
-        self.vram_total_bytes as f64 / 1_073_741_824.0
-    }
-
-    pub fn vram_percent(&self) -> f64 {
-        if self.vram_total_bytes == 0 {
-            0.0
-        } else {
-            (self.vram_used_bytes as f64 / self.vram_total_bytes as f64) * 100.0
-        }
-    }
-}
-
-impl From<&GpuStatus> for GpuStats {
-    fn from(status: &GpuStatus) -> Self {
-        Self {
-            utilization_percent: status.util_pct,
-            vram_used_bytes: (status.vram_used_gb * 1_073_741_824.0) as u64,
-            vram_total_bytes: (status.vram_total_gb * 1_073_741_824.0) as u64,
-        }
-    }
-}
-
-/// Legacy stats with history (for backward compatibility)
-#[derive(Debug, Clone, Serialize)]
-pub struct GpuStatsWithHistory {
-    pub current: Option<GpuStats>,
-    pub utilization_10s: Vec<u8>,
-    pub mean_1m: Option<GpuMeanStats>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct GpuMeanStats {
-    pub utilization: f64,
-    pub vram_percent: f64,
-}
-
-impl GpuMonitor {
-    /// Legacy method: get stats with history (fetches from observer)
-    pub async fn stats_with_history(&self) -> GpuStatsWithHistory {
-        match self.fetch_status().await {
-            Ok(status) => {
-                let current = Some(GpuStats::from(&status.gpu));
-
-                // The observer provides sparklines which encode recent history
-                // We don't have individual samples, but we have the stats
-                let mean_1m = Some(GpuMeanStats {
-                    utilization: status.sparklines.util.avg,
-                    vram_percent: (status.gpu.vram_used_gb / status.gpu.vram_total_gb) * 100.0,
-                });
-
-                GpuStatsWithHistory {
-                    current,
-                    utilization_10s: vec![status.gpu.util_pct], // Just current, sparkline has visual
-                    mean_1m,
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Failed to fetch GPU stats: {:#}", e);
-                GpuStatsWithHistory {
-                    current: None,
-                    utilization_10s: vec![],
-                    mean_1m: None,
-                }
-            }
-        }
-    }
-
-    /// Legacy method: get current stats
-    pub async fn current_stats(&self) -> Option<GpuStats> {
-        self.fetch_status()
-            .await
-            .ok()
-            .map(|s| GpuStats::from(&s.gpu))
-    }
-
-    /// No-op for compatibility (observer handles its own lifecycle)
-    pub fn shutdown(&self) {
-        // Observer service manages itself
-    }
-
-    /// Compatibility: "start" just returns self (no background task needed)
-    pub fn start() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_gpu_stats_conversions() {
-        let stats = GpuStats {
-            utilization_percent: 75,
-            vram_used_bytes: 50_000_000_000,
-            vram_total_bytes: 100_000_000_000,
-        };
+    fn test_deserialize_observer_status() {
+        let json = r#"{
+            "timestamp": "2025-12-07T15:07:57.132840",
+            "summary": "GPU idle 1.0% | 49.5/96GB | 28°C | 10 services 49GB | good",
+            "health": "good",
+            "gpu": {
+                "status": "idle",
+                "vram_used_gb": 49.5,
+                "vram_total_gb": 96,
+                "util_pct": 1,
+                "temp_c": 28,
+                "power_w": 33,
+                "bandwidth_gbs": 57,
+                "bottleneck": "none",
+                "oom_risk": "none"
+            },
+            "system": {
+                "mem_available_gb": 22.2,
+                "mem_total_gb": 31.1,
+                "mem_pressure": "low",
+                "swap_used_gb": 2.6,
+                "load_1m": 0.57
+            },
+            "services": [
+                {
+                    "name": "orpheus-base",
+                    "port": 2000,
+                    "vram_gb": 4.0,
+                    "model": "YuanGZA/Orpheus-GPT2-v0.8",
+                    "type": "midi_generation"
+                }
+            ],
+            "sparklines": {
+                "util": {"min": 0, "max": 100, "current": 1, "peak": 1, "avg": 1, "stddev": 0, "spark": "▁▁▁▁▁▁▁▁▁▁"},
+                "temp": {"min": 20, "max": 85, "current": 28, "peak": 28, "avg": 27.6, "stddev": 0.49, "delta": 0, "spark": "▁▁▁▁▁▁▁▁▁▁"},
+                "power": {"min": 0, "max": 120, "current": 33, "peak": 33.1, "avg": 32.2, "stddev": 0.41, "spark": "▂▂▂▂▂▂▂▂▂▂"},
+                "vram": {"min": 0, "max": 96, "current": 49.5, "peak": 49.5, "avg": 49.5, "stddev": 0, "spark": "▄▄▄▄▄▄▄▄▄▄"},
+                "window_seconds": 60,
+                "sample_count": 60
+            },
+            "trends": {
+                "temp": "stable",
+                "power": "stable",
+                "activity": "steady"
+            },
+            "notes": []
+        }"#;
 
-        assert!((stats.vram_used_gb() - 46.57).abs() < 0.1);
-        assert!((stats.vram_total_gb() - 93.13).abs() < 0.1);
-        assert_eq!(stats.vram_percent(), 50.0);
-    }
-
-    #[test]
-    fn test_gpu_status_to_stats() {
-        let status = GpuStatus {
-            status: "idle".to_string(),
-            vram_used_gb: 49.5,
-            vram_total_gb: 96.0,
-            util_pct: 5,
-            temp_c: 30,
-            power_w: 50,
-            bandwidth_gbs: 100.0,
-            bottleneck: "none".to_string(),
-            oom_risk: "none".to_string(),
-        };
-
-        let stats = GpuStats::from(&status);
-        assert_eq!(stats.utilization_percent, 5);
-        assert!((stats.vram_used_gb() - 49.5).abs() < 0.1);
-        assert!((stats.vram_total_gb() - 96.0).abs() < 0.1);
+        let status: ObserverStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(status.health, "good");
+        assert_eq!(status.gpu.util_pct, 1);
+        assert_eq!(status.gpu.vram_used_gb, 49.5);
+        assert_eq!(status.gpu.temp_c, 28);
+        assert_eq!(status.services.len(), 1);
+        assert_eq!(status.services[0].name, "orpheus-base");
+        assert_eq!(status.sparklines.util.spark, "▁▁▁▁▁▁▁▁▁▁");
     }
 }

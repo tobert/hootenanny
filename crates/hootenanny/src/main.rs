@@ -100,10 +100,10 @@ async fn main() -> Result<()> {
     let job_store = Arc::new(job_system::JobStore::new());
     tracing::info!("   Job store ready (shared across connections)");
 
-    // --- GPU Monitor Initialization ---
-    tracing::info!("🎮 Initializing GPU Monitor...");
-    let gpu_monitor = Arc::new(gpu_monitor::GpuMonitor::start());
-    tracing::info!("   GPU monitor ready (polling every 2s)");
+    // --- GPU Observer Client ---
+    tracing::info!("🎮 Initializing GPU observer client...");
+    let gpu_monitor = Arc::new(gpu_monitor::GpuMonitor::new());
+    tracing::info!("   GPU observer client ready (localhost:2099)");
 
     // --- Audio Graph Initialization ---
     tracing::info!("🎛️  Initializing Audio Graph...");

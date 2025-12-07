@@ -1,4 +1,4 @@
-use crate::api::responses::{JobStatusResponse, JobListResponse, JobSummary, JobCancelResponse, JobPollResponse, JobSleepResponse, GpuInfo, GpuHistory};
+use crate::api::responses::{JobStatusResponse, JobListResponse, JobSummary, JobCancelResponse, JobPollResponse, JobSleepResponse, GpuInfo, GpuSparklines, GpuServiceInfo};
 use crate::api::service::EventDualityServer;
 use crate::api::schema::{GetJobStatusRequest, CancelJobRequest, PollRequest, SleepRequest};
 use crate::job_system::{JobId, JobStatus};
@@ -216,31 +216,38 @@ impl EventDualityServer {
             tracing::Span::current().record("poll.elapsed_ms", elapsed_ms);
             tracing::Span::current().record("poll.reason", reason);
 
-            // Get GPU stats with history
-            let stats_with_history = self.gpu_monitor.stats_with_history().await;
-            let gpu = stats_with_history.current.map(|stats| {
-                let history = if !stats_with_history.utilization_10s.is_empty() {
-                    Some(GpuHistory {
-                        utilization_10s: stats_with_history.utilization_10s.clone(),
-                        mean_1m: stats_with_history.mean_1m.as_ref().map(|m| {
-                            crate::api::responses::GpuMeanStats {
-                                utilization: m.utilization,
-                                vram_percent: m.vram_percent,
-                            }
-                        }),
-                    })
-                } else {
+            // Get GPU stats from observer service
+            let gpu = match self.gpu_monitor.fetch_status().await {
+                Ok(status) => Some(GpuInfo {
+                    summary: status.summary,
+                    health: status.health,
+                    utilization: status.gpu.util_pct,
+                    status: status.gpu.status,
+                    vram_used_gb: status.gpu.vram_used_gb,
+                    vram_total_gb: status.gpu.vram_total_gb,
+                    temp_c: status.gpu.temp_c,
+                    power_w: status.gpu.power_w,
+                    oom_risk: status.gpu.oom_risk,
+                    sparklines: Some(GpuSparklines {
+                        util: status.sparklines.util.spark,
+                        temp: status.sparklines.temp.spark,
+                        power: status.sparklines.power.spark,
+                        vram: status.sparklines.vram.spark,
+                        util_avg: status.sparklines.util.avg,
+                        util_peak: status.sparklines.util.peak,
+                    }),
+                    services: Some(status.services.into_iter().map(|s| GpuServiceInfo {
+                        name: s.name,
+                        port: s.port,
+                        vram_gb: s.vram_gb,
+                        model: s.model,
+                    }).collect()),
+                }),
+                Err(e) => {
+                    tracing::warn!("Failed to fetch GPU status: {:#}", e);
                     None
-                };
-
-                GpuInfo {
-                    utilization: stats.utilization_percent,
-                    vram_used_gb: stats.vram_used_gb(),
-                    vram_total_gb: stats.vram_total_gb(),
-                    vram_percent: stats.vram_percent(),
-                    history,
                 }
-            });
+            };
 
             let response = JobPollResponse {
                 completed: completed.iter().map(|id| id.as_str().to_string()).collect(),
