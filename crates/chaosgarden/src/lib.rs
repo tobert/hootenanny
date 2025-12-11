@@ -35,7 +35,8 @@ pub use external_io::{
 pub use graph::{Edge, Graph, GraphError, GraphSnapshot};
 pub use ipc::{client::GardenClient, server::GardenServer, GardenEndpoints};
 pub use latent::{
-    LatentConfig, LatentError, LatentEvent, LatentManager, MixInSchedule, MixInStrategy,
+    ApprovalDecision, Decision, IOPubPublisher, LatentConfig, LatentError, LatentEvent,
+    LatentManager, MixInSchedule, MixInStrategy, PendingApproval,
 };
 pub use patterns::{
     Bus, BusOutput, Project, Section, SectionHints, Send, Timeline, Track, TrackOutput,
