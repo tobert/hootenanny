@@ -716,7 +716,8 @@ async fn main() -> Result<()> {
     // ========================================================================
     print_header("🎵 Running playback engine...");
 
-    let tempo_map = Arc::new(TempoMap::new(120.0, Default::default()));
+    // Use the timeline's tempo map (includes tempo change at beat 8)
+    let tempo_map = Arc::new(timeline.tempo_map.clone());
     let mut engine = PlaybackEngine::with_resolver(
         sample_rate,
         256,
