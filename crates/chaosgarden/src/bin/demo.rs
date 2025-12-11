@@ -10,6 +10,7 @@
 //! - Render to WAV file
 //!
 //! Run with `--verbose` or `-v` for detailed ASCII visualizations.
+//! Use `--length <beats>` or `-l <beats>` to set render duration (default: 16).
 
 use std::io::Cursor;
 use std::sync::{Arc, RwLock};
@@ -31,6 +32,18 @@ use uuid::Uuid;
 
 fn is_verbose() -> bool {
     std::env::args().any(|a| a == "--verbose" || a == "-v")
+}
+
+fn get_length_beats() -> f64 {
+    let args: Vec<String> = std::env::args().collect();
+    for i in 0..args.len() {
+        if (args[i] == "--length" || args[i] == "-l") && i + 1 < args.len() {
+            if let Ok(beats) = args[i + 1].parse::<f64>() {
+                return beats;
+            }
+        }
+    }
+    16.0 // default
 }
 
 fn print_header(title: &str) {
@@ -250,6 +263,7 @@ fn generate_chord_wav(frequencies: &[f32], duration_secs: f32, sample_rate: u32,
 #[tokio::main]
 async fn main() -> Result<()> {
     let verbose = is_verbose();
+    let length_beats = get_length_beats();
 
     println!("🌿 Chaosgarden Demo {}", if verbose { "(verbose)" } else { "" });
     println!("==================\n");
@@ -636,7 +650,7 @@ async fn main() -> Result<()> {
     print_header("💾 Rendering to WAV file...");
 
     let output_path = "/tmp/chaosgarden_demo.wav";
-    let duration_beats = Beat(16.0);
+    let duration_beats = Beat(length_beats);
 
     let spec = hound::WavSpec {
         channels: 2,
