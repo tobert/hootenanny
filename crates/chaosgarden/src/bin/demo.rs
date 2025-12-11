@@ -256,6 +256,54 @@ fn generate_chord_wav(frequencies: &[f32], duration_secs: f32, sample_rate: u32,
     cursor.into_inner()
 }
 
+/// Generate a punchy kick drum with click transient and pitch sweep
+fn generate_kick_wav(duration_secs: f32, sample_rate: u32) -> Vec<u8> {
+    let num_frames = (sample_rate as f32 * duration_secs) as usize;
+
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+
+    let mut cursor = Cursor::new(Vec::new());
+    {
+        let mut writer = hound::WavWriter::new(&mut cursor, spec).unwrap();
+        let mut phase: f32 = 0.0;
+
+        for i in 0..num_frames {
+            let t = i as f32 / sample_rate as f32;
+
+            // Pitch envelope: exponential drop from 160Hz to 40Hz
+            let pitch_decay = (-t * 45.0).exp();
+            let freq = 40.0 + 120.0 * pitch_decay;
+
+            // Amplitude envelope: fast decay for punch
+            let amp = (-t * 14.0).exp() * 0.85;
+
+            // Click transient (first 3ms) - adds attack definition
+            let click = if t < 0.003 {
+                let click_env = 1.0 - (t / 0.003);
+                (t * 3500.0 * std::f32::consts::TAU).sin() * click_env * 0.4
+            } else {
+                0.0
+            };
+
+            // Main body with phase accumulation for smooth pitch sweep
+            let body = (phase * std::f32::consts::TAU).sin() * amp;
+            phase += freq / sample_rate as f32;
+
+            let sample = (body + click).clamp(-1.0, 1.0);
+            writer.write_sample(sample).unwrap();
+            writer.write_sample(sample).unwrap();
+        }
+        writer.finalize().unwrap();
+    }
+
+    cursor.into_inner()
+}
+
 // ============================================================================
 // MAIN
 // ============================================================================
@@ -290,13 +338,18 @@ async fn main() -> Result<()> {
     let synth_wav = generate_chord_wav(&[523.25, 659.25, 783.99], 4.0, sample_rate, 0.3);
     resolver.insert("generated_synth", synth_wav);
 
+    // Kick drum with punch
+    let kick_wav = generate_kick_wav(0.25, sample_rate);
+    resolver.insert("kick_drum", kick_wav);
+
     if verbose {
         println!("   ✓ bass_drone: 82Hz sine, 4.0s");
         println!("   ✓ lead_melody: 440Hz sine, 4.0s");
         println!("   ✓ pad_chord: C major chord, 4.0s");
         println!("   ✓ generated_synth: C5 major chord (for latent), 4.0s");
+        println!("   ✓ kick_drum: punchy kick with transient, 0.25s");
     } else {
-        println!("   ✓ 4 audio clips generated");
+        println!("   ✓ 5 audio clips generated");
     }
 
     let resolver = Arc::new(resolver);
@@ -307,6 +360,10 @@ async fn main() -> Result<()> {
     print_header("📋 Creating timeline...");
 
     let mut timeline = Timeline::new("Demo Song", 120.0);
+
+    // Add tempo change at beat 8 - speeds up to 130 BPM for the verse
+    let beat8_tick = timeline.tempo_map.beat_to_tick(Beat(8.0));
+    timeline.tempo_map.add_tempo_change(beat8_tick, 130.0);
 
     // Sections with rich hints
     {
@@ -343,9 +400,17 @@ async fn main() -> Result<()> {
     // Tracks
     let latent_region_id: Uuid;
     {
+        let kick = timeline.add_track("Kick");
+        // Four-on-the-floor: kick on every beat
+        for beat in 0..16 {
+            kick.add_audio(Beat(beat as f64), Beat(0.5), "kick_drum");
+        }
+        kick.volume = 0.85;
+    }
+    {
         let bass = timeline.add_track("Bass");
         bass.add_audio(Beat(0.0), Beat(16.0), "bass_drone");
-        bass.volume = 0.8;
+        bass.volume = 0.7; // Lower to make room for kick
     }
     {
         let pad = timeline.add_track("Pad");
@@ -380,7 +445,10 @@ async fn main() -> Result<()> {
     if verbose {
         print_timeline_ascii(&timeline);
     }
-    println!("   ✓ Timeline: {} ({} BPM)", timeline.name, timeline.tempo_map.tempo_at(Tick(0)));
+    let tempo_intro = timeline.tempo_map.tempo_at(Tick(0));
+    let tempo_verse = timeline.tempo_map.tempo_at(timeline.tempo_map.beat_to_tick(Beat(8.0)));
+    println!("   ✓ Timeline: {}", timeline.name);
+    println!("   ✓ Tempo: {} BPM → {} BPM @ beat 8", tempo_intro, tempo_verse);
     println!("   ✓ {} sections, {} tracks, {} buses, {} regions",
         timeline.sections.len(),
         timeline.tracks.len(),
@@ -397,17 +465,20 @@ async fn main() -> Result<()> {
 
     if verbose {
         println!("Audio Graph ({} nodes, {} edges):", graph.node_count(), graph.edge_count());
-        println!("┌──────────┐   ┌──────────┐   ┌──────────┐");
-        println!("│  Bass    │──▶│          │   │  Reverb  │");
-        println!("└──────────┘   │          │   │   Bus    │");
-        println!("┌──────────┐   │  Master  │◀──┤          │");
-        println!("│  Pad     │──▶│          │   └──────────┘");
-        println!("└──────────┘   │          │        ▲");
-        println!("┌──────────┐   └──────────┘        │ sends");
-        println!("│  Lead    │───────────────────────┤");
-        println!("└──────────┘                       │");
-        println!("┌──────────┐                       │");
-        println!("│  Synth   │───────────────────────┘");
+        println!("┌──────────┐");
+        println!("│  Kick    │──▶┐");
+        println!("└──────────┘   │");
+        println!("┌──────────┐   │   ┌──────────┐   ┌──────────┐");
+        println!("│  Bass    │──▶│   │          │   │  Reverb  │");
+        println!("└──────────┘   │   │          │   │   Bus    │");
+        println!("┌──────────┐   ├──▶│  Master  │◀──┤          │");
+        println!("│  Pad     │──▶│   │          │   └──────────┘");
+        println!("└──────────┘   │   │          │        ▲");
+        println!("┌──────────┐   │   └──────────┘        │ sends");
+        println!("│  Lead    │──▶┤───────────────────────┤");
+        println!("└──────────┘   │                       │");
+        println!("┌──────────┐   │                       │");
+        println!("│  Synth   │──▶┘───────────────────────┘");
         println!("└──────────┘");
     }
     println!("   ✓ {} nodes, {} edges", graph.node_count(), graph.edge_count());
