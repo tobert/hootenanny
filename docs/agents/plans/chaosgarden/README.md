@@ -454,6 +454,7 @@ These tasks come AFTER chaosgarden is working. Don't rip up working code until w
 
 | Task | Status | Notes |
 |------|--------|-------|
+| 09a-cas-crate | **next** | Extract CAS to shared crate, env config, NFS-ready |
 | 10-hootenanny-zmq | future | Add ZMQ server to hootenanny, become control plane |
 | 11-hootenanny-workers | future | Worker registry, PUSH/PULL job dispatch |
 | 12-luanette-merge | future | Merge luanette into hootenanny as workflow engine |
