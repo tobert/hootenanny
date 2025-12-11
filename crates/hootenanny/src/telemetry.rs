@@ -153,3 +153,147 @@ pub fn current_span_id() -> Option<String> {
         None
     }
 }
+
+/// Parse a W3C traceparent header and return an OpenTelemetry Context.
+///
+/// Format: `{version}-{trace_id}-{span_id}-{trace_flags}`
+/// Example: `00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01`
+///
+/// Returns None if the traceparent is invalid or missing.
+pub fn parse_traceparent(traceparent: Option<&str>) -> Option<opentelemetry::Context> {
+    use opentelemetry::trace::{SpanContext, SpanId, TraceContextExt, TraceFlags, TraceId, TraceState};
+
+    let tp = traceparent?;
+    let parts: Vec<&str> = tp.split('-').collect();
+
+    if parts.len() != 4 {
+        tracing::warn!("Invalid traceparent format: {}", tp);
+        return None;
+    }
+
+    let version = parts[0];
+    if version != "00" {
+        tracing::warn!("Unsupported traceparent version: {}", version);
+        return None;
+    }
+
+    // Parse trace_id (32 hex chars = 16 bytes)
+    let trace_id = match hex_to_bytes::<16>(parts[1]) {
+        Some(bytes) => TraceId::from_bytes(bytes),
+        None => {
+            tracing::warn!("Invalid trace_id in traceparent: {}", parts[1]);
+            return None;
+        }
+    };
+
+    // Parse span_id (16 hex chars = 8 bytes)
+    let span_id = match hex_to_bytes::<8>(parts[2]) {
+        Some(bytes) => SpanId::from_bytes(bytes),
+        None => {
+            tracing::warn!("Invalid span_id in traceparent: {}", parts[2]);
+            return None;
+        }
+    };
+
+    // Parse trace_flags (2 hex chars = 1 byte)
+    let flags = u8::from_str_radix(parts[3], 16).unwrap_or(0);
+    let trace_flags = TraceFlags::new(flags);
+
+    let span_context = SpanContext::new(
+        trace_id,
+        span_id,
+        trace_flags,
+        true, // is_remote = true since this came from another service
+        TraceState::default(),
+    );
+
+    Some(opentelemetry::Context::current().with_remote_span_context(span_context))
+}
+
+/// Create a tracing span with the given traceparent as the parent context.
+///
+/// Use this to continue a distributed trace from an incoming request.
+#[macro_export]
+macro_rules! span_with_parent {
+    ($traceparent:expr, $name:expr) => {{
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+        let span = tracing::info_span!($name);
+        if let Some(parent_ctx) = $crate::telemetry::parse_traceparent($traceparent) {
+            span.set_parent(parent_ctx);
+        }
+        span
+    }};
+    ($traceparent:expr, $name:expr, $($field:tt)*) => {{
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+        let span = tracing::info_span!($name, $($field)*);
+        if let Some(parent_ctx) = $crate::telemetry::parse_traceparent($traceparent) {
+            span.set_parent(parent_ctx);
+        }
+        span
+    }};
+}
+
+/// Helper to convert hex string to fixed-size byte array
+fn hex_to_bytes<const N: usize>(hex: &str) -> Option<[u8; N]> {
+    if hex.len() != N * 2 {
+        return None;
+    }
+
+    let mut bytes = [0u8; N];
+    for i in 0..N {
+        bytes[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hex_to_bytes() {
+        let result: Option<[u8; 4]> = hex_to_bytes("deadbeef");
+        assert_eq!(result, Some([0xde, 0xad, 0xbe, 0xef]));
+
+        let result: Option<[u8; 4]> = hex_to_bytes("short");
+        assert_eq!(result, None);
+
+        let result: Option<[u8; 4]> = hex_to_bytes("not_hex!");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_traceparent_valid() {
+        let tp = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+        let ctx = parse_traceparent(Some(tp));
+        assert!(ctx.is_some());
+    }
+
+    #[test]
+    fn test_parse_traceparent_none() {
+        let ctx = parse_traceparent(None);
+        assert!(ctx.is_none());
+    }
+
+    #[test]
+    fn test_parse_traceparent_invalid_format() {
+        let ctx = parse_traceparent(Some("not-a-valid-traceparent"));
+        assert!(ctx.is_none());
+    }
+
+    #[test]
+    fn test_parse_traceparent_wrong_version() {
+        let tp = "01-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+        let ctx = parse_traceparent(Some(tp));
+        assert!(ctx.is_none());
+    }
+
+    #[test]
+    fn test_parse_traceparent_invalid_trace_id() {
+        let tp = "00-short-b7ad6b7169203331-01";
+        let ctx = parse_traceparent(Some(tp));
+        assert!(ctx.is_none());
+    }
+}

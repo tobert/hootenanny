@@ -4,7 +4,7 @@
 
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::HeaderMap,
     response::{IntoResponse, Response},
     Json,
 };
@@ -12,9 +12,10 @@ use hooteproto::{Payload, ToolInfo};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, instrument};
 
 use crate::backend::BackendPool;
+use crate::telemetry;
 
 /// Shared application state
 #[derive(Clone)]
@@ -26,6 +27,7 @@ pub struct AppState {
 /// JSON-RPC request wrapper
 #[derive(Debug, Deserialize)]
 pub struct JsonRpcRequest {
+    #[allow(dead_code)]
     pub jsonrpc: String,
     pub id: Option<Value>,
     pub method: String,
@@ -78,16 +80,22 @@ impl JsonRpcResponse {
 }
 
 /// Handle MCP JSON-RPC requests
+#[instrument(skip(state, headers, request), fields(method = %request.method))]
 pub async fn handle_mcp(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<JsonRpcRequest>,
 ) -> Response {
     debug!("MCP request: {} {:?}", request.method, request.params);
 
+    // Extract traceparent from incoming request, or generate one
+    let traceparent = telemetry::extract_traceparent(&headers)
+        .or_else(telemetry::current_traceparent);
+
     let response = match request.method.as_str() {
         "initialize" => handle_initialize(&state, request.id, request.params).await,
         "tools/list" => handle_tools_list(&state, request.id).await,
-        "tools/call" => handle_tools_call(&state, request.id, request.params).await,
+        "tools/call" => handle_tools_call(&state, request.id, request.params, traceparent).await,
         "ping" => JsonRpcResponse::success(request.id, serde_json::json!({})),
         _ => JsonRpcResponse::error(
             request.id,
@@ -119,16 +127,23 @@ async fn handle_tools_list(state: &AppState, id: Option<Value>) -> JsonRpcRespon
     let mut all_tools: Vec<ToolInfo> = Vec::new();
 
     // Collect tools from all connected backends
-    if let Some(ref backend) = state.backends.luanette {
-        match backend.request(Payload::ListTools).await {
-            Ok(Payload::ToolList { tools }) => {
-                all_tools.extend(tools);
-            }
-            Ok(other) => {
-                error!("Luanette returned unexpected response: {:?}", other);
-            }
-            Err(e) => {
-                error!("Failed to list tools from Luanette: {}", e);
+    for (name, backend_opt) in [
+        ("luanette", &state.backends.luanette),
+        ("hootenanny", &state.backends.hootenanny),
+        ("chaosgarden", &state.backends.chaosgarden),
+    ] {
+        if let Some(ref backend) = backend_opt {
+            match backend.request(Payload::ListTools).await {
+                Ok(Payload::ToolList { tools }) => {
+                    debug!("Got {} tools from {}", tools.len(), name);
+                    all_tools.extend(tools);
+                }
+                Ok(other) => {
+                    error!("{} returned unexpected response to ListTools: {:?}", name, other);
+                }
+                Err(e) => {
+                    error!("Failed to list tools from {}: {}", name, e);
+                }
             }
         }
     }
@@ -152,6 +167,7 @@ async fn handle_tools_call(
     state: &AppState,
     id: Option<Value>,
     params: Value,
+    traceparent: Option<String>,
 ) -> JsonRpcResponse {
     let name = params
         .get("name")
@@ -159,7 +175,7 @@ async fn handle_tools_call(
         .unwrap_or("");
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Object(Default::default()));
 
-    info!("Tool call: {} with {:?}", name, arguments);
+    info!(tool = %name, traceparent = ?traceparent, "Tool call");
 
     // Route to backend
     let backend = match state.backends.route_tool(name) {
@@ -181,8 +197,8 @@ async fn handle_tools_call(
         }
     };
 
-    // Send to backend
-    match backend.request(payload).await {
+    // Send to backend with traceparent
+    match backend.request_with_trace(payload, traceparent).await {
         Ok(Payload::Success { result }) => {
             JsonRpcResponse::success(
                 id,
@@ -224,6 +240,7 @@ async fn handle_tools_call(
 /// Convert an MCP tool call to a hooteproto Payload
 fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
     match name {
+        // === Lua Tools (Luanette) ===
         "lua_eval" => Ok(Payload::LuaEval {
             code: args
                 .get("code")
@@ -233,6 +250,15 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
             params: args.get("params").cloned(),
         }),
 
+        "lua_describe" => Ok(Payload::LuaDescribe {
+            script_hash: args
+                .get("script_hash")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'script_hash' argument"))?
+                .to_string(),
+        }),
+
+        // === Job Tools (Luanette) ===
         "job_execute" => Ok(Payload::JobExecute {
             script_hash: args
                 .get("script_hash")
@@ -292,6 +318,7 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
             })
         }
 
+        // === Script Tools (Luanette) ===
         "script_store" => Ok(Payload::ScriptStore {
             content: args
                 .get("content")
@@ -309,6 +336,121 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
             tag: args.get("tag").and_then(|v| v.as_str()).map(String::from),
             creator: args.get("creator").and_then(|v| v.as_str()).map(String::from),
             vibe: args.get("vibe").and_then(|v| v.as_str()).map(String::from),
+        }),
+
+        // === CAS Tools (Hootenanny) ===
+        "cas_store" => {
+            use base64::{engine::general_purpose::STANDARD, Engine};
+            let data_str = args
+                .get("data")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'data' argument (base64)"))?;
+            let data = STANDARD
+                .decode(data_str)
+                .map_err(|e| anyhow::anyhow!("Invalid base64 data: {}", e))?;
+            Ok(Payload::CasStore {
+                data,
+                mime_type: args.get("mime_type").and_then(|v| v.as_str()).map(String::from),
+            })
+        }
+
+        "cas_inspect" => Ok(Payload::CasInspect {
+            hash: args
+                .get("hash")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'hash' argument"))?
+                .to_string(),
+        }),
+
+        "cas_get" => Ok(Payload::CasGet {
+            hash: args
+                .get("hash")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'hash' argument"))?
+                .to_string(),
+        }),
+
+        // === Artifact Tools (Hootenanny) ===
+        "artifact_get" => Ok(Payload::ArtifactGet {
+            id: args
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'id' argument"))?
+                .to_string(),
+        }),
+
+        "artifact_list" => Ok(Payload::ArtifactList {
+            tag: args.get("tag").and_then(|v| v.as_str()).map(String::from),
+            creator: args.get("creator").and_then(|v| v.as_str()).map(String::from),
+        }),
+
+        "artifact_create" => Ok(Payload::ArtifactCreate {
+            cas_hash: args
+                .get("cas_hash")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'cas_hash' argument"))?
+                .to_string(),
+            tags: args
+                .get("tags")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default(),
+            creator: args.get("creator").and_then(|v| v.as_str()).map(String::from),
+            metadata: args.get("metadata").cloned().unwrap_or(Value::Object(Default::default())),
+        }),
+
+        // === Graph Tools (Hootenanny) ===
+        "graph_query" => Ok(Payload::GraphQuery {
+            query: args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'query' argument"))?
+                .to_string(),
+            variables: args.get("variables").cloned().unwrap_or(Value::Object(Default::default())),
+        }),
+
+        "graph_bind" => Ok(Payload::GraphBind {
+            identity: args
+                .get("identity")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'identity' argument"))?
+                .to_string(),
+            hints: args
+                .get("hints")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default(),
+        }),
+
+        // === Transport Tools (Chaosgarden) ===
+        "transport_play" => Ok(Payload::TransportPlay),
+        "transport_stop" => Ok(Payload::TransportStop),
+        "transport_status" => Ok(Payload::TransportStatus),
+
+        "transport_seek" => Ok(Payload::TransportSeek {
+            position_beats: args
+                .get("position_beats")
+                .and_then(|v| v.as_f64())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'position_beats' argument"))?,
+        }),
+
+        // === Timeline Tools (Chaosgarden) ===
+        "timeline_query" => Ok(Payload::TimelineQuery {
+            from_beats: args.get("from_beats").and_then(|v| v.as_f64()),
+            to_beats: args.get("to_beats").and_then(|v| v.as_f64()),
+        }),
+
+        "timeline_add_marker" => Ok(Payload::TimelineAddMarker {
+            position_beats: args
+                .get("position_beats")
+                .and_then(|v| v.as_f64())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'position_beats' argument"))?,
+            marker_type: args
+                .get("marker_type")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'marker_type' argument"))?
+                .to_string(),
+            metadata: args.get("metadata").cloned().unwrap_or(Value::Object(Default::default())),
         }),
 
         _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),

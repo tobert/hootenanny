@@ -14,6 +14,7 @@ mod client;
 mod commands;
 mod mcp;
 mod serve;
+mod telemetry;
 
 #[derive(Parser)]
 #[command(name = "holler")]
@@ -75,7 +76,7 @@ enum Commands {
         action: JobAction,
     },
 
-    /// Run the MCP gateway server (not yet implemented)
+    /// Run the MCP gateway server
     Serve {
         /// HTTP port to bind
         #[arg(short, long, default_value = "8080")]
@@ -92,6 +93,10 @@ enum Commands {
         /// Chaosgarden ZMQ endpoint
         #[arg(long)]
         chaosgarden: Option<String>,
+
+        /// OTLP gRPC endpoint for OpenTelemetry (e.g., "localhost:4317")
+        #[arg(long, default_value = "localhost:4317")]
+        otlp_endpoint: String,
     },
 }
 
@@ -135,14 +140,19 @@ enum JobAction {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
-        )
-        .init();
-
     let cli = Cli::parse();
+
+    // For serve command, use full OTEL; for CLI commands, use simple tracing
+    let use_otel = matches!(cli.command, Commands::Serve { .. });
+
+    if !use_otel {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive(tracing::Level::INFO.into()),
+            )
+            .init();
+    }
 
     match cli.command {
         Commands::Ping { endpoint, timeout } => {
@@ -183,7 +193,11 @@ async fn main() -> Result<()> {
             luanette,
             hootenanny,
             chaosgarden,
+            otlp_endpoint,
         } => {
+            // Initialize OTEL for serve mode
+            telemetry::init(&otlp_endpoint)?;
+
             serve::run(serve::ServeConfig {
                 port,
                 luanette,

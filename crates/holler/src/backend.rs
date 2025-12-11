@@ -43,7 +43,19 @@ impl Backend {
 
     /// Send a request and wait for response
     pub async fn request(&self, payload: Payload) -> Result<Payload> {
-        let envelope = Envelope::new(payload);
+        self.request_with_trace(payload, None).await
+    }
+
+    /// Send a request with traceparent and wait for response
+    pub async fn request_with_trace(
+        &self,
+        payload: Payload,
+        traceparent: Option<String>,
+    ) -> Result<Payload> {
+        let mut envelope = Envelope::new(payload);
+        if let Some(tp) = traceparent {
+            envelope = envelope.with_traceparent(tp);
+        }
         let json = serde_json::to_string(&envelope)?;
 
         debug!("Sending to {}: {}", self.config.name, json);
@@ -77,6 +89,7 @@ impl Backend {
     }
 
     /// Check if backend is healthy with a ping
+    #[allow(dead_code)]
     pub async fn health_check(&self) -> bool {
         match self.request(Payload::Ping).await {
             Ok(Payload::Pong { .. }) => true,
@@ -172,6 +185,7 @@ impl BackendPool {
     }
 
     /// Get health status of all backends
+    #[allow(dead_code)]
     pub async fn health(&self) -> serde_json::Value {
         let luanette_ok = if let Some(ref b) = self.luanette {
             b.health_check().await

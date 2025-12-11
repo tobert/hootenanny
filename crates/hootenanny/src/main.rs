@@ -8,6 +8,7 @@ mod persistence;
 mod telemetry;
 mod types;
 mod web;
+mod zmq;
 
 use anyhow::{Context, Result};
 use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
@@ -16,7 +17,7 @@ use api::composite::CompositeHandler;
 use api::handler::HootHandler;
 use api::service::EventDualityServer;
 use mcp_tools::local_models::LocalModels;
-use cas::Cas;
+use cas::FileStore;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -49,6 +50,14 @@ struct Cli {
     /// OTLP gRPC endpoint for OpenTelemetry (e.g., "127.0.0.1:35991")
     #[arg(long, default_value = "127.0.0.1:35991")]
     otlp_endpoint: String,
+
+    /// Connect to chaosgarden daemon at this endpoint (e.g., "tcp://127.0.0.1:5555" or "local" for IPC)
+    #[arg(long)]
+    chaosgarden: Option<String>,
+
+    /// Bind a hooteproto ZMQ ROUTER for holler gateway (e.g., "tcp://0.0.0.0:5580")
+    #[arg(long)]
+    zmq_bind: Option<String>,
 }
 
 #[tokio::main]
@@ -75,7 +84,7 @@ async fn main() -> Result<()> {
     tracing::info!("📦 Initializing Content Addressable Storage (CAS)...");
     let cas_dir = state_dir.join("cas");
     std::fs::create_dir_all(&cas_dir)?;
-    let cas = Cas::new(&cas_dir)?;
+    let cas = FileStore::at_path(&cas_dir)?;
     tracing::info!("   CAS ready at: {}", cas_dir.display());
 
     // --- Local Models Initialization ---
@@ -122,7 +131,65 @@ async fn main() -> Result<()> {
     );
     tracing::info!("   Audio graph ready (in-memory, with Trustfall adapter + artifacts)");
 
+    // --- Chaosgarden Connection (optional) ---
+    let garden_manager: Option<Arc<zmq::GardenManager>> = if let Some(endpoint) = &cli.chaosgarden {
+        tracing::info!("🌱 Connecting to chaosgarden...");
+        let manager = if endpoint == "local" {
+            zmq::GardenManager::local()
+        } else if endpoint.starts_with("tcp://") {
+            // Parse tcp://host:port
+            let parts: Vec<&str> = endpoint.trim_start_matches("tcp://").split(':').collect();
+            if parts.len() == 2 {
+                let host = parts[0];
+                let port: u16 = parts[1].parse().context("Invalid port in chaosgarden endpoint")?;
+                zmq::GardenManager::tcp(host, port)
+            } else {
+                anyhow::bail!("Invalid TCP endpoint format, expected tcp://host:port");
+            }
+        } else {
+            anyhow::bail!("Invalid chaosgarden endpoint, use 'local' or 'tcp://host:port'");
+        };
+
+        match manager.connect().await {
+            Ok(()) => {
+                tracing::info!("   Connected to chaosgarden!");
+                // Optionally start event listener
+                if let Err(e) = manager.start_event_listener().await {
+                    tracing::warn!("   Failed to start event listener: {}", e);
+                }
+                Some(Arc::new(manager))
+            }
+            Err(e) => {
+                tracing::warn!("   Failed to connect to chaosgarden: {}", e);
+                tracing::warn!("   Continuing without chaosgarden connection");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let addr = format!("0.0.0.0:{}", cli.port);
+
+    // --- Hooteproto ZMQ Server (optional, for holler gateway) ---
+    let zmq_shutdown_tx: Option<tokio::sync::broadcast::Sender<()>> = if let Some(ref zmq_bind) = cli.zmq_bind {
+        tracing::info!("📡 Starting hooteproto ZMQ server...");
+        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
+        let zmq_server = zmq::HooteprotoServer::new(
+            zmq_bind.clone(),
+            Arc::new(cas.clone()),
+            artifact_store.clone(),
+        );
+        tokio::spawn(async move {
+            if let Err(e) = zmq_server.run(shutdown_rx).await {
+                tracing::error!("ZMQ server error: {}", e);
+            }
+        });
+        tracing::info!("   ZMQ ROUTER: {}", zmq_bind);
+        Some(shutdown_tx)
+    } else {
+        None
+    };
 
     tracing::info!("🎵 Event Duality Server starting on http://{}", addr);
     tracing::info!("   MCP Streamable HTTP: POST http://{}/mcp (recommended)", addr);
@@ -132,6 +199,9 @@ async fn main() -> Result<()> {
     tracing::info!("   Artifact Meta: GET http://{}/artifact/:id/meta", addr);
     tracing::info!("   Artifacts List: GET http://{}/artifacts", addr);
     tracing::info!("   Health: GET http://{}/health", addr);
+    if cli.zmq_bind.is_some() {
+        tracing::info!("   ZMQ hooteproto: {} (for holler)", cli.zmq_bind.as_ref().unwrap());
+    }
 
     // Create the EventDualityServer
     let event_duality_server = Arc::new(EventDualityServer::new(
@@ -141,7 +211,7 @@ async fn main() -> Result<()> {
         audio_graph_db.clone(),
         graph_adapter.clone(),
         gpu_monitor.clone(),
-    ));
+    ).with_garden(garden_manager.clone()));
 
     // --- LLM Agent Bridge Initialization ---
     tracing::info!("🤖 Initializing LLM Agent Bridge...");
@@ -336,6 +406,11 @@ async fn main() -> Result<()> {
             tracing::info!("Received SIGTERM, shutting down gracefully...");
             shutdown_token.cancel();
         }
+    }
+
+    // Signal ZMQ server shutdown if running
+    if let Some(zmq_shutdown) = zmq_shutdown_tx {
+        let _ = zmq_shutdown.send(());
     }
 
     tracing::info!("Shutdown complete");

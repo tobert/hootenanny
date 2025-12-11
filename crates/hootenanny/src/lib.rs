@@ -12,3 +12,4 @@ pub mod persistence;
 pub mod telemetry;
 pub mod types;
 pub mod web;
+pub mod zmq;
