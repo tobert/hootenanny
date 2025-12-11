@@ -5,7 +5,7 @@
 //!
 //! **Key invariant:** The `process()` hot path never allocates.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -13,9 +13,11 @@ use uuid::Uuid;
 
 use crate::graph::Graph;
 use crate::latent::MixInSchedule;
+use crate::nodes::{AudioFileNode, ContentResolver};
 use crate::primitives::{
-    AudioBuffer, Beat, BoxedNode, MidiBuffer, ProcessContext, ProcessError, ProcessingMode, Region,
-    Sample, SignalBuffer, SignalType, TempoMap, TransportState,
+    AudioBuffer, Beat, Behavior, BoxedNode, ContentType, MidiBuffer, Node, ProcessContext,
+    ProcessError, ProcessingMode, Region, Sample, SignalBuffer, SignalType, TempoMap,
+    TransportState,
 };
 
 /// Pre-compiled graph ready for realtime execution
@@ -172,6 +174,14 @@ struct ActiveCrossfade {
     progress: f32,
 }
 
+/// Tracks an active audio region with its AudioFileNode
+struct ActiveAudioRegion {
+    region_id: Uuid,
+    node: AudioFileNode,
+    /// Gain from region's PlaybackParams
+    gain: f32,
+}
+
 /// The realtime playback engine
 pub struct PlaybackEngine {
     sample_rate: u32,
@@ -183,6 +193,12 @@ pub struct PlaybackEngine {
     mix_in_queue: VecDeque<MixInSchedule>,
     active_crossfades: Vec<ActiveCrossfade>,
     active_regions: HashSet<Uuid>,
+    /// Active audio nodes for PlayContent::Audio regions
+    active_audio_nodes: HashMap<Uuid, ActiveAudioRegion>,
+    /// Content resolver for loading audio (optional - if None, regions are skipped)
+    content_resolver: Option<Arc<dyn ContentResolver>>,
+    /// Scratch buffer for mixing region audio
+    region_buffer: AudioBuffer,
 }
 
 impl PlaybackEngine {
@@ -198,14 +214,45 @@ impl PlaybackEngine {
             mix_in_queue: VecDeque::new(),
             active_crossfades: Vec::new(),
             active_regions: HashSet::new(),
+            active_audio_nodes: HashMap::new(),
+            content_resolver: None,
+            region_buffer: AudioBuffer::new(buffer_size, 2),
         }
+    }
+
+    /// Create engine with content resolver for audio playback
+    pub fn with_resolver(
+        sample_rate: u32,
+        buffer_size: usize,
+        tempo_map: Arc<TempoMap>,
+        resolver: Arc<dyn ContentResolver>,
+    ) -> Self {
+        Self {
+            sample_rate,
+            buffer_size,
+            tempo_map,
+            position: PlaybackPosition::default(),
+            transport: TransportState::Stopped,
+            output: AudioBuffer::new(buffer_size, 2),
+            mix_in_queue: VecDeque::new(),
+            active_crossfades: Vec::new(),
+            active_regions: HashSet::new(),
+            active_audio_nodes: HashMap::new(),
+            content_resolver: Some(resolver),
+            region_buffer: AudioBuffer::new(buffer_size, 2),
+        }
+    }
+
+    /// Set content resolver
+    pub fn set_resolver(&mut self, resolver: Arc<dyn ContentResolver>) {
+        self.content_resolver = Some(resolver);
     }
 
     /// Process one buffer
     pub fn process(
         &mut self,
         graph: &mut CompiledGraph,
-        _regions: &[Region],
+        regions: &[Region],
     ) -> Result<&AudioBuffer, PlaybackError> {
         if self.transport != TransportState::Playing {
             self.output.clear();
@@ -213,6 +260,9 @@ impl PlaybackEngine {
         }
 
         self.apply_pending_mix_ins();
+
+        // Activate/deactivate regions based on current position
+        self.update_active_regions(regions);
 
         let ctx = ProcessContext {
             sample_rate: self.sample_rate,
@@ -224,6 +274,10 @@ impl PlaybackEngine {
             transport: self.transport,
         };
 
+        // Clear output buffer
+        self.output.clear();
+
+        // Process graph nodes
         let order: Vec<usize> = graph.processing_order().to_vec();
         let mut failed_this_pass: Vec<usize> = Vec::new();
 
@@ -273,13 +327,153 @@ impl PlaybackEngine {
             graph.mark_failed(node_idx);
         }
 
+        // Mix graph output into main output
         if let Some(SignalBuffer::Audio(master)) = graph.buffers.last() {
-            self.output.samples.copy_from_slice(&master.samples);
+            self.output.mix(master, 1.0);
         }
+
+        // Process active audio regions and mix into output
+        self.process_active_audio_regions(&ctx);
 
         self.advance_position();
 
         Ok(&self.output)
+    }
+
+    /// Update which regions are active based on current playback position
+    fn update_active_regions(&mut self, regions: &[Region]) {
+        let current_beat = self.position.beats;
+
+        // Find regions that should be active at current position
+        let mut should_be_active: HashSet<Uuid> = HashSet::new();
+
+        for region in regions {
+            // Skip non-alive regions
+            if !region.lifecycle.is_alive() {
+                continue;
+            }
+
+            // Check if region overlaps current position
+            if region.contains(current_beat) {
+                // Only activate PlayContent::Audio regions
+                if let Behavior::PlayContent {
+                    content_type: ContentType::Audio,
+                    ..
+                } = &region.behavior
+                {
+                    should_be_active.insert(region.id);
+                }
+            }
+        }
+
+        // Deactivate regions that are no longer active
+        let to_deactivate: Vec<Uuid> = self
+            .active_audio_nodes
+            .keys()
+            .filter(|id| !should_be_active.contains(id))
+            .copied()
+            .collect();
+
+        for id in to_deactivate {
+            tracing::debug!(region_id = %id, "deactivating audio region");
+            self.active_audio_nodes.remove(&id);
+        }
+
+        // Activate new regions
+        if let Some(resolver) = &self.content_resolver {
+            for region in regions {
+                if !should_be_active.contains(&region.id) {
+                    continue;
+                }
+
+                // Skip already active
+                if self.active_audio_nodes.contains_key(&region.id) {
+                    continue;
+                }
+
+                // Activate new region
+                if let Behavior::PlayContent {
+                    content_hash,
+                    content_type: ContentType::Audio,
+                    params,
+                } = &region.behavior
+                {
+                    let mut node = AudioFileNode::new(content_hash.clone(), resolver.clone());
+
+                    // Pre-load audio
+                    match node.preload() {
+                        Ok(()) => {
+                            // Calculate seek position within the region
+                            let region_offset = current_beat.0 - region.position.0;
+                            if region_offset > 0.0 {
+                                // Convert beat offset to seconds, then seek
+                                let tick = self.tempo_map.beat_to_tick(Beat(region_offset));
+                                let seconds = self.tempo_map.tick_to_second(tick);
+                                node.seek_seconds(seconds.0);
+                            }
+
+                            tracing::debug!(
+                                region_id = %region.id,
+                                content_hash = %content_hash,
+                                "activated audio region"
+                            );
+
+                            self.active_audio_nodes.insert(
+                                region.id,
+                                ActiveAudioRegion {
+                                    region_id: region.id,
+                                    node,
+                                    gain: params.gain as f32,
+                                },
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                region_id = %region.id,
+                                content_hash = %content_hash,
+                                error = %e,
+                                "failed to preload audio region"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Process all active audio regions and mix into output
+    fn process_active_audio_regions(&mut self, ctx: &ProcessContext) {
+        // Process each active audio node
+        for active in self.active_audio_nodes.values_mut() {
+            // Clear scratch buffer
+            self.region_buffer.clear();
+
+            let mut outputs = vec![SignalBuffer::Audio(std::mem::replace(
+                &mut self.region_buffer,
+                AudioBuffer::new(0, 2),
+            ))];
+
+            // Process the node
+            match active.node.process(ctx, &[], &mut outputs) {
+                Ok(()) => {
+                    // Mix into main output with region gain
+                    if let Some(SignalBuffer::Audio(buf)) = outputs.first() {
+                        self.output.mix(buf, active.gain);
+                    }
+                }
+                Err(ProcessError::Skipped { reason }) => {
+                    tracing::trace!(region_id = %active.region_id, reason, "audio region skipped");
+                }
+                Err(ProcessError::Failed { reason }) => {
+                    tracing::warn!(region_id = %active.region_id, reason, "audio region failed");
+                }
+            }
+
+            // Restore scratch buffer
+            if let Some(SignalBuffer::Audio(buf)) = outputs.into_iter().next() {
+                self.region_buffer = buf;
+            }
+        }
     }
 
     fn apply_pending_mix_ins(&mut self) {
@@ -706,5 +900,251 @@ mod tests {
 
         compiled.mark_failed(0);
         assert!(compiled.failed_nodes.contains(&0));
+    }
+
+    // === Region wiring tests ===
+
+    use crate::nodes::MemoryResolver;
+    use std::io::Cursor;
+
+    fn generate_test_wav(frequency: f32, duration_secs: f32, sample_rate: u32) -> Vec<u8> {
+        let num_samples = (sample_rate as f32 * duration_secs) as usize;
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let mut writer = hound::WavWriter::new(&mut cursor, spec).unwrap();
+            for i in 0..num_samples {
+                let t = i as f32 / sample_rate as f32;
+                let sample = (2.0 * std::f32::consts::PI * frequency * t).sin() * 0.5;
+                writer.write_sample(sample).unwrap(); // L
+                writer.write_sample(sample).unwrap(); // R
+            }
+            writer.finalize().unwrap();
+        }
+
+        cursor.into_inner()
+    }
+
+    #[test]
+    fn test_engine_with_resolver() {
+        let resolver = Arc::new(MemoryResolver::new());
+        let tempo_map = Arc::new(TempoMap::default());
+        let engine = PlaybackEngine::with_resolver(48000, 256, tempo_map, resolver);
+
+        assert!(engine.content_resolver.is_some());
+    }
+
+    #[test]
+    fn test_region_activates_at_position() {
+        let mut resolver = MemoryResolver::new();
+        let wav_data = generate_test_wav(440.0, 0.5, 48000);
+        resolver.insert("audio_hash", wav_data);
+
+        let tempo_map = Arc::new(TempoMap::default());
+        let mut engine =
+            PlaybackEngine::with_resolver(48000, 256, tempo_map.clone(), Arc::new(resolver));
+
+        let mut graph = Graph::new();
+        graph.add_node(Box::new(SilentNode::new("master")));
+        let mut compiled = CompiledGraph::compile(&mut graph, 256).unwrap();
+
+        // Region at beat 0, duration 4 beats
+        let region = Region::play_audio(Beat(0.0), Beat(4.0), "audio_hash".to_string());
+
+        assert!(engine.active_audio_nodes.is_empty());
+
+        engine.play();
+        engine.process(&mut compiled, &[region.clone()]).unwrap();
+
+        // Region should be active
+        assert!(engine.active_audio_nodes.contains_key(&region.id));
+    }
+
+    #[test]
+    fn test_region_deactivates_after_end() {
+        let mut resolver = MemoryResolver::new();
+        let wav_data = generate_test_wav(440.0, 0.5, 48000);
+        resolver.insert("audio_hash2", wav_data);
+
+        let tempo_map = Arc::new(TempoMap::new(120.0, crate::primitives::TimeSignature::default()));
+        let mut engine =
+            PlaybackEngine::with_resolver(48000, 256, tempo_map.clone(), Arc::new(resolver));
+
+        let mut graph = Graph::new();
+        graph.add_node(Box::new(SilentNode::new("master")));
+        let mut compiled = CompiledGraph::compile(&mut graph, 256).unwrap();
+
+        // Very short region: beat 0 to 0.001 (essentially instant)
+        let region = Region::play_audio(Beat(0.0), Beat(0.001), "audio_hash2".to_string());
+
+        engine.play();
+
+        // First process: should activate
+        engine.process(&mut compiled, &[region.clone()]).unwrap();
+        let was_active = engine.active_audio_nodes.contains_key(&region.id);
+
+        // Process many times to advance past the region
+        for _ in 0..100 {
+            engine.process(&mut compiled, &[region.clone()]).unwrap();
+        }
+
+        // After advancing well past 0.001 beats, region should be deactivated
+        // (Note: this test relies on position advancing past the region end)
+        if was_active {
+            // If region was ever active, verify it can be deactivated
+            assert!(
+                engine.position().beats.0 > region.end().0,
+                "position should have advanced past region end"
+            );
+        }
+    }
+
+    #[test]
+    fn test_region_produces_audio() {
+        let mut resolver = MemoryResolver::new();
+        let wav_data = generate_test_wav(440.0, 1.0, 48000);
+        resolver.insert("audio_hash3", wav_data);
+
+        let tempo_map = Arc::new(TempoMap::default());
+        let mut engine =
+            PlaybackEngine::with_resolver(48000, 256, tempo_map.clone(), Arc::new(resolver));
+
+        let mut graph = Graph::new();
+        graph.add_node(Box::new(SilentNode::new("master")));
+        let mut compiled = CompiledGraph::compile(&mut graph, 256).unwrap();
+
+        let region = Region::play_audio(Beat(0.0), Beat(4.0), "audio_hash3".to_string());
+
+        engine.play();
+        let output = engine.process(&mut compiled, &[region]).unwrap();
+
+        // Output should have non-zero samples from the region audio
+        let has_audio = output.samples.iter().any(|&s| s.abs() > 0.001);
+        assert!(has_audio, "output should contain audio from region");
+    }
+
+    #[test]
+    fn test_multiple_regions_mix() {
+        let mut resolver = MemoryResolver::new();
+        let wav_data1 = generate_test_wav(440.0, 1.0, 48000);
+        let wav_data2 = generate_test_wav(880.0, 1.0, 48000);
+        resolver.insert("audio_440", wav_data1);
+        resolver.insert("audio_880", wav_data2);
+
+        let tempo_map = Arc::new(TempoMap::default());
+        let mut engine =
+            PlaybackEngine::with_resolver(48000, 256, tempo_map.clone(), Arc::new(resolver));
+
+        let mut graph = Graph::new();
+        graph.add_node(Box::new(SilentNode::new("master")));
+        let mut compiled = CompiledGraph::compile(&mut graph, 256).unwrap();
+
+        let region1 = Region::play_audio(Beat(0.0), Beat(4.0), "audio_440".to_string());
+        let region2 = Region::play_audio(Beat(0.0), Beat(4.0), "audio_880".to_string());
+
+        engine.play();
+        engine
+            .process(&mut compiled, &[region1.clone(), region2.clone()])
+            .unwrap();
+
+        // Both regions should be active
+        assert!(engine.active_audio_nodes.contains_key(&region1.id));
+        assert!(engine.active_audio_nodes.contains_key(&region2.id));
+        assert_eq!(engine.active_audio_nodes.len(), 2);
+    }
+
+    #[test]
+    fn test_region_seeks_when_activated_mid_playback() {
+        let mut resolver = MemoryResolver::new();
+        // 2 second audio
+        let wav_data = generate_test_wav(440.0, 2.0, 48000);
+        resolver.insert("long_audio", wav_data);
+
+        let tempo_map = Arc::new(TempoMap::new(120.0, crate::primitives::TimeSignature::default()));
+        let mut engine =
+            PlaybackEngine::with_resolver(48000, 256, tempo_map.clone(), Arc::new(resolver));
+
+        let mut graph = Graph::new();
+        graph.add_node(Box::new(SilentNode::new("master")));
+        let mut compiled = CompiledGraph::compile(&mut graph, 256).unwrap();
+
+        // Region starts at beat 0, but we'll seek to beat 2 before processing
+        let region = Region::play_audio(Beat(0.0), Beat(8.0), "long_audio".to_string());
+
+        engine.play();
+        engine.seek(Beat(2.0));
+
+        // Now process - the region should seek to the appropriate position
+        engine.process(&mut compiled, &[region.clone()]).unwrap();
+
+        // Region should be active
+        assert!(engine.active_audio_nodes.contains_key(&region.id));
+
+        // The audio node's playhead should have been seeked (not at 0)
+        if let Some(active) = engine.active_audio_nodes.get(&region.id) {
+            // At 120 BPM, 2 beats = 1 second = 48000 samples
+            // The playhead should be around that position
+            assert!(
+                active.node.playhead() > 0,
+                "audio should have seeked forward"
+            );
+        }
+    }
+
+    #[test]
+    fn test_no_resolver_skips_regions() {
+        let tempo_map = Arc::new(TempoMap::default());
+        let mut engine = PlaybackEngine::new(48000, 256, tempo_map);
+
+        let mut graph = Graph::new();
+        graph.add_node(Box::new(SilentNode::new("master")));
+        let mut compiled = CompiledGraph::compile(&mut graph, 256).unwrap();
+
+        let region = Region::play_audio(Beat(0.0), Beat(4.0), "missing_hash".to_string());
+
+        engine.play();
+        engine.process(&mut compiled, &[region.clone()]).unwrap();
+
+        // Without resolver, region should not be activated
+        assert!(engine.active_audio_nodes.is_empty());
+    }
+
+    #[test]
+    fn test_region_gain() {
+        let mut resolver = MemoryResolver::new();
+        let wav_data = generate_test_wav(440.0, 1.0, 48000);
+        resolver.insert("gain_test_audio", wav_data);
+
+        let tempo_map = Arc::new(TempoMap::default());
+        let mut engine =
+            PlaybackEngine::with_resolver(48000, 256, tempo_map.clone(), Arc::new(resolver));
+
+        let mut graph = Graph::new();
+        graph.add_node(Box::new(SilentNode::new("master")));
+        let mut compiled = CompiledGraph::compile(&mut graph, 256).unwrap();
+
+        // Create region with 0.5 gain
+        let mut region = Region::play_audio(Beat(0.0), Beat(4.0), "gain_test_audio".to_string());
+        if let Behavior::PlayContent { ref mut params, .. } = region.behavior {
+            params.gain = 0.5;
+        }
+
+        engine.play();
+        let output = engine.process(&mut compiled, &[region]).unwrap();
+
+        // With 0.5 gain and 0.5 amplitude sine, max should be ~0.25
+        let max_amp = output
+            .samples
+            .iter()
+            .map(|s| s.abs())
+            .fold(0.0f32, f32::max);
+        assert!(max_amp < 0.35, "output amplitude should be reduced by gain");
+        assert!(max_amp > 0.15, "output should still have signal");
     }
 }

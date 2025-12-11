@@ -17,6 +17,7 @@ pub mod external_io;
 pub mod graph;
 pub mod ipc;
 pub mod latent;
+pub mod nodes;
 pub mod patterns;
 pub mod playback;
 pub mod primitives;
@@ -38,6 +39,10 @@ pub use latent::{
 };
 pub use patterns::{
     Bus, BusOutput, Project, Section, SectionHints, Send, Timeline, Track, TrackOutput,
+};
+pub use nodes::{
+    decode_audio, decode_wav, AudioFileNode, ContentResolver, DecodedAudio, FileCasClient,
+    MemoryResolver,
 };
 pub use playback::{CompiledGraph, PlaybackEngine, PlaybackPosition};
 pub use primitives::*;

@@ -165,20 +165,25 @@ crates/chaosgarden/
 | 06-query | ✅ complete | ChaosgardenAdapter, 14 query tests passing |
 | 07-patterns | ✅ complete | Track, Bus, Section, Timeline, Project — 22 tests passing |
 | 08-capabilities | ✅ complete | CapabilityRegistry, Participant, identity matching — 23 tests passing |
+| 09-audio-integration | ✅ complete | AudioFileNode + CAS + region wiring — 21 tests passing |
 
 ## Current Status
 
-- **Completed**: Core modules (00-08) 🎉
+- **Completed**: Core modules (00-08) + Audio Integration (09) 🎉
 - **In Progress**: None
-- **Next Up**: 09-audio-integration (symphonia + rustysynth wiring)
+- **Next Up**: 10-hootenanny-zmq (add ZMQ server to control plane)
 - **Blocked**: None
 
-### Next Phase: Audio Integration
+### Audio Integration Complete (09)
 
-See `09-audio-integration.md` for the plan to enable actual audio playback:
-1. **AudioFileNode** — symphonia-based WAV/MP3/FLAC decoding
-2. **CAS Client** — Direct file access to content store
-3. **Playback Wiring** — Regions → AudioFileNodes in PlaybackEngine
+All phases complete. Regions with `PlayContent::Audio` behavior now automatically activate
+`AudioFileNode` instances when playback enters their time range.
+
+| Subtask | Status | Notes |
+|---------|--------|-------|
+| 09a AudioFileNode | ✅ done | symphonia decode, WAV always, MP3/FLAC via feature flag |
+| 09b CAS integration | ✅ done | ContentResolver trait, FileCasClient, MemoryResolver |
+| 09c Playback wiring | ✅ done | Region activate/deactivate, seek, gain, mixing |
 
 ### 00-ipc Acceptance Criteria (2025-12-11)
 
@@ -401,7 +406,8 @@ We'll know we've succeeded when:
 | 2025-12-11 | 06-query implementation complete | ChaosgardenAdapter Trustfall adapter — 14 tests passing |
 | 2025-12-11 | 07-patterns implementation complete | Track, Bus, Section, Timeline, Project — 22 tests passing |
 | 2025-12-11 | 08-capabilities implementation complete | CapabilityRegistry, Participant, identity matching — 23 tests passing |
-| 2025-12-11 | **All modules complete!** | 132 unit tests + 5 integration tests = 137 total |
+| 2025-12-11 | **Core modules complete!** | 132 unit tests + 5 integration tests = 137 total |
+| 2025-12-11 | 09 audio-integration complete | AudioFileNode, ContentResolver, region wiring — 21 tests, 158 total |
 
 ---
 

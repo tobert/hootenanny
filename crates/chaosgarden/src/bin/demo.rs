@@ -5,43 +5,156 @@
 //! - Build a graph from the timeline
 //! - Register participants with capabilities
 //! - Query the system via Trustfall
-//! - Run the playback engine
+//! - Run the playback engine with actual audio
+//! - Render output to a WAV file
 
+use std::io::Cursor;
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 use chaosgarden::{
     Beat, Capability, CapabilityRegistry, CapabilityRequirement, CapabilityUri,
-    ChaosgardenAdapter, CompiledGraph, Graph, Participant, ParticipantKind, PlaybackEngine,
-    Region, TempoMap, Timeline,
+    ChaosgardenAdapter, CompiledGraph, Graph, MemoryResolver, Participant, ParticipantKind,
+    PlaybackEngine, Region, TempoMap, Timeline,
 };
 use serde_json::json;
 use trustfall::{execute_query, FieldValue};
+
+/// Generate a sine wave WAV file in memory
+fn generate_sine_wav(frequency: f32, duration_secs: f32, sample_rate: u32, amplitude: f32) -> Vec<u8> {
+    let num_frames = (sample_rate as f32 * duration_secs) as usize;
+
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+
+    let mut cursor = Cursor::new(Vec::new());
+    {
+        let mut writer = hound::WavWriter::new(&mut cursor, spec).unwrap();
+        for i in 0..num_frames {
+            let t = i as f32 / sample_rate as f32;
+            let sample = (2.0 * std::f32::consts::PI * frequency * t).sin() * amplitude;
+            writer.write_sample(sample).unwrap(); // L
+            writer.write_sample(sample).unwrap(); // R
+        }
+        writer.finalize().unwrap();
+    }
+
+    cursor.into_inner()
+}
+
+/// Generate a chord (multiple sine waves mixed)
+fn generate_chord_wav(frequencies: &[f32], duration_secs: f32, sample_rate: u32, amplitude: f32) -> Vec<u8> {
+    let num_frames = (sample_rate as f32 * duration_secs) as usize;
+    let per_freq_amp = amplitude / frequencies.len() as f32;
+
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+
+    let mut cursor = Cursor::new(Vec::new());
+    {
+        let mut writer = hound::WavWriter::new(&mut cursor, spec).unwrap();
+        for i in 0..num_frames {
+            let t = i as f32 / sample_rate as f32;
+            let sample: f32 = frequencies
+                .iter()
+                .map(|&f| (2.0 * std::f32::consts::PI * f * t).sin() * per_freq_amp)
+                .sum();
+            writer.write_sample(sample).unwrap(); // L
+            writer.write_sample(sample).unwrap(); // R
+        }
+        writer.finalize().unwrap();
+    }
+
+    cursor.into_inner()
+}
+
+/// Generate a simple kick drum sound (decaying sine)
+fn generate_kick_wav(duration_secs: f32, sample_rate: u32) -> Vec<u8> {
+    let num_frames = (sample_rate as f32 * duration_secs) as usize;
+
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+
+    let mut cursor = Cursor::new(Vec::new());
+    {
+        let mut writer = hound::WavWriter::new(&mut cursor, spec).unwrap();
+        for i in 0..num_frames {
+            let t = i as f32 / sample_rate as f32;
+            // Pitch drops from 150Hz to 50Hz over 0.1s
+            let freq = 150.0 - (100.0 * (t * 10.0).min(1.0));
+            // Amplitude decays exponentially
+            let amp = (-t * 8.0).exp() * 0.8;
+            let sample = (2.0 * std::f32::consts::PI * freq * t).sin() * amp;
+            writer.write_sample(sample).unwrap();
+            writer.write_sample(sample).unwrap();
+        }
+        writer.finalize().unwrap();
+    }
+
+    cursor.into_inner()
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("🌿 Chaosgarden Demo");
     println!("==================\n");
 
-    // 1. Create a timeline with tracks and sections
+    // === Part 1: Generate test audio ===
+    println!("🎹 Generating test audio...");
+    let sample_rate = 48000;
+
+    // Create memory resolver with test audio
+    let mut resolver = MemoryResolver::new();
+
+    // Bass drone (low E, ~82Hz) - 4 seconds
+    let bass_wav = generate_sine_wav(82.0, 4.0, sample_rate, 0.4);
+    resolver.insert("bass_drone", bass_wav);
+    println!("   ✓ bass_drone: 82Hz sine, 4.0s");
+
+    // Lead melody (A4 = 440Hz) - 2 seconds
+    let lead_wav = generate_sine_wav(440.0, 2.0, sample_rate, 0.3);
+    resolver.insert("lead_melody", lead_wav);
+    println!("   ✓ lead_melody: 440Hz sine, 2.0s");
+
+    // Pad chord (C major: C4, E4, G4) - 4 seconds
+    let pad_wav = generate_chord_wav(&[261.63, 329.63, 392.00], 4.0, sample_rate, 0.25);
+    resolver.insert("pad_chord", pad_wav);
+    println!("   ✓ pad_chord: C major chord, 4.0s");
+
+    // Kick drum - 0.3 seconds
+    let kick_wav = generate_kick_wav(0.3, sample_rate);
+    resolver.insert("kick_drum", kick_wav);
+    println!("   ✓ kick_drum: synthetic kick, 0.3s");
+
+    let resolver = Arc::new(resolver);
+    println!();
+
+    // === Part 2: Create a timeline with tracks and sections ===
     println!("📋 Creating timeline...");
     let mut timeline = Timeline::new("Demo Song", 120.0);
 
     // Add sections with hints for generation
     {
-        let intro = timeline.add_section("Intro", Beat(0.0), Beat(16.0));
+        let intro = timeline.add_section("Intro", Beat(0.0), Beat(8.0));
         intro.hints.mood = Some("mysterious".to_string());
         intro.hints.energy = Some(0.3);
     }
     {
-        let verse = timeline.add_section("Verse", Beat(16.0), Beat(48.0));
+        let verse = timeline.add_section("Verse", Beat(8.0), Beat(16.0));
         verse.hints.mood = Some("groovy".to_string());
         verse.hints.energy = Some(0.6);
-    }
-    {
-        let chorus = timeline.add_section("Chorus", Beat(48.0), Beat(80.0));
-        chorus.hints.mood = Some("euphoric".to_string());
-        chorus.hints.energy = Some(0.9);
     }
 
     // Add a reverb bus
@@ -51,33 +164,41 @@ async fn main() -> Result<()> {
         bus.id
     };
 
-    // Add tracks with content
-    {
-        let drums = timeline.add_track("Drums");
-        drums.add_audio(Beat(0.0), Beat(80.0), "drums_loop_hash");
-        drums.add_send(reverb_id, 0.2);
-    }
+    // Add tracks with actual audio content
     {
         let bass = timeline.add_track("Bass");
-        bass.add_midi(Beat(16.0), Beat(64.0), "bass_midi_hash");
+        bass.add_audio(Beat(0.0), Beat(8.0), "bass_drone");
+        bass.volume = 0.8;
+    }
+    {
+        let pad = timeline.add_track("Pad");
+        pad.add_audio(Beat(0.0), Beat(8.0), "pad_chord");
+        pad.add_send(reverb_id, 0.3);
+        pad.volume = 0.6;
     }
     {
         let lead = timeline.add_track("Lead");
-        // Add a latent region - content to be generated
-        let latent_id = lead.add_latent(
-            Beat(48.0),
-            Beat(32.0),
-            "orpheus_generate",
-            json!({"prompt": "euphoric lead melody", "temperature": 0.8}),
-        );
-        // Name the latent region
-        if let Some(region) = lead.regions.iter_mut().find(|r| r.id == latent_id) {
-            region.metadata.name = Some("Chorus Lead Solo".to_string());
-        }
+        // Lead comes in at beat 4
+        lead.add_audio(Beat(4.0), Beat(4.0), "lead_melody");
         lead.add_send(reverb_id, 0.4);
+        lead.volume = 0.7;
+    }
+    {
+        let drums = timeline.add_track("Drums");
+        // Add a latent region for future generation
+        let latent_id = drums.add_latent(
+            Beat(8.0),
+            Beat(8.0),
+            "orpheus_generate",
+            json!({"prompt": "funky drum pattern", "temperature": 0.7}),
+        );
+        if let Some(region) = drums.regions.iter_mut().find(|r| r.id == latent_id) {
+            region.metadata.name = Some("Generated Drums".to_string());
+        }
     }
 
     println!("   ✓ Created timeline: {}", timeline.name);
+    println!("   ✓ Tempo: {} BPM", timeline.tempo_map.tempo_at(chaosgarden::Tick(0)));
     println!("   ✓ {} sections", timeline.sections.len());
     println!("   ✓ {} tracks", timeline.tracks.len());
     println!("   ✓ {} buses", timeline.buses.len());
@@ -87,14 +208,14 @@ async fn main() -> Result<()> {
     );
     println!();
 
-    // 2. Build a graph from the timeline
+    // === Part 3: Build a graph from the timeline ===
     println!("🔗 Building audio graph...");
     let graph = timeline.build_graph();
     println!("   ✓ {} nodes", graph.node_count());
     println!("   ✓ {} edges", graph.edge_count());
     println!();
 
-    // 3. Register participants with capabilities
+    // === Part 4: Register participants with capabilities ===
     println!("👥 Registering participants...");
     let registry = CapabilityRegistry::new();
 
@@ -108,10 +229,6 @@ async fn main() -> Result<()> {
         CapabilityUri::new("gen:continuation"),
         "Continue MIDI",
     ));
-    orpheus.add_capability(Capability::new(
-        CapabilityUri::new("model:orpheus"),
-        "Orpheus Model",
-    ));
     registry.register(orpheus).await;
 
     // Register human participant
@@ -121,16 +238,7 @@ async fn main() -> Result<()> {
         CapabilityUri::new("hitl:approve"),
         "Approve Content",
     ));
-    human.add_capability(Capability::new(
-        CapabilityUri::new("hitl:annotate"),
-        "Add Annotations",
-    ));
     registry.register(human).await;
-
-    // Register a device
-    let keyboard = Participant::new(ParticipantKind::Device, "midi-keyboard")
-        .with_tag("input");
-    registry.register(keyboard).await;
 
     let participants = registry.snapshot().await;
     println!("   ✓ {} participants registered", participants.len());
@@ -139,50 +247,32 @@ async fn main() -> Result<()> {
     let generators = registry
         .find_satisfying(&[CapabilityRequirement::new(CapabilityUri::new("gen:midi"))])
         .await;
-    let gen_names: Vec<_> = generators.iter().map(|p| p.name.as_str()).collect();
     println!(
-        "   ✓ {} participant(s) can generate MIDI: {}",
-        generators.len(),
-        gen_names.join(", ")
-    );
-
-    // Find who can approve content
-    let approvers = registry
-        .find_satisfying(&[CapabilityRequirement::new(CapabilityUri::new(
-            "hitl:approve",
-        ))])
-        .await;
-    let approver_names: Vec<_> = approvers.iter().map(|p| p.name.as_str()).collect();
-    println!(
-        "   ✓ {} participant(s) can approve: {}",
-        approvers.len(),
-        approver_names.join(", ")
+        "   ✓ {} participant(s) can generate MIDI",
+        generators.len()
     );
     println!();
 
-    // 4. Query via Trustfall
+    // === Part 5: Query via Trustfall ===
     println!("🔍 Querying with Trustfall...");
 
-    // Set up regions for query
     let regions: Vec<Region> = timeline.all_regions().cloned().collect();
-
-    // Build a simple graph for the adapter
     let query_graph = Graph::new();
 
     let adapter = ChaosgardenAdapter::new(
-        Arc::new(RwLock::new(regions)),
+        Arc::new(RwLock::new(regions.clone())),
         Arc::new(RwLock::new(query_graph)),
         Arc::new(TempoMap::new(120.0, Default::default())),
     )?;
 
-    // Query latent regions
+    // Query all regions
     let query = r#"
         query {
-            LatentRegion {
-                name @output
+            Region {
+                id @output
                 position @output
-                latent_status @output
-                generation_tool @output
+                duration @output
+                is_playable @output
             }
         }
     "#;
@@ -197,55 +287,103 @@ async fn main() -> Result<()> {
     )?
     .collect();
 
-    println!("   ✓ Found {} latent region(s):", results.len());
-    for result in &results {
-        let name: Arc<str> = "name".into();
-        let tool: Arc<str> = "generation_tool".into();
-        println!(
-            "     - {:?} using {:?}",
-            result.get(&name),
-            result.get(&tool)
-        );
-    }
+    println!("   ✓ Found {} region(s)", results.len());
+
+    // Count playable vs latent
+    let playable = results.iter().filter(|r| {
+        let key: Arc<str> = "is_playable".into();
+        r.get(&key) == Some(&FieldValue::Boolean(true))
+    }).count();
+    println!("   ✓ {} playable, {} pending generation", playable, results.len() - playable);
     println!();
 
-    // 5. Demonstrate playback engine
-    println!("🎵 Demonstrating playback engine...");
+    // === Part 6: Playback with actual audio ===
+    println!("🎵 Running playback engine with audio...");
 
-    // Create a minimal graph for rendering
+    let tempo_map = Arc::new(TempoMap::new(120.0, Default::default()));
+    let mut engine = PlaybackEngine::with_resolver(
+        sample_rate,
+        256, // buffer size
+        tempo_map.clone(),
+        resolver.clone(),
+    );
+
+    // Create a minimal compiled graph (empty - we're using regions)
     let mut render_graph = Graph::new();
     let mut compiled = CompiledGraph::compile(&mut render_graph, 256)?;
-    let tempo_map = Arc::new(TempoMap::new(120.0, Default::default()));
-    let mut engine = PlaybackEngine::new(48000, 256, tempo_map);
 
-    // Get position
-    let pos = engine.position();
-    println!("   ✓ Initial position: sample={}, beat={:.2}", pos.samples.0, pos.beats.0);
-    println!("   ✓ Is playing: {}", engine.is_playing());
+    // Get playable regions (exclude latent)
+    let playable_regions: Vec<Region> = regions
+        .iter()
+        .filter(|r| r.is_playable())
+        .cloned()
+        .collect();
+
+    println!("   ✓ {} playable audio regions", playable_regions.len());
+    for region in &playable_regions {
+        println!("     - Beat {:.1}-{:.1}: {:?}",
+            region.position.0,
+            region.end().0,
+            region.metadata.name.as_deref().unwrap_or("unnamed")
+        );
+    }
 
     // Start playback
     engine.play();
-    println!("   ✓ After play(): is_playing={}", engine.is_playing());
+    println!("   ✓ Playback started");
 
-    // Process a few buffers
-    let empty_regions: Vec<Region> = vec![];
-    for _ in 0..4 {
-        let _ = engine.process(&mut compiled, &empty_regions);
+    // Process a few buffers and show position
+    let initial_pos = engine.position();
+    for _ in 0..10 {
+        let _ = engine.process(&mut compiled, &playable_regions);
     }
     let pos = engine.position();
     println!(
-        "   ✓ After 4 buffers: sample={}, beat={:.2}",
-        pos.samples.0, pos.beats.0
+        "   ✓ Position advanced: sample {} → {}, beat {:.3} → {:.3}",
+        initial_pos.samples.0, pos.samples.0,
+        initial_pos.beats.0, pos.beats.0
     );
-
-    // Stop playback
-    engine.stop();
-    println!("   ✓ After stop(): is_playing={}", engine.is_playing());
     println!();
 
-    // 6. Show section hints at a position
+    // === Part 7: Render to WAV file ===
+    println!("💾 Rendering to WAV file...");
+
+    // Reset engine for rendering
+    engine.stop();
+    engine.play();
+
+    let output_path = "/tmp/chaosgarden_demo.wav";
+    let duration_beats = Beat(8.0); // Render 8 beats (4 seconds at 120 BPM)
+
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+
+    let mut writer = hound::WavWriter::create(output_path, spec)?;
+    let mut samples_written = 0;
+
+    while engine.position().beats.0 < duration_beats.0 {
+        let output = engine.process(&mut compiled, &playable_regions)?;
+
+        for &sample in &output.samples {
+            let int_sample = (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
+            writer.write_sample(int_sample)?;
+            samples_written += 1;
+        }
+    }
+
+    writer.finalize()?;
+
+    let duration_secs = samples_written as f64 / (sample_rate as f64 * 2.0); // stereo
+    println!("   ✓ Rendered {} samples ({:.2}s) to {}", samples_written, duration_secs, output_path);
+    println!();
+
+    // === Part 8: Section hints ===
     println!("💡 Section hints:");
-    for beat in [Beat(8.0), Beat(32.0), Beat(64.0)] {
+    for beat in [Beat(2.0), Beat(10.0)] {
         if let Some(section) = timeline.section_at(beat) {
             println!(
                 "   Beat {:.0}: {} (mood={:?}, energy={:?})",
@@ -258,16 +396,19 @@ async fn main() -> Result<()> {
     }
     println!();
 
-    // 7. Summary
+    // === Summary ===
     println!("✅ Demo complete!");
     println!();
-    println!("Summary of chaosgarden modules demonstrated:");
+    println!("Modules demonstrated:");
     println!("  • primitives   - Beat, Region, TempoMap");
     println!("  • patterns     - Timeline, Track, Bus, Section");
     println!("  • graph        - Audio routing DAG");
-    println!("  • playback     - CompiledGraph, PlaybackEngine");
+    println!("  • playback     - PlaybackEngine with region→audio wiring");
+    println!("  • nodes        - AudioFileNode, MemoryResolver");
     println!("  • query        - Trustfall adapter");
     println!("  • capabilities - CapabilityRegistry, Participant");
+    println!();
+    println!("🎧 Listen to the output: {}", output_path);
 
     Ok(())
 }
