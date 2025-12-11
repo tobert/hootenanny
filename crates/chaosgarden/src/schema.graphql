@@ -1,0 +1,133 @@
+schema {
+    query: Query
+}
+
+type Query {
+    # Region queries
+    Region(id: String): [Region!]!
+    RegionInRange(start: Float!, end: Float!): [Region!]!
+    RegionByTag(tag: String!): [Region!]!
+    LatentRegion: [Region!]!
+    PlayableRegion: [Region!]!
+
+    # Node queries
+    Node(id: String, type_prefix: String): [Node!]!
+
+    # Graph structure
+    Edge: [Edge!]!
+
+    # I/O queries
+    Output: [Output!]!
+    Input: [Input!]!
+    MidiDevice(direction: String): [MidiDevice!]!
+
+    # Time queries - these return scalar values wrapped in a type
+    TempoAt(beat: Float!): TempoResult!
+    BeatToSecond(beat: Float!): TimeResult!
+    SecondToBeat(second: Float!): TimeResult!
+
+    # Job queries
+    RunningJob: [Job!]!
+    PendingApproval: [Approval!]!
+}
+
+type Region {
+    id: ID!
+    position: Float!
+    duration: Float!
+    end: Float!
+    behavior_type: String!
+    name: String
+    tags: [String!]!
+
+    # Latent state (null if not latent)
+    latent_status: String
+    latent_progress: Float
+    job_id: String
+
+    # Resolved content
+    is_resolved: Boolean!
+    is_approved: Boolean!
+    is_playable: Boolean!
+    content_hash: String
+    content_type: String
+
+    # Generation info (for latent regions)
+    generation_tool: String
+
+    # Lifecycle
+    is_alive: Boolean!
+    is_tombstoned: Boolean!
+}
+
+type Node {
+    id: ID!
+    name: String!
+    type_id: String!
+    inputs: [Port!]!
+    outputs: [Port!]!
+    latency_samples: Int!
+
+    # Capabilities
+    can_realtime: Boolean!
+    can_offline: Boolean!
+
+    # Graph traversal
+    upstream: [Node!]!
+    downstream: [Node!]!
+}
+
+type Port {
+    name: String!
+    signal_type: String!
+}
+
+type Edge {
+    source_id: ID!
+    source_port: String!
+    dest_id: ID!
+    dest_port: String!
+}
+
+type Output {
+    id: ID!
+    name: String!
+    channels: Int!
+    pw_node_id: Int
+}
+
+type Input {
+    id: ID!
+    name: String!
+    channels: Int!
+    port_pattern: String
+    pw_node_id: Int
+}
+
+type MidiDevice {
+    id: ID!
+    name: String!
+    direction: String!
+    pw_node_id: Int
+}
+
+type Job {
+    id: ID!
+    region_id: ID!
+    tool: String!
+    progress: Float!
+}
+
+type Approval {
+    region_id: ID!
+    content_hash: String!
+    content_type: String!
+}
+
+type TempoResult {
+    bpm: Float!
+}
+
+type TimeResult {
+    value: Float!
+}

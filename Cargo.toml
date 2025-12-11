@@ -2,6 +2,7 @@
 members = [
     "crates/abc",
     "crates/baton",
+    "crates/chaosgarden",
     "crates/hootenanny", "crates/hrcli",
     "crates/audio-graph-mcp",
     "crates/llmchat", "crates/llm-mcp-bridge",
