@@ -169,15 +169,33 @@ crates/chaosgarden/
 
 ## Current Status
 
-- **Completed**: Core modules (00-08) + Audio Integration (09) 🎉
+- **Completed**: Core modules (00-09) + Enhanced Demo 🎉
 - **In Progress**: None
 - **Next Up**: 10-hootenanny-zmq (add ZMQ server to control plane)
 - **Blocked**: None
 
-### Audio Integration Complete (09)
+### Demo Showcase
 
-All phases complete. Regions with `PlayContent::Audio` behavior now automatically activate
-`AudioFileNode` instances when playback enters their time range.
+The demo (`cargo run -p chaosgarden --bin demo`) demonstrates all major features:
+
+```bash
+cargo run -p chaosgarden --bin demo           # Compact output
+cargo run -p chaosgarden --bin demo -- -v     # Verbose with ASCII art
+cargo run -p chaosgarden --bin demo -- -l 80  # 80 beats (~40s)
+```
+
+| Feature | Demo Coverage |
+|---------|---------------|
+| Audio playback | 5 tracks, MemoryResolver, region→AudioFileNode |
+| Kick drum | Punchy synthesis with click transient, four-on-the-floor |
+| Tempo change | 120→130 BPM at beat 8, verified by Beat This |
+| Latent lifecycle | job→progress→resolve→approve simulation |
+| Mix-in scheduling | Crossfade strategy at beat boundary |
+| Trustfall queries | Regions, latent status, time conversion |
+| Capabilities | Model/human/device participants |
+| Dynamic looping | Regions auto-extend to match --length |
+
+### Audio Integration Complete (09)
 
 | Subtask | Status | Notes |
 |---------|--------|-------|
@@ -408,6 +426,8 @@ We'll know we've succeeded when:
 | 2025-12-11 | 08-capabilities implementation complete | CapabilityRegistry, Participant, identity matching — 23 tests passing |
 | 2025-12-11 | **Core modules complete!** | 132 unit tests + 5 integration tests = 137 total |
 | 2025-12-11 | 09 audio-integration complete | AudioFileNode, ContentResolver, region wiring — 21 tests, 158 total |
+| 2025-12-11 | Demo enhanced | Full showcase: latent lifecycle, Trustfall queries, tempo change, kick drum |
+| 2025-12-11 | Tempo change verified | Beat This confirms 120→130 BPM transition at beat 8 |
 
 ---
 
