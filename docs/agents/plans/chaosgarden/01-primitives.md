@@ -2,15 +2,15 @@
 
 **File:** `src/primitives.rs`
 **Focus:** Time, Signal, Node, Region — types only
-**Dependencies:** `uuid`, `serde`
+**Dependencies:** `uuid`, `serde`, `capabilities` (for `Lifecycle`, `Generation`)
 
 ---
 
 ## Task
 
-Create `crates/flayer/src/primitives.rs` with the types defined below. Implement the methods listed for each type. Write tests for TempoMap time conversions.
+Create `crates/chaosgarden/src/primitives.rs` with the types defined below. Implement the methods listed for each type. Write tests for TempoMap time conversions.
 
-**Why this first?** Everything else depends on these types. Graph nodes process Signals. Regions use Beat positions. Rendering needs ProcessContext. Get these right and the rest follows.
+**Why this first?** Everything else depends on these types. Graph nodes process Signals. Regions use Beat positions. Playback needs ProcessContext. Get these right and the rest follows.
 
 **Deliverables:**
 1. `primitives.rs` with all types compiling
@@ -28,7 +28,7 @@ cargo test
 ## Out of Scope
 
 - ❌ Graph topology — task 02
-- ❌ MCP resolution — task 03
+- ❌ Latent lifecycle — task 03
 - ❌ Buffer management — task 04
 - ❌ PipeWire I/O — task 05
 
@@ -191,6 +191,23 @@ pub struct NodeDescriptor {
     pub inputs: Vec<Port>,
     pub outputs: Vec<Port>,
     pub latency_samples: u64,
+    pub capabilities: NodeCapabilities,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct NodeCapabilities {
+    pub realtime: bool,   // can meet audio deadlines
+    pub offline: bool,    // can block for extended processing
+}
+
+impl NodeCapabilities {
+    /// Convert to URI-based capabilities for the capability registry (08-capabilities)
+    pub fn to_capability_uris(&self) -> Vec<&'static str> {
+        let mut uris = vec![];
+        if self.realtime { uris.push("audio:realtime"); }
+        if self.offline { uris.push("audio:offline"); }
+        uris
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,6 +260,10 @@ pub type BoxedNode = Box<dyn Node>;
 
 ## Region Types
 
+Regions are the timeline primitive. A region has position, duration, and behavior.
+
+**Key insight:** Latent is a behavior, not a separate type. Regions transform: latent → resolved → playing. Uniform querying means "all regions in chorus" works regardless of resolution state.
+
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContentType {
@@ -277,7 +298,27 @@ pub struct CurvePoint {
     pub curve: CurveType,
 }
 
-#[derive(Debug, Clone)]
+/// Tracks the state of a latent region's generation job
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LatentState {
+    pub job_id: Option<String>,
+    pub progress: f32,           // 0.0 to 1.0
+    pub status: LatentStatus,
+    pub resolved: Option<ResolvedContent>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum LatentStatus {
+    #[default]
+    Pending,      // not yet submitted
+    Running,      // job in progress
+    Resolved,     // artifact ready, awaiting approval
+    Approved,     // ready for playback
+    Rejected,     // human/agent declined
+    Failed,       // generation failed
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedContent {
     pub content_hash: String,
     pub content_type: ContentType,
@@ -286,26 +327,35 @@ pub struct ResolvedContent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Behavior {
+    /// Play existing content from CAS
     PlayContent {
         content_hash: String,
         content_type: ContentType,
         params: PlaybackParams,
     },
-    GenerateContent {
+
+    /// Latent: generation in progress or awaiting approval
+    /// This is the async primitive — intent visible before realization
+    Latent {
         tool: String,
         params: serde_json::Value,
-        #[serde(skip)]
-        resolved: Option<ResolvedContent>,
+        state: LatentState,
     },
+
+    /// Modulate a parameter over time
     ApplyProcessing {
         target_node: Uuid,
         parameter: String,
         curve: Vec<CurvePoint>,
     },
+
+    /// Fire a discrete event
     EmitTrigger {
         kind: TriggerKind,
         data: Option<serde_json::Value>,
     },
+
+    /// Extensibility
     Custom {
         behavior_type: String,
         config: serde_json::Value,
@@ -327,19 +377,54 @@ pub struct Region {
     pub duration: Beat,
     pub behavior: Behavior,
     pub metadata: RegionMetadata,
+    pub lifecycle: Lifecycle,  // from 08-capabilities: generation tracking, tombstoning
 }
 ```
 
-**Region methods to implement:**
-- `play_audio(position, duration, content_hash) -> Self`
-- `play_midi(position, duration, content_hash) -> Self`
-- `generate(position, duration, tool, params) -> Self`
-- `trigger(position, kind) -> Self`
-- `end(&self) -> Beat`
-- `contains(&self, beat) -> bool`
-- `overlaps(&self, other) -> bool`
-- `is_resolved(&self) -> bool`
-- Builder methods: `with_name()`, `with_tag()`
+---
+
+## Region Methods
+
+```rust
+impl Region {
+    // Constructors
+    pub fn play_audio(position: Beat, duration: Beat, content_hash: String) -> Self;
+    pub fn play_midi(position: Beat, duration: Beat, content_hash: String) -> Self;
+    pub fn latent(position: Beat, duration: Beat, tool: &str, params: serde_json::Value) -> Self;
+    pub fn trigger(position: Beat, kind: TriggerKind) -> Self;
+
+    // Queries
+    pub fn end(&self) -> Beat;
+    pub fn contains(&self, beat: Beat) -> bool;
+    pub fn overlaps(&self, other: &Region) -> bool;
+
+    // Latent state queries
+    pub fn is_latent(&self) -> bool;
+    pub fn is_resolved(&self) -> bool;
+    pub fn is_approved(&self) -> bool;
+    pub fn is_playable(&self) -> bool;  // PlayContent or approved Latent
+    pub fn latent_status(&self) -> Option<LatentStatus>;
+
+    // Latent state transitions (used by latent.rs)
+    pub fn start_job(&mut self, job_id: String);
+    pub fn update_progress(&mut self, progress: f32);
+    pub fn resolve(&mut self, content: ResolvedContent);
+    pub fn approve(&mut self);
+    pub fn reject(&mut self);
+    pub fn fail(&mut self);
+
+    // Builders
+    pub fn with_name(self, name: &str) -> Self;
+    pub fn with_tag(self, tag: &str) -> Self;
+
+    // Lifecycle (delegates to self.lifecycle)
+    pub fn touch(&mut self, generation: Generation);
+    pub fn tombstone(&mut self, generation: Generation);
+    pub fn set_permanent(&mut self, permanent: bool);
+    pub fn is_tombstoned(&self) -> bool;
+    pub fn is_alive(&self) -> bool;
+}
+```
 
 ---
 
@@ -350,3 +435,7 @@ pub struct Region {
 - [ ] `cargo test` passes for time conversion round-trips
 - [ ] Node trait is object-safe (`Box<dyn Node>` works)
 - [ ] Region serializes/deserializes via serde_json
+- [ ] Latent state transitions work correctly
+- [ ] `is_playable()` returns true for PlayContent and approved Latent regions
+- [ ] Region lifecycle methods delegate correctly to `self.lifecycle`
+- [ ] Tombstoned regions report `is_alive() == false`

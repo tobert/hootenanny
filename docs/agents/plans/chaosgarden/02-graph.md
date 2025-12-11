@@ -8,7 +8,7 @@
 
 ## Task
 
-Create `crates/flayer/src/graph.rs` wrapping petgraph's StableGraph. Implement node/edge management, topological ordering, and traversal methods.
+Create `crates/chaosgarden/src/graph.rs` wrapping petgraph's StableGraph. Implement node/edge management, topological ordering, and traversal methods.
 
 **Why this first?** Rendering needs topological order. Resolution needs to find nodes. Patterns build graphs. The graph is the central data structure everything else manipulates.
 
@@ -69,6 +69,7 @@ pub struct Graph {
     inner: StableGraph<BoxedNode, Edge>,
     index_map: HashMap<Uuid, NodeIndex>,
     topo_order: Option<Vec<NodeIndex>>,  // cached, invalidated on modification
+    capability_registry: Option<Arc<CapabilityRegistry>>,  // from 08-capabilities
 }
 
 #[derive(Debug, Clone)]
@@ -102,8 +103,9 @@ pub struct EdgeSnapshot {
 
 **Construction:**
 - `new() -> Self`
-- `add_node(node: BoxedNode) -> NodeIndex`
-- `remove_node(id: Uuid) -> Option<BoxedNode>`
+- `with_capability_registry(registry: Arc<CapabilityRegistry>) -> Self` — enables auto-registration
+- `add_node(node: BoxedNode) -> NodeIndex` — if registry set, registers node as Participant
+- `remove_node(id: Uuid) -> Option<BoxedNode>` — if registry set, unregisters Participant
 
 **Connections:**
 - `connect(source_id, source_port, dest_id, dest_port) -> Result<EdgeIndex, GraphError>`

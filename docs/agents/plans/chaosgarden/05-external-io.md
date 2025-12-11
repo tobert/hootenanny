@@ -8,9 +8,9 @@
 
 ## Task
 
-Create `crates/flayer/src/external_io.rs` with ExternalIOManager and I/O node types. Feature-gate behind `pipewire`.
+Create `crates/chaosgarden/src/external_io.rs` with ExternalIOManager and I/O node types. Feature-gate behind `pipewire`.
 
-**Why this first?** Once rendering works offline, external I/O makes it real. This bridges the graph to actual speakers and MIDI devices. Feature-gated so flayer works without PipeWire for CI/offline use.
+**Why this first?** Once rendering works offline, external I/O makes it real. This bridges the graph to actual speakers and MIDI devices. Feature-gated so chaosgarden works without PipeWire for CI/offline use.
 
 **Deliverables:**
 1. `external_io.rs` with types and ExternalIOManager skeleton
@@ -46,7 +46,7 @@ use pw::stream::{Stream, StreamFlags};
 use pw::spa::utils::Direction;
 
 // Create stream for output
-let stream = Stream::new(&core, "flayer-out", properties)?;
+let stream = Stream::new(&core, "chaosgarden-out", properties)?;
 
 stream.connect(
     Direction::Output,
@@ -158,7 +158,7 @@ pipewire = ["dep:pipewire"]
 ```
 
 External I/O only available when `pipewire` feature enabled.
-Without it, flayer works for offline rendering only.
+Without it, chaosgarden works for offline rendering only.
 
 ---
 
