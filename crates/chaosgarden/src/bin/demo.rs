@@ -397,44 +397,74 @@ async fn main() -> Result<()> {
         bus.id
     };
 
-    // Tracks
+    // Tracks - regions extend to match --length parameter
+    let content_length = length_beats.max(16.0); // At least 16 beats
     let latent_region_id: Uuid;
     {
         let kick = timeline.add_track("Kick");
-        // Four-on-the-floor: kick on every beat
-        for beat in 0..16 {
+        // Four-on-the-floor: kick on every beat for full duration
+        for beat in 0..(content_length as i32) {
             kick.add_audio(Beat(beat as f64), Beat(0.5), "kick_drum");
         }
         kick.volume = 0.85;
     }
     {
         let bass = timeline.add_track("Bass");
-        bass.add_audio(Beat(0.0), Beat(16.0), "bass_drone");
-        bass.volume = 0.7; // Lower to make room for kick
+        // Bass loops every 8 beats (matches our 4s audio at 120bpm)
+        let loop_length = 8.0;
+        let mut beat = 0.0;
+        while beat < content_length {
+            bass.add_audio(Beat(beat), Beat(loop_length), "bass_drone");
+            beat += loop_length;
+        }
+        bass.volume = 0.7;
     }
     {
         let pad = timeline.add_track("Pad");
-        pad.add_audio(Beat(0.0), Beat(16.0), "pad_chord");
+        // Pad loops every 8 beats
+        let loop_length = 8.0;
+        let mut beat = 0.0;
+        while beat < content_length {
+            pad.add_audio(Beat(beat), Beat(loop_length), "pad_chord");
+            beat += loop_length;
+        }
         pad.add_send(reverb_id, 0.3);
         pad.volume = 0.6;
     }
     {
         let lead = timeline.add_track("Lead");
-        lead.add_audio(Beat(4.0), Beat(12.0), "lead_melody");
+        // Lead comes in every 8 beats, plays for 6 beats with 2 beat gaps
+        let mut beat = 4.0;
+        while beat < content_length {
+            let region_length = (content_length - beat).min(6.0);
+            if region_length > 0.0 {
+                lead.add_audio(Beat(beat), Beat(region_length), "lead_melody");
+            }
+            beat += 8.0;
+        }
         lead.add_send(reverb_id, 0.4);
         lead.volume = 0.7;
     }
     {
         let synth = timeline.add_track("Synth");
+        // Synth (latent) loops every 8 beats starting at beat 8
+        let synth_duration = 8.0_f64.min(content_length - 8.0).max(0.0);
         latent_region_id = synth.add_latent(
             Beat(8.0),
-            Beat(8.0),
+            Beat(synth_duration),
             "test_generator",
             json!({"prompt": "euphoric synth pad", "temperature": 0.8}),
         );
         if let Some(region) = synth.regions.iter_mut().find(|r| r.id == latent_region_id) {
             region.metadata.name = Some("Generated Synth".to_string());
             region.metadata.tags.push("ai-generated".to_string());
+        }
+        // Add more synth regions for longer renders
+        let mut beat = 16.0;
+        while beat < content_length {
+            let region_len = 8.0_f64.min(content_length - beat);
+            synth.add_audio(Beat(beat), Beat(region_len), "generated_synth");
+            beat += 8.0;
         }
         synth.add_send(reverb_id, 0.5);
         synth.volume = 0.65;
