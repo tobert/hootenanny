@@ -46,8 +46,8 @@ pub struct LuaRuntime {
 }
 
 impl LuaRuntime {
-    /// Create a new Lua runtime with the given configuration (test-only).
-    #[cfg(test)]
+    /// Create a new Lua runtime with the given configuration.
+    /// This creates a runtime without MCP bridge (for ZMQ mode).
     pub fn new(config: SandboxConfig) -> Self {
         Self {
             config,
@@ -55,8 +55,7 @@ impl LuaRuntime {
         }
     }
 
-    /// Create a new Lua runtime with default configuration (test-only).
-    #[cfg(test)]
+    /// Create a new Lua runtime with default configuration.
     pub fn with_defaults() -> Self {
         Self::new(SandboxConfig::default())
     }

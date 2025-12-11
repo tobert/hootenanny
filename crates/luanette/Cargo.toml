@@ -2,7 +2,7 @@
 name = "luanette"
 version = "0.1.0"
 edition = "2021"
-description = "Lua scripting MCP server for composing upstream MCP tools"
+description = "Lua scripting ZMQ server for the Hootenanny system"
 authors = ["Al Tobey <tobert@gmail.com>"]
 license = "MIT"
 
@@ -15,7 +15,10 @@ name = "luanette"
 path = "src/main.rs"
 
 [dependencies]
-# MCP Framework
+# Hootenanny Protocol
+hooteproto = { path = "../hooteproto" }
+
+# MCP Framework (kept for now during transition)
 baton = { path = "../baton", features = ["client"] }
 
 # Lua Runtime
@@ -26,7 +29,10 @@ tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 futures = "0.3"
 
-# Web Server
+# ZMQ
+zeromq = "0.4"
+
+# Web Server (kept for now during transition)
 axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
