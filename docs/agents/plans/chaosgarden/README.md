@@ -166,12 +166,16 @@ crates/chaosgarden/
 | 07-patterns | ✅ complete | Track, Bus, Section, Timeline, Project — 22 tests passing |
 | 08-capabilities | ✅ complete | CapabilityRegistry, Participant, identity matching — 23 tests passing |
 | 09-audio-integration | ✅ complete | AudioFileNode + CAS + region wiring — 21 tests passing |
+| 09a-cas-crate | ✅ complete | Shared CAS crate for hootenanny, chaosgarden, workers — 30 tests passing |
+| 10-hootenanny-zmq | ✅ complete | ZMQ client + garden_* tools — 8 MCP tools |
+| 10b-job-consolidation | ✅ complete | Shared JobId/JobStatus/JobInfo in hooteproto |
+| 11-holler-baton | 📋 planning | Migrate holler to use baton MCP library |
 
 ## Current Status
 
-- **Completed**: Core modules (00-09) + Enhanced Demo 🎉
+- **Completed**: Core modules (00-10) + job type consolidation 🎉
 - **In Progress**: None
-- **Next Up**: 10-hootenanny-zmq (add ZMQ server to control plane)
+- **Next Up**: 11-holler-baton (migrate holler to baton)
 - **Blocked**: None
 
 ### Demo Showcase
@@ -428,6 +432,11 @@ We'll know we've succeeded when:
 | 2025-12-11 | 09 audio-integration complete | AudioFileNode, ContentResolver, region wiring — 21 tests, 158 total |
 | 2025-12-11 | Demo enhanced | Full showcase: latent lifecycle, Trustfall queries, tempo change, kick drum |
 | 2025-12-11 | Tempo change verified | Beat This confirms 120→130 BPM transition at beat 8 |
+| 2025-12-12 | 09a-cas-crate complete | Shared CAS crate extracted, 30 tests |
+| 2025-12-12 | 10-hootenanny-zmq complete | garden_* MCP tools for chaosgarden control |
+| 2025-12-12 | Job types consolidated | JobId/JobStatus/JobInfo moved to hooteproto, shared by hootenanny+luanette |
+| 2025-12-12 | flayer crate deleted | Empty stub removed |
+| 2025-12-12 | ARCHITECTURE.md created | Documents crate responsibilities and data flow |
 
 ---
 
@@ -454,38 +463,33 @@ These tasks come AFTER chaosgarden is working. Don't rip up working code until w
 
 | Task | Status | Notes |
 |------|--------|-------|
-| 09a-cas-crate | **next** | Extract CAS to shared crate, env config, NFS-ready |
-| 10-hootenanny-zmq | future | Add ZMQ server to hootenanny, become control plane |
-| 11-hootenanny-workers | future | Worker registry, PUSH/PULL job dispatch |
-| 12-luanette-merge | future | Merge luanette into hootenanny as workflow engine |
+| 09a-cas-crate | ✅ complete | Shared CAS crate for hootenanny, chaosgarden, workers |
+| 10-hootenanny-zmq | ✅ complete | ZMQ client + garden_* MCP tools |
+| 11-holler-baton | 📋 planning | Migrate holler to use baton MCP library |
+| 12-luanette-blocking | 📋 planning | Lua scripts block on hootenanny jobs |
 | 13-hrmcp-proxy | future | Strip MCP server to thin ZMQ proxy |
 | 14-integration | future | End-to-end: hrmcp → hootenanny → chaosgarden → audio |
 | 15-midir | future | Direct MIDI via midir (ALSA seq/CoreMIDI/WinMM) - avoids PipeWire MIDI jitter |
 
-### 10-hootenanny-zmq
+### 10-hootenanny-zmq (Complete)
 
-Add ZMQ infrastructure to hootenanny:
-- GardenClient to connect to chaosgarden
-- ROUTER socket for worker registration
-- PUSH socket for job dispatch
-- SUB socket for worker results
-- Forward IOPub events to interested parties (hrmcp, visualization)
+Added ZMQ infrastructure to hootenanny:
+- GardenManager ZMQ client to connect to chaosgarden
+- garden_* MCP tools: status, play, pause, stop, seek, set_tempo, query, emergency_pause
+- Shared job types in hooteproto (JobId, JobStatus, JobInfo)
 
-### 11-hootenanny-workers
+### 11-holler-baton
 
-Worker pool management:
-- Worker registration protocol (capabilities, resources)
-- Job routing based on capabilities
-- Heartbeat monitoring
-- Worker crash recovery
+Migrate holler from custom MCP implementation to baton library:
+- See `docs/agents/plans/hollerbaton/README.md`
 
-### 12-luanette-merge
+### 12-luanette-blocking
 
-Merge luanette into hootenanny:
-- Lua runtime becomes part of hootenanny
-- Scripts dispatch jobs to workers via ZMQ
-- OTLP tracing for script execution
-- Script results flow to chaosgarden as resolved latents
+Make luanette scripts block on hootenanny jobs:
+- Lua scripts call hootenanny tools synchronously (from Lua's perspective)
+- Hootenanny tracks jobs, luanette waits for completion
+- Shared job types already in hooteproto
+- See job type consolidation in refactor commit
 
 ### 13-hrmcp-proxy
 
