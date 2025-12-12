@@ -1,6 +1,15 @@
 # Plan: Remove MCP Server from Hootenanny
 
-## Status: Pending
+## Status: In Progress (Partial)
+
+**Completed:**
+- hooteproto Payload expanded with all tool variants
+- holler tool_to_payload handles all tools
+- ZMQ server returns "not_implemented" for unhandled tools
+
+**Remaining:**
+- Full ZMQ dispatch implementation
+- Remove baton/MCP from hootenanny
 
 This is follow-up work to the holler→baton migration. The goal is to make holler the single MCP entry point, with hootenanny as a pure ZMQ backend.
 
@@ -102,10 +111,22 @@ This is a **medium-large refactor**:
 - Progress reporting currently uses baton's `ToolContext`
 - Tests need rewriting for ZMQ instead of MCP
 
+## Key Challenge: Type Mismatch
+
+The main issue is that `hooteproto::Payload` types don't match `api::schema` request types:
+- hooteproto uses `f64` for temperatures, schema uses `f32`
+- Field names differ (e.g., `cfg_coef` vs none)
+- Schema types have additional fields (variation_set_id, mime_type, etc.)
+
+**Solution options:**
+1. Align hooteproto types with schema types
+2. Create adapter functions for each tool
+3. Bypass schema types and call LocalModels directly from ZMQ dispatch
+
 ## Alternative: Keep Both
 
-Instead of full removal, hootenanny could:
-1. Listen on localhost:8080 for direct MCP (development/testing)
-2. Listen on ZMQ for holler aggregation (production)
+Current state: hootenanny has both MCP and ZMQ servers.
+- MCP: Full tool suite via baton
+- ZMQ: CAS + artifacts only
 
-This allows gradual migration and keeps the MCP interface for local testing.
+For now, tools only available via MCP. Holler's tool_to_payload has all routing ready, but hootenanny's ZMQ server returns "not_implemented" for most tools.

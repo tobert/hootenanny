@@ -1,6 +1,9 @@
 //! ZMQ ROUTER server for Hootenanny using hooteproto
 //!
 //! Exposes CAS, artifact, and graph tools over ZMQ for Holler to route to.
+//! Can operate in two modes:
+//! 1. Standalone - with direct CAS/artifact access (original mode)
+//! 2. With EventDualityServer - for full tool dispatch (future mode)
 
 use anyhow::{Context, Result};
 use cas::ContentStore;
@@ -130,10 +133,13 @@ impl HooteprotoServer {
             Payload::ListTools => self.list_tools(),
 
             other => {
-                warn!("Unhandled payload: {:?}", other);
+                warn!("Unhandled payload: {:?}", payload_type_name(&other));
                 Payload::Error {
                     code: "not_implemented".to_string(),
-                    message: "Hootenanny ZMQ does not handle this payload type yet".to_string(),
+                    message: format!(
+                        "Tool '{}' not yet implemented in ZMQ server. Use MCP endpoint for full functionality.",
+                        payload_type_name(&other)
+                    ),
                     details: None,
                 }
             }
@@ -248,8 +254,8 @@ impl HooteprotoServer {
                 let artifacts: Vec<_> = all_artifacts
                     .into_iter()
                     .filter(|a| {
-                        let tag_match = tag.as_ref().map_or(true, |t| a.tags.contains(t));
-                        let creator_match = creator.as_ref().map_or(true, |c| &a.creator == c);
+                        let tag_match = tag.as_ref().map_or(true, |t| a.tags.iter().any(|at| at == t));
+                        let creator_match = creator.as_ref().map_or(true, |c| a.creator.as_str() == c);
                         tag_match && creator_match
                     })
                     .collect();
