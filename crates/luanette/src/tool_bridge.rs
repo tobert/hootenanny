@@ -90,7 +90,7 @@ pub fn register_mcp_globals(lua: &Lua, ctx: McpBridgeContext) -> Result<()> {
             tools_by_namespace
                 .entry(namespace.to_string())
                 .or_default()
-                .push((tool.name.clone(), tool.description.unwrap_or_default()));
+                .push((tool.name.clone(), tool.description.clone()));
         }
     }
 

@@ -1,116 +1,153 @@
-//! Client manager for upstream MCP servers.
+//! ZMQ client for upstream hootenanny server.
 //!
-//! Manages connections to multiple MCP servers with namespace mapping.
+//! Connects directly to hootenanny via ZMQ DEALER socket using hooteproto.
 
 use anyhow::{Context, Result};
-use baton::client::{ClientOptions, McpClient, ToolInfo};
-use std::collections::HashMap;
-use std::sync::Arc;
+use hooteproto::{Envelope, Payload, ToolInfo};
+use std::time::Duration;
 use tokio::sync::RwLock;
+use tracing::{debug, info};
+use zeromq::{DealerSocket, Socket, SocketRecv, SocketSend, ZmqMessage};
 
-/// Configuration for an upstream MCP server.
+/// Configuration for the upstream hootenanny connection.
 #[derive(Debug, Clone)]
 pub struct UpstreamConfig {
     /// Namespace prefix for tools (e.g., "hootenanny" -> mcp.hootenanny.*)
     pub namespace: String,
-
-    /// URL of the MCP server
-    pub url: String,
+    /// ZMQ endpoint (e.g., "tcp://localhost:5580")
+    pub endpoint: String,
+    /// Request timeout in milliseconds
+    pub timeout_ms: u64,
 }
 
-/// Cached tool information for an upstream server.
-struct CachedUpstream {
-    /// The MCP client
-    client: Arc<McpClient>,
-
-    /// Discovered tools
+/// ZMQ client for hootenanny.
+struct HootClient {
+    socket: RwLock<DealerSocket>,
+    timeout: Duration,
     tools: Vec<ToolInfo>,
 }
 
-/// Manages connections to multiple upstream MCP servers.
+impl HootClient {
+    async fn connect(endpoint: &str, timeout_ms: u64) -> Result<Self> {
+        debug!("Creating DEALER socket for hootenanny");
+        let mut socket = DealerSocket::new();
+
+        // Wrap in timeout because zeromq-rs connect() can block indefinitely
+        tokio::time::timeout(Duration::from_secs(5), socket.connect(endpoint))
+            .await
+            .with_context(|| format!("Timeout connecting to hootenanny at {}", endpoint))?
+            .with_context(|| format!("Failed to connect to hootenanny at {}", endpoint))?;
+
+        info!("Connected to hootenanny at {}", endpoint);
+
+        Ok(Self {
+            socket: RwLock::new(socket),
+            timeout: Duration::from_millis(timeout_ms),
+            tools: Vec::new(),
+        })
+    }
+
+    async fn request(&self, payload: Payload) -> Result<Payload> {
+        let envelope = Envelope::new(payload);
+        let bytes = rmp_serde::to_vec(&envelope)?;
+
+        debug!("Sending {} bytes to hootenanny", bytes.len());
+
+        let mut socket = self.socket.write().await;
+
+        // Send
+        let msg = ZmqMessage::from(bytes);
+        tokio::time::timeout(self.timeout, socket.send(msg))
+            .await
+            .context("Send timeout")?
+            .context("Failed to send")?;
+
+        // Receive
+        let response = tokio::time::timeout(self.timeout, socket.recv())
+            .await
+            .context("Receive timeout")?
+            .context("Failed to receive")?;
+
+        let response_bytes = response.get(0).context("Empty response")?;
+        let response_envelope: Envelope = rmp_serde::from_slice(response_bytes)
+            .context("Failed to deserialize response")?;
+
+        Ok(response_envelope.payload)
+    }
+
+    async fn discover_tools(&mut self) -> Result<()> {
+        match self.request(Payload::ListTools).await? {
+            Payload::ToolList { tools } => {
+                info!("Discovered {} tools from hootenanny", tools.len());
+                self.tools = tools;
+                Ok(())
+            }
+            Payload::Error { code, message, .. } => {
+                anyhow::bail!("ListTools failed: {} - {}", code, message)
+            }
+            other => {
+                anyhow::bail!("Unexpected response to ListTools: {:?}", other)
+            }
+        }
+    }
+}
+
+/// Manages the connection to upstream hootenanny.
 pub struct ClientManager {
-    /// Upstreams indexed by namespace
-    upstreams: RwLock<HashMap<String, CachedUpstream>>,
+    client: Option<HootClient>,
+    namespace: String,
 }
 
 impl ClientManager {
     /// Create a new empty client manager.
     pub fn new() -> Self {
         Self {
-            upstreams: RwLock::new(HashMap::new()),
+            client: None,
+            namespace: String::new(),
         }
     }
 
-    /// Add an upstream MCP server.
-    ///
-    /// This will connect to the server, initialize the session, and discover tools.
-    #[tracing::instrument(skip(self), fields(namespace = %config.namespace, url = %config.url))]
-    pub async fn add_upstream(&self, config: UpstreamConfig) -> Result<()> {
-        tracing::info!("Connecting to upstream MCP server");
+    /// Connect to upstream hootenanny via ZMQ.
+    #[tracing::instrument(skip(self), fields(namespace = %config.namespace, endpoint = %config.endpoint))]
+    pub async fn add_upstream(&mut self, config: UpstreamConfig) -> Result<()> {
+        info!("Connecting to upstream hootenanny");
 
-        let options = ClientOptions::with_name("luanette", env!("CARGO_PKG_VERSION"));
-        let client = McpClient::with_options(&config.url, options);
+        let mut client = HootClient::connect(&config.endpoint, config.timeout_ms).await?;
+        client.discover_tools().await?;
 
-        // Initialize the connection
-        client
-            .initialize()
-            .await
-            .context("Failed to initialize upstream MCP session")?;
-
-        // Discover available tools
-        let tools = client
-            .list_tools()
-            .await
-            .context("Failed to list tools from upstream")?;
-
-        tracing::info!(
-            tool_count = tools.len(),
-            "Discovered tools from upstream"
-        );
-
-        let cached = CachedUpstream {
-            client: Arc::new(client),
-            tools,
-        };
-
-        self.upstreams.write().await.insert(config.namespace, cached);
+        self.namespace = config.namespace;
+        self.client = Some(client);
 
         Ok(())
     }
 
-    /// Remove an upstream by namespace.
-    pub async fn remove_upstream(&self, namespace: &str) -> bool {
-        self.upstreams.write().await.remove(namespace).is_some()
+    /// Remove the upstream connection.
+    pub async fn remove_upstream(&mut self, _namespace: &str) -> bool {
+        self.client.take().is_some()
     }
 
-    /// Get all available tools across all upstreams.
-    ///
-    /// Returns tools with namespaced names (e.g., "hootenanny.orpheus_generate").
+    /// Get all available tools.
     pub async fn all_tools(&self) -> Vec<(String, ToolInfo)> {
-        let upstreams = self.upstreams.read().await;
-        let mut result = Vec::new();
-
-        for (namespace, cached) in upstreams.iter() {
-            for tool in &cached.tools {
-                let namespaced_name = format!("{}.{}", namespace, tool.name);
-                result.push((namespaced_name, tool.clone()));
+        match &self.client {
+            Some(client) => {
+                client.tools.iter()
+                    .map(|t| (format!("{}.{}", self.namespace, t.name), t.clone()))
+                    .collect()
             }
+            None => Vec::new(),
         }
-
-        result
     }
 
     /// Get tools for a specific namespace.
     pub async fn tools_for_namespace(&self, namespace: &str) -> Option<Vec<ToolInfo>> {
-        let upstreams = self.upstreams.read().await;
-        upstreams.get(namespace).map(|c| c.tools.clone())
+        if namespace == self.namespace {
+            self.client.as_ref().map(|c| c.tools.clone())
+        } else {
+            None
+        }
     }
 
-    /// Call a tool on an upstream server.
-    ///
-    /// The tool name can be either:
-    /// - Fully qualified: "hootenanny.orpheus_generate"
-    /// - Namespace + tool: namespace="hootenanny", name="orpheus_generate"
+    /// Call a tool on hootenanny.
     #[tracing::instrument(skip(self, arguments), fields(tool = %tool_name))]
     pub async fn call_tool(
         &self,
@@ -118,94 +155,79 @@ impl ClientManager {
         tool_name: &str,
         arguments: serde_json::Value,
     ) -> Result<serde_json::Value> {
-        self.call_tool_with_traceparent(namespace, tool_name, arguments, None)
-            .await
+        self.call_tool_with_traceparent(namespace, tool_name, arguments, None).await
     }
 
-    /// Call a tool on an upstream server with explicit traceparent.
-    ///
-    /// Use this when calling from a blocking context where span context
-    /// isn't available (e.g., from Lua scripts in spawn_blocking).
-    #[tracing::instrument(skip(self, arguments, traceparent), fields(tool = %tool_name))]
+    /// Call a tool with explicit traceparent.
+    #[tracing::instrument(skip(self, arguments, _traceparent), fields(tool = %tool_name))]
     pub async fn call_tool_with_traceparent(
         &self,
         namespace: &str,
         tool_name: &str,
         arguments: serde_json::Value,
-        traceparent: Option<&str>,
+        _traceparent: Option<&str>,
     ) -> Result<serde_json::Value> {
-        let upstreams = self.upstreams.read().await;
-
-        let cached = upstreams
-            .get(namespace)
-            .ok_or_else(|| anyhow::anyhow!("Unknown namespace: {}", namespace))?;
-
-        // Verify the tool exists
-        if !cached.tools.iter().any(|t| t.name == tool_name) {
-            anyhow::bail!(
-                "Tool '{}' not found in namespace '{}'. Available: {:?}",
-                tool_name,
-                namespace,
-                cached.tools.iter().map(|t| &t.name).collect::<Vec<_>>()
-            );
+        if namespace != self.namespace {
+            anyhow::bail!("Unknown namespace: {}", namespace);
         }
 
-        cached
-            .client
-            .call_tool_with_traceparent(tool_name, arguments, traceparent)
-            .await
-            .context("Failed to call upstream tool")
+        let client = self.client.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected to hootenanny"))?;
+
+        // Convert tool name + args to Payload using shared function
+        let payload = hooteproto::tool_to_payload(tool_name, &arguments)
+            .with_context(|| format!("Failed to convert tool '{}' to payload", tool_name))?;
+
+        // Send request
+        let response = client.request(payload).await?;
+
+        // Handle response
+        match response {
+            Payload::Success { result } => Ok(result),
+            Payload::Error { code, message, details } => {
+                let error_msg = if let Some(d) = details {
+                    format!("{}: {}\n{}", code, message, serde_json::to_string_pretty(&d)?)
+                } else {
+                    format!("{}: {}", code, message)
+                };
+                anyhow::bail!(error_msg)
+            }
+            other => {
+                anyhow::bail!("Unexpected response: {:?}", other)
+            }
+        }
     }
 
     /// Parse a fully qualified tool name into (namespace, tool_name).
-    ///
-    /// Example: "hootenanny.orpheus_generate" -> ("hootenanny", "orpheus_generate")
     pub fn parse_qualified_name(qualified: &str) -> Option<(&str, &str)> {
         qualified.split_once('.')
     }
 
     /// Get the list of connected namespaces.
     pub async fn namespaces(&self) -> Vec<String> {
-        self.upstreams.read().await.keys().cloned().collect()
+        if self.client.is_some() {
+            vec![self.namespace.clone()]
+        } else {
+            vec![]
+        }
     }
 
     /// Check if a namespace is connected.
     pub async fn has_namespace(&self, namespace: &str) -> bool {
-        self.upstreams.read().await.contains_key(namespace)
+        self.client.is_some() && namespace == self.namespace
     }
 
-    /// Get the URL for a namespace.
-    pub async fn url_for_namespace(&self, namespace: &str) -> Option<String> {
-        self.upstreams
-            .read()
-            .await
-            .get(namespace)
-            .map(|c| c.client.base_url().to_string())
-    }
+    /// Refresh tools (re-discover).
+    pub async fn refresh_tools(&mut self, namespace: &str) -> Result<()> {
+        if namespace != self.namespace {
+            anyhow::bail!("Unknown namespace: {}", namespace);
+        }
 
-    /// Refresh tools for a namespace (re-discover).
-    pub async fn refresh_tools(&self, namespace: &str) -> Result<()> {
-        let mut upstreams = self.upstreams.write().await;
-
-        let cached = upstreams
-            .get_mut(namespace)
-            .ok_or_else(|| anyhow::anyhow!("Unknown namespace: {}", namespace))?;
-
-        let tools = cached
-            .client
-            .list_tools()
-            .await
-            .context("Failed to refresh tools")?;
-
-        tracing::info!(
-            namespace = %namespace,
-            tool_count = tools.len(),
-            "Refreshed tools"
-        );
-
-        cached.tools = tools;
-
-        Ok(())
+        if let Some(ref mut client) = self.client {
+            client.discover_tools().await
+        } else {
+            anyhow::bail!("Not connected to hootenanny")
+        }
     }
 }
 

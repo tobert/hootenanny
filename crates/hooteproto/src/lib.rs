@@ -19,6 +19,9 @@
 pub mod params;
 pub mod schema_helpers;
 pub mod garden;
+pub mod conversion;
+
+pub use conversion::tool_to_payload;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -692,7 +695,7 @@ pub enum Payload {
         metadata: serde_json::Value,
     },
 
-    // === Tool Discovery (Holler → any backend) ===
+    // === Tool Discovery ===
     ListTools,
     ToolList {
         tools: Vec<ToolInfo>,
