@@ -670,6 +670,7 @@ dependencies = [
  "cas",
  "chrono",
  "futures",
+ "hooteproto",
  "hound",
  "midly",
  "petgraph",
@@ -1570,6 +1571,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "reqwest",
+ "rmp-serde",
  "serde",
  "serde_json",
  "tokio",
@@ -1644,9 +1646,11 @@ name = "hooteproto"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "chrono",
  "pretty_assertions",
  "schemars",
  "serde",
+ "serde_bytes",
  "serde_json",
  "uuid",
 ]
@@ -2298,6 +2302,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "reqwest",
+ "rmp-serde",
  "schemars",
  "serde",
  "serde_json",
@@ -3629,6 +3634,16 @@ checksum = "f3a1a3341211875ef120e117ea7fd5228530ae7e7036a779fdc9117be6b3282c"
 dependencies = [
  "ordered-float",
  "serde",
+]
+
+[[package]]
+name = "serde_bytes"
+version = "0.11.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
+dependencies = [
+ "serde",
+ "serde_core",
 ]
 
 [[package]]

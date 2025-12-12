@@ -31,6 +31,7 @@ futures = "0.3"
 
 # ZMQ
 zeromq = "0.4"
+rmp-serde = "1"
 
 # Web Server (kept for now during transition)
 axum = "0.8"

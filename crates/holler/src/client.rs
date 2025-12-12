@@ -29,10 +29,12 @@ impl Client {
     /// Send a Payload and receive the response
     pub async fn request(&mut self, payload: Payload) -> Result<Envelope> {
         let envelope = Envelope::new(payload);
-        let json = serde_json::to_string(&envelope)?;
+        
+        // Serialize to MsgPack
+        let bytes = rmp_serde::to_vec(&envelope)?;
 
         // Send the message
-        let msg = ZmqMessage::from(json.as_bytes().to_vec());
+        let msg = ZmqMessage::from(bytes);
         tokio::time::timeout(self.timeout, self.socket.send(msg))
             .await
             .context("Send timeout")?
@@ -48,9 +50,9 @@ impl Client {
         let response_bytes = response
             .get(0)
             .context("Empty response")?;
-        let response_str = std::str::from_utf8(response_bytes)?;
-        let response_envelope: Envelope = serde_json::from_str(response_str)
-            .with_context(|| format!("Failed to parse response: {}", response_str))?;
+            
+        let response_envelope: Envelope = rmp_serde::from_slice(response_bytes)
+            .with_context(|| "Failed to deserialize MsgPack response")?;
 
         Ok(response_envelope)
     }

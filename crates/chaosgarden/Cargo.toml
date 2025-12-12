@@ -8,6 +8,7 @@ description = "Realtime audio daemon for halfremembered - RT priority playback, 
 # IPC
 zeromq = "0.4"
 rmp-serde = "1"
+hooteproto = { path = "../hooteproto" }
 
 # Core
 uuid = { version = "1", features = ["v4", "serde"] }

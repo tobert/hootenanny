@@ -13,11 +13,12 @@
 //!
 //! ## Tool Parameter Types
 //!
-//! The `params` module contains types with JsonSchema derives for MCP schema generation.
+//! The `params` module contains types with JsonSchema derives for functionality generation.
 //! Use with `baton::schema_for::<ParamType>()` to generate tool input schemas.
 
 pub mod params;
 pub mod schema_helpers;
+pub mod garden;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -848,15 +849,23 @@ mod base64_bytes {
     where
         S: Serializer,
     {
-        STANDARD.encode(bytes).serialize(serializer)
+        if serializer.is_human_readable() {
+            STANDARD.encode(bytes).serialize(serializer)
+        } else {
+            serializer.serialize_bytes(bytes)
+        }
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        STANDARD.decode(&s).map_err(serde::de::Error::custom)
+        if deserializer.is_human_readable() {
+            let s = String::deserialize(deserializer)?;
+            STANDARD.decode(&s).map_err(serde::de::Error::custom)
+        } else {
+            serde_bytes::deserialize(deserializer)
+        }
     }
 }
 

@@ -102,12 +102,12 @@ impl HooteprotoServer {
     async fn handle_message(&self, socket: &mut RouterSocket, msg: ZmqMessage) -> Result<()> {
         let identity = msg.get(0).context("Missing identity frame")?.to_vec();
         let payload_bytes = msg.get(1).context("Missing payload frame")?;
-        let payload_str = std::str::from_utf8(payload_bytes)?;
+        
+        // Debug log size instead of content for binary protocols
+        debug!("Received {} bytes", payload_bytes.len());
 
-        debug!("Received: {}", payload_str);
-
-        let envelope: Envelope = serde_json::from_str(payload_str)
-            .with_context(|| format!("Failed to parse: {}", payload_str))?;
+        let envelope: Envelope = rmp_serde::from_slice(payload_bytes)
+            .with_context(|| "Failed to parse MsgPack envelope")?;
 
         // Create a span with the incoming traceparent as the parent
         let span = tracing::info_span!(
@@ -130,11 +130,11 @@ impl HooteprotoServer {
             payload: response_payload,
         };
 
-        let response_json = serde_json::to_string(&response)?;
-        debug!("Sending: {}", response_json);
+        let response_bytes = rmp_serde::to_vec(&response)?;
+        debug!("Sending {} bytes", response_bytes.len());
 
         let mut reply = ZmqMessage::from(identity);
-        reply.push_back(response_json.into_bytes().into());
+        reply.push_back(response_bytes.into());
         socket.send(reply).await?;
 
         Ok(())
@@ -512,4 +512,3 @@ fn payload_to_tool_args(payload: Payload) -> anyhow::Result<(String, serde_json:
 
     Ok((tool_name, serde_json::Value::Object(args)))
 }
-

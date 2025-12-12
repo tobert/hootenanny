@@ -74,5 +74,3 @@ pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 /// Default heartbeat timeout (miss 3 beats = dead)
 pub const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Protocol version
-pub const PROTOCOL_VERSION: &str = "0.1.0";

@@ -96,14 +96,11 @@ impl Server {
             .get(1)
             .context("Missing payload frame")?;
 
-        let payload_str = std::str::from_utf8(payload_bytes)
-            .context("Invalid UTF-8 in payload")?;
+        debug!("Received {} bytes", payload_bytes.len());
 
-        debug!("Received message: {}", payload_str);
-
-        // Parse the envelope
-        let envelope: Envelope = serde_json::from_str(payload_str)
-            .with_context(|| format!("Failed to parse envelope: {}", payload_str))?;
+        // Parse the envelope from MsgPack
+        let envelope: Envelope = rmp_serde::from_slice(payload_bytes)
+            .with_context(|| "Failed to parse MsgPack envelope")?;
 
         // Dispatch and get response
         let response_payload = self.dispatch(envelope.payload).await;
@@ -115,12 +112,13 @@ impl Server {
             payload: response_payload,
         };
 
-        let response_json = serde_json::to_string(&response)?;
-        debug!("Sending response: {}", response_json);
+        // Serialize response to MsgPack
+        let response_bytes = rmp_serde::to_vec(&response)?;
+        debug!("Sending response: {} bytes", response_bytes.len());
 
         // Send response with identity frame
         let mut reply = ZmqMessage::from(identity);
-        reply.push_back(response_json.into_bytes().into());
+        reply.push_back(response_bytes.into());
         socket.send(reply).await?;
 
         Ok(())
