@@ -20,8 +20,10 @@
 # Test connectivity with holler CLI
 ./target/debug/holler ping tcp://127.0.0.1:5580
 
-# Run holler as MCP gateway
-./target/debug/holler serve --port 8081 --hootenanny tcp://127.0.0.1:5580
+# Run holler as MCP gateway (with broadcast subscriptions)
+./target/debug/holler serve --port 8081 \
+  --hootenanny tcp://127.0.0.1:5580 \
+  --hootenanny-pub tcp://127.0.0.1:5581
 
 # Connect to SSE for notifications
 curl -N http://127.0.0.1:8081/sse
@@ -236,6 +238,8 @@ The `holler serve` subcommand (Phase 3+) runs the MCP gateway.
 - [x] Create `sse.rs` - SSE endpoint for server-initiated notifications (GET /sse)
 - [x] Health check endpoint (GET /health)
 - [x] Broadcast channel for forwarding events to SSE clients
+- [x] Create `subscriber.rs` - ZMQ SUB sockets for backend PUB broadcasts
+- [x] CLI flags: `--luanette-pub`, `--hootenanny-pub`, `--chaosgarden-pub`
 
 ### Phase 7: OTEL Integration ✅
 - [x] Extract traceparent from HTTP headers (`telemetry::extract_traceparent`)

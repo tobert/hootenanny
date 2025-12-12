@@ -9,13 +9,19 @@ use tracing::info;
 use crate::backend::BackendPool;
 use crate::mcp::{handle_health, handle_mcp, AppState};
 use crate::sse::{create_broadcast_channel, sse_handler};
+use crate::subscriber::spawn_subscribers;
 
 /// Server configuration
 pub struct ServeConfig {
     pub port: u16,
+    /// ROUTER endpoints for request/response
     pub luanette: Option<String>,
     pub hootenanny: Option<String>,
     pub chaosgarden: Option<String>,
+    /// PUB endpoints for broadcasts
+    pub luanette_pub: Option<String>,
+    pub hootenanny_pub: Option<String>,
+    pub chaosgarden_pub: Option<String>,
 }
 
 /// Run the MCP gateway server
@@ -53,6 +59,31 @@ pub async fn run(config: ServeConfig) -> Result<()> {
 
     // Create broadcast channel for SSE events
     let (broadcast_tx, _broadcast_rx) = create_broadcast_channel();
+
+    // Spawn ZMQ SUB subscribers for backend broadcasts
+    let has_subs = config.luanette_pub.is_some()
+        || config.hootenanny_pub.is_some()
+        || config.chaosgarden_pub.is_some();
+
+    if has_subs {
+        info!("   Subscribing to backend broadcasts...");
+        if let Some(ref ep) = config.luanette_pub {
+            info!("      Luanette PUB: {}", ep);
+        }
+        if let Some(ref ep) = config.hootenanny_pub {
+            info!("      Hootenanny PUB: {}", ep);
+        }
+        if let Some(ref ep) = config.chaosgarden_pub {
+            info!("      Chaosgarden PUB: {}", ep);
+        }
+
+        spawn_subscribers(
+            broadcast_tx.clone(),
+            config.luanette_pub,
+            config.hootenanny_pub,
+            config.chaosgarden_pub,
+        );
+    }
 
     // Create shared state
     let state = AppState {

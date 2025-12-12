@@ -15,6 +15,7 @@ mod commands;
 mod mcp;
 mod serve;
 mod sse;
+mod subscriber;
 mod telemetry;
 
 #[derive(Parser)]
@@ -83,17 +84,29 @@ enum Commands {
         #[arg(short, long, default_value = "8080")]
         port: u16,
 
-        /// Luanette ZMQ endpoint
+        /// Luanette ZMQ ROUTER endpoint (for tool calls)
         #[arg(long)]
         luanette: Option<String>,
 
-        /// Hootenanny ZMQ endpoint
+        /// Hootenanny ZMQ ROUTER endpoint (for tool calls)
         #[arg(long)]
         hootenanny: Option<String>,
 
-        /// Chaosgarden ZMQ endpoint
+        /// Chaosgarden ZMQ ROUTER endpoint (for tool calls)
         #[arg(long)]
         chaosgarden: Option<String>,
+
+        /// Luanette ZMQ PUB endpoint (for broadcasts/SSE)
+        #[arg(long)]
+        luanette_pub: Option<String>,
+
+        /// Hootenanny ZMQ PUB endpoint (for broadcasts/SSE)
+        #[arg(long)]
+        hootenanny_pub: Option<String>,
+
+        /// Chaosgarden ZMQ PUB endpoint (for broadcasts/SSE)
+        #[arg(long)]
+        chaosgarden_pub: Option<String>,
 
         /// OTLP gRPC endpoint for OpenTelemetry (e.g., "localhost:4317")
         #[arg(long, default_value = "localhost:4317")]
@@ -194,6 +207,9 @@ async fn main() -> Result<()> {
             luanette,
             hootenanny,
             chaosgarden,
+            luanette_pub,
+            hootenanny_pub,
+            chaosgarden_pub,
             otlp_endpoint,
         } => {
             // Initialize OTEL for serve mode
@@ -204,6 +220,9 @@ async fn main() -> Result<()> {
                 luanette,
                 hootenanny,
                 chaosgarden,
+                luanette_pub,
+                hootenanny_pub,
+                chaosgarden_pub,
             })
             .await?;
         }
