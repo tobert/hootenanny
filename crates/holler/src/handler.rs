@@ -126,6 +126,7 @@ impl Handler for ZmqHandler {
 async fn collect_tools_async(backends: &BackendPool) -> Vec<Tool> {
     let mut all_tools = Vec::new();
 
+    // Query each backend dynamically - skip those that don't support ListTools
     for (name, backend_opt) in [
         ("luanette", &backends.luanette),
         ("hootenanny", &backends.hootenanny),
@@ -138,10 +139,11 @@ async fn collect_tools_async(backends: &BackendPool) -> Vec<Tool> {
                     all_tools.extend(tools.into_iter().map(tool_info_to_baton));
                 }
                 Ok(other) => {
-                    error!("{} returned unexpected response to ListTools: {:?}", name, other);
+                    debug!("{} returned non-tool response to ListTools: {:?}", name, other);
                 }
                 Err(e) => {
-                    error!("Failed to list tools from {}: {}", name, e);
+                    // Backend doesn't support ListTools or isn't available - skip silently
+                    debug!("Skipping {} for tool discovery: {}", name, e);
                 }
             }
         }

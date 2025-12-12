@@ -39,10 +39,14 @@ pub struct Backend {
 impl Backend {
     /// Connect to a backend
     pub async fn connect(config: BackendConfig) -> Result<Self> {
+        debug!("Creating DEALER socket for {}", config.name);
         let mut socket = DealerSocket::new();
-        socket
-            .connect(&config.endpoint)
+        debug!("DEALER socket created, connecting to {}", config.endpoint);
+
+        // Wrap in timeout because zeromq-rs connect() can block indefinitely
+        tokio::time::timeout(Duration::from_secs(5), socket.connect(&config.endpoint))
             .await
+            .with_context(|| format!("Timeout connecting to {} at {}", config.name, config.endpoint))?
             .with_context(|| format!("Failed to connect to {} at {}", config.name, config.endpoint))?;
 
         info!("Connected to {} at {} ({:?})", config.name, config.endpoint, config.protocol);

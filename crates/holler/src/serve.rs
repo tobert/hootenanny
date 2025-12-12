@@ -59,13 +59,15 @@ pub async fn run(config: ServeConfig) -> Result<()> {
     // Create backend pool
     let mut backends = BackendPool::new();
 
-    // Connect to backends
+    // Connect to backends - Luanette is optional (may not be running yet due to circular dep)
     if let Some(ref endpoint) = config.luanette {
         info!("   Connecting to Luanette at {}", endpoint);
-        backends
-            .connect_luanette(endpoint, 30000)
-            .await
-            .context("Failed to connect to Luanette")?;
+        match backends.connect_luanette(endpoint, 30000).await {
+            Ok(()) => info!("   ✅ Connected to Luanette"),
+            Err(e) => {
+                tracing::warn!("   ⚠️  Luanette not available (will work without Lua scripting): {}", e);
+            }
+        }
     }
 
     if let Some(ref endpoint) = config.hootenanny {
