@@ -43,6 +43,7 @@ serial_test = "3"
 hootenanny = { path = "../hootenanny" }
 baton = { path = "../baton" }
 audio-graph-mcp = { path = "../audio-graph-mcp" }
+cas = { path = "../cas" }
 tokio-util = "0.7"
 axum = "0.8"
 tracing = "0.1"

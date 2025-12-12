@@ -15,7 +15,7 @@ use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use hootenanny::api::handler::HootHandler;
 use hootenanny::api::service::EventDualityServer;
 use hootenanny::artifact_store::FileStore;
-use hootenanny::cas::Cas;
+use cas::FileStore as CasFileStore;
 use hootenanny::job_system::JobStore;
 use hootenanny::mcp_tools::local_models::LocalModels;
 
@@ -72,7 +72,7 @@ async fn spawn_test_server_configured(
         // CAS - always ephemeral
         let cas_dir = state_dir.join("cas");
         std::fs::create_dir_all(&cas_dir).unwrap();
-        let cas = Cas::new(&cas_dir).unwrap();
+        let cas = CasFileStore::at_path(&cas_dir).unwrap();
         let local_models = Arc::new(LocalModels::new(cas.clone(), 2000));
 
         // Artifacts - always ephemeral
@@ -275,7 +275,7 @@ async fn spawn_persistent_server(
 
         let cas_dir = state_dir.join("cas");
         std::fs::create_dir_all(&cas_dir).unwrap();
-        let cas = Cas::new(&cas_dir).unwrap();
+        let cas = CasFileStore::at_path(&cas_dir).unwrap();
         let local_models = Arc::new(LocalModels::new(cas.clone(), 2000));
 
         let artifact_store = Arc::new(std::sync::RwLock::new(

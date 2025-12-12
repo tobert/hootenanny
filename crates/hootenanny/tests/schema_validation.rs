@@ -15,7 +15,7 @@ fn create_test_handler() -> HootHandler {
     use std::path::Path;
 
     // We don't need real implementations for schema validation
-    let cas = hootenanny::cas::Cas::new(Path::new("/tmp/test_cas")).unwrap();
+    let cas = cas::FileStore::at_path(Path::new("/tmp/test_cas")).unwrap();
 
     let local_models = Arc::new(
         hootenanny::mcp_tools::local_models::LocalModels::new(cas, 2002),

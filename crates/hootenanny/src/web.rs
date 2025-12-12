@@ -6,7 +6,7 @@
 //! Note: MCP handlers have migrated to the baton crate.
 
 use crate::artifact_store::{ArtifactStore, FileStore};
-use crate::cas::Cas;
+use cas::{ContentStore, FileStore as CasFileStore};
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -23,7 +23,7 @@ use tokio_util::io::ReaderStream;
 #[derive(Clone)]
 pub struct WebState {
     pub artifact_store: Arc<RwLock<FileStore>>,
-    pub cas: Arc<Cas>,
+    pub cas: Arc<CasFileStore>,
 }
 
 pub fn router(state: WebState) -> Router {
@@ -86,15 +86,19 @@ async fn download_artifact(State(state): State<WebState>, Path(id): Path<String>
         span.record("artifact.access_count", access_count);
 
         // Get CAS info
-        let cas_ref = match state.cas.inspect(content_hash.as_str()) {
+        let cas_hash: cas::ContentHash = match content_hash.as_str().parse() {
+            Ok(h) => h,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        let cas_ref = match state.cas.inspect(&cas_hash) {
             Ok(Some(r)) => r,
             Ok(None) => return StatusCode::NOT_FOUND.into_response(),
             Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         };
 
-        let path = match state.cas.get_path(content_hash.as_str()) {
-            Ok(Some(p)) => p,
-            _ => return StatusCode::NOT_FOUND.into_response(),
+        let path = match state.cas.path(&cas_hash) {
+            Some(p) => p,
+            None => return StatusCode::NOT_FOUND.into_response(),
         };
 
         (content_hash, cas_ref.mime_type, path, access_count, artifact_id_str)
@@ -157,11 +161,13 @@ async fn artifact_meta(
     match store.get(&id) {
         Ok(Some(artifact)) => {
             // Get CAS metadata for MIME type and size
-            let (mime_type, size_bytes) =
-                match state.cas.inspect(artifact.content_hash.as_str()) {
+            let (mime_type, size_bytes) = {
+                let cas_hash: Result<cas::ContentHash, _> = artifact.content_hash.as_str().parse();
+                match cas_hash.and_then(|h| state.cas.inspect(&h).map_err(|_| cas::HashError::InvalidLength(0))) {
                     Ok(Some(r)) => (Some(r.mime_type), Some(r.size_bytes)),
                     _ => (None, None),
-                };
+                }
+            };
 
             let response = ArtifactMetaResponse {
                 id: artifact.id.as_str().to_string(),
@@ -279,11 +285,11 @@ mod tests {
 
         // Create CAS
         let cas_path = temp_dir.path().join("cas");
-        let cas = Cas::new(&cas_path).unwrap();
+        let cas = CasFileStore::at_path(&cas_path).unwrap();
 
         // Store some content
         let content = b"Hello, artifact world!";
-        let hash = cas.write(content, "text/plain").unwrap();
+        let hash = cas.store(content, "text/plain").unwrap();
 
         // Create artifact store
         let artifact_path = temp_dir.path().join("artifacts.json");
@@ -292,7 +298,7 @@ mod tests {
         // Create an artifact pointing to the content
         let artifact = Artifact::new(
             ArtifactId::new("test_artifact"),
-            ContentHash::new(&hash),
+            ContentHash::new(hash.as_str()),
             "test_creator",
             serde_json::json!({"test": true}),
         )

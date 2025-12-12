@@ -72,7 +72,7 @@ impl EventDualityServer {
         span.record("cas.size_bytes", cas_ref.size_bytes);
 
         let response = CasInspectResponse {
-            hash: cas_ref.hash.clone(),
+            hash: cas_ref.hash.to_string(),
             mime_type: cas_ref.mime_type.clone(),
             size_bytes: cas_ref.size_bytes,
             exists: true,

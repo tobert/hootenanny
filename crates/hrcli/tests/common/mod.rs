@@ -13,7 +13,8 @@ use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use hootenanny::api::handler::HootHandler;
 use hootenanny::api::service::EventDualityServer;
 use hootenanny::artifact_store::FileStore;
-use hootenanny::cas::Cas;
+use cas::FileStore as CasFileStore;
+use hootenanny::gpu_monitor::GpuMonitor;
 use hootenanny::job_system::JobStore;
 use hootenanny::mcp_tools::local_models::LocalModels;
 
@@ -74,7 +75,7 @@ impl TestMcpServer {
         // Initialize CAS
         let cas_dir = state_dir.join("cas");
         std::fs::create_dir_all(&cas_dir)?;
-        let cas = Cas::new(&cas_dir)?;
+        let cas = CasFileStore::at_path(&cas_dir)?;
 
         // Initialize LocalModels (with dummy ports - tests won't call Orpheus/DeepSeek)
         let local_models = Arc::new(LocalModels::new(cas.clone(), 9999));
@@ -104,6 +105,9 @@ impl TestMcpServer {
             )?
         );
 
+        // Initialize GPU monitor
+        let gpu_monitor = Arc::new(GpuMonitor::new());
+
         // Create the EventDualityServer
         let event_duality_server = Arc::new(EventDualityServer::new(
             local_models,
@@ -111,6 +115,7 @@ impl TestMcpServer {
             job_store,
             audio_graph_db,
             graph_adapter,
+            gpu_monitor,
         ));
 
         // Create baton MCP handler and state

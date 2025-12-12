@@ -3,8 +3,7 @@
 //! Tools for interacting with local Orpheus (music) and DeepSeek (code) models.
 //! Handles CAS integration automatically.
 
-use crate::cas::Cas;
-use crate::cas::CasReference;
+use cas::{CasReference, ContentHash, ContentStore, FileStore};
 use anyhow::{Context, Result};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -58,13 +57,13 @@ pub trait LocalModelTools {
 // --- Implementation ---
 
 pub struct LocalModels {
-    cas: Cas,
+    cas: FileStore,
     orpheus_url: String,
     client: reqwest::Client,
 }
 
 impl LocalModels {
-    pub fn new(cas: Cas, orpheus_port: u16) -> Self {
+    pub fn new(cas: FileStore, orpheus_port: u16) -> Self {
         Self {
             cas,
             orpheus_url: format!("http://127.0.0.1:{}", orpheus_port),
@@ -74,12 +73,14 @@ impl LocalModels {
 
     // Helper to resolve CAS hash to bytes
     fn resolve_cas(&self, hash: &str) -> Result<Vec<u8>> {
-        self.cas.read(hash)?.context("CAS object not found")
+        let content_hash: ContentHash = hash.parse().context("Invalid hash format")?;
+        self.cas.retrieve(&content_hash)?.context("CAS object not found")
     }
 
     // Helper to store bytes to CAS
     fn store_cas(&self, data: &[u8], mime_type: &str) -> Result<String> {
-        self.cas.write(data, mime_type)
+        let hash = self.cas.store(data, mime_type)?;
+        Ok(hash.into_inner())
     }
 
     // Helper to inject traceparent header for distributed tracing
@@ -115,15 +116,17 @@ impl LocalModels {
         content: &[u8],
         mime_type: &str,
     ) -> Result<String> {
-        self.cas.write(content, mime_type)
-            .context("Failed to store content in CAS")
+        let hash = self.cas.store(content, mime_type)
+            .context("Failed to store content in CAS")?;
+        Ok(hash.into_inner())
     }
 
     pub async fn inspect_cas_content(
         &self,
         hash: &str,
     ) -> Result<CasReference> {
-        self.cas.inspect(hash)?
+        let content_hash: ContentHash = hash.parse().context("Invalid hash format")?;
+        self.cas.inspect(&content_hash)?
             .ok_or_else(|| anyhow::anyhow!("CAS object with hash {} not found", hash))
     }
 
