@@ -2,137 +2,14 @@
 //!
 //! Provides background job execution for long-running operations like model inference.
 //! Tools return job IDs immediately, allowing agents to check status and retrieve results later.
+//!
+//! Uses canonical job types from hooteproto for interoperability with luanette.
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use hooteproto::{JobId, JobInfo, JobStatus, JobStoreStats};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
-use uuid::Uuid;
-
-/// Unique identifier for a background job
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct JobId(String);
-
-impl JobId {
-    pub fn new() -> Self {
-        Self(Uuid::new_v4().to_string())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Default for JobId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::fmt::Display for JobId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<String> for JobId {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-/// Current status of a background job
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum JobStatus {
-    /// Job is queued but not yet started
-    Pending,
-    /// Job is currently executing
-    Running,
-    /// Job completed successfully
-    Complete,
-    /// Job failed with an error
-    Failed,
-    /// Job was cancelled
-    Cancelled,
-}
-
-/// Information about a job and its result
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JobInfo {
-    pub job_id: JobId,
-    pub status: JobStatus,
-    pub tool_name: String,
-    pub result: Option<serde_json::Value>,
-    pub error: Option<String>,
-    pub created_at: u64,  // Unix timestamp in seconds
-    pub started_at: Option<u64>,
-    pub completed_at: Option<u64>,
-}
-
-impl JobInfo {
-    fn new(job_id: JobId, tool_name: String) -> Self {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        Self {
-            job_id,
-            status: JobStatus::Pending,
-            tool_name,
-            result: None,
-            error: None,
-            created_at: now,
-            started_at: None,
-            completed_at: None,
-        }
-    }
-
-    fn mark_running(&mut self) {
-        self.status = JobStatus::Running;
-        self.started_at = Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-        );
-    }
-
-    fn mark_complete(&mut self, result: serde_json::Value) {
-        self.status = JobStatus::Complete;
-        self.result = Some(result);
-        self.completed_at = Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-        );
-    }
-
-    fn mark_failed(&mut self, error: String) {
-        self.status = JobStatus::Failed;
-        self.error = Some(error);
-        self.completed_at = Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-        );
-    }
-}
-
-/// Statistics about job store state
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct JobStoreStats {
-    pub total: usize,
-    pub pending: usize,
-    pub running: usize,
-    pub completed: usize,
-    pub failed: usize,
-    pub cancelled: usize,
-}
 
 /// Storage for background jobs
 #[derive(Clone)]
@@ -150,16 +27,16 @@ impl JobStore {
     }
 
     /// Create a new job and return its ID
-    pub fn create_job(&self, tool_name: String) -> JobId {
+    pub fn create_job(&self, source: String) -> JobId {
         let job_id = JobId::new();
-        let job_info = JobInfo::new(job_id.clone(), tool_name.clone());
+        let job_info = JobInfo::new(job_id.clone(), source.clone());
 
         let mut jobs = self.jobs.lock().unwrap();
-        jobs.insert(job_id.0.clone(), job_info);
+        jobs.insert(job_id.as_str().to_string(), job_info);
 
         tracing::info!(
             job.id = %job_id,
-            job.tool = %tool_name,
+            job.source = %source,
             "Job created"
         );
 
@@ -169,15 +46,16 @@ impl JobStore {
     /// Mark a job as running
     pub fn mark_running(&self, job_id: &JobId) -> Result<()> {
         let mut jobs = self.jobs.lock().unwrap();
-        let job = jobs.get_mut(job_id.as_str())
+        let job = jobs
+            .get_mut(job_id.as_str())
             .ok_or_else(|| anyhow::anyhow!("Job not found: {}", job_id))?;
 
-        let tool_name = job.tool_name.clone();
+        let source = job.source.clone();
         job.mark_running();
 
         tracing::info!(
             job.id = %job_id,
-            job.tool = %tool_name,
+            job.source = %source,
             "Job started"
         );
 
@@ -187,22 +65,18 @@ impl JobStore {
     /// Mark a job as complete with result
     pub fn mark_complete(&self, job_id: &JobId, result: serde_json::Value) -> Result<()> {
         let mut jobs = self.jobs.lock().unwrap();
-        let job = jobs.get_mut(job_id.as_str())
+        let job = jobs
+            .get_mut(job_id.as_str())
             .ok_or_else(|| anyhow::anyhow!("Job not found: {}", job_id))?;
 
-        let tool_name = job.tool_name.clone();
-        let duration = job.started_at.map(|started| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() - started
-        });
+        let source = job.source.clone();
+        let duration = job.duration_secs();
 
         job.mark_complete(result);
 
         tracing::info!(
             job.id = %job_id,
-            job.tool = %tool_name,
+            job.source = %source,
             job.duration_secs = ?duration,
             "Job completed successfully"
         );
@@ -213,22 +87,18 @@ impl JobStore {
     /// Mark a job as failed with error
     pub fn mark_failed(&self, job_id: &JobId, error: String) -> Result<()> {
         let mut jobs = self.jobs.lock().unwrap();
-        let job = jobs.get_mut(job_id.as_str())
+        let job = jobs
+            .get_mut(job_id.as_str())
             .ok_or_else(|| anyhow::anyhow!("Job not found: {}", job_id))?;
 
-        let tool_name = job.tool_name.clone();
-        let duration = job.started_at.map(|started| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() - started
-        });
+        let source = job.source.clone();
+        let duration = job.duration_secs();
 
         job.mark_failed(error.clone());
 
         tracing::error!(
             job.id = %job_id,
-            job.tool = %tool_name,
+            job.source = %source,
             job.duration_secs = ?duration,
             job.error = %error,
             "Job failed"
@@ -254,7 +124,7 @@ impl JobStore {
     /// Store a task handle for potential cancellation
     pub fn store_handle(&self, job_id: &JobId, handle: JoinHandle<()>) {
         let mut handles = self.handles.lock().unwrap();
-        handles.insert(job_id.0.clone(), handle);
+        handles.insert(job_id.as_str().to_string(), handle);
     }
 
     /// Cancel a job
@@ -268,18 +138,12 @@ impl JobStore {
         // Mark as cancelled
         let mut jobs = self.jobs.lock().unwrap();
         if let Some(job) = jobs.get_mut(job_id.as_str()) {
-            let tool_name = job.tool_name.clone();
-            job.status = JobStatus::Cancelled;
-            job.completed_at = Some(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()
-            );
+            let source = job.source.clone();
+            job.mark_cancelled();
 
             tracing::warn!(
                 job.id = %job_id,
-                job.tool = %tool_name,
+                job.source = %source,
                 "Job cancelled"
             );
         }

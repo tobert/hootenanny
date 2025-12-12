@@ -1,7 +1,7 @@
-use crate::api::responses::{JobStatusResponse, JobListResponse, JobSummary, JobCancelResponse, JobPollResponse, JobSleepResponse, GpuInfo, GpuSparklines, GpuServiceInfo};
+use crate::api::responses::{JobStatusResponse, JobListResponse, JobSummary, JobCancelResponse, JobPollResponse, JobSleepResponse, GpuInfo, GpuSparklines};
 use crate::api::service::EventDualityServer;
 use crate::api::schema::{GetJobStatusRequest, CancelJobRequest, PollRequest, SleepRequest};
-use crate::job_system::{JobId, JobStatus};
+use hooteproto::{JobId, JobStatus};
 use baton::{ErrorData as McpError, CallToolResult, Content};
 use tracing;
 
@@ -37,7 +37,7 @@ impl EventDualityServer {
         let response = JobStatusResponse {
             job_id: job_info.job_id.as_str().to_string(),
             status,
-            tool_name: job_info.tool_name.clone(),
+            tool_name: job_info.source.clone(),
             result: job_info.result.clone(),
             error: job_info.error.clone(),
             created_at: Some(job_info.created_at as i64),
@@ -75,7 +75,7 @@ impl EventDualityServer {
             };
             JobSummary {
                 job_id: j.job_id.as_str().to_string(),
-                tool_name: j.tool_name.clone(),
+                tool_name: j.source.clone(),
                 status,
                 created_at: j.created_at as i64,
             }

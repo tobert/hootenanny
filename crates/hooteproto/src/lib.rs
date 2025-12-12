@@ -2,10 +2,180 @@
 //!
 //! This crate defines the message types exchanged between Hootenanny services
 //! over ZMQ. All messages are wrapped in an Envelope for tracing and routing.
+//!
+//! ## Job System Types
+//!
+//! The canonical job types live here and are used by both hootenanny and luanette:
+//! - `JobId` - Unique identifier for background jobs
+//! - `JobStatus` - State machine for job lifecycle
+//! - `JobInfo` - Complete job metadata and results
+//! - `JobStoreStats` - Aggregate statistics
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
+
+// ============================================================================
+// Job System Types (canonical, shared by hootenanny + luanette)
+// ============================================================================
+
+/// Unique identifier for a background job
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct JobId(String);
+
+impl JobId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4().to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Default for JobId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for JobId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<String> for JobId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for JobId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+/// Current status of a background job
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum JobStatus {
+    /// Job is queued but not yet started
+    Pending,
+    /// Job is currently executing
+    Running,
+    /// Job completed successfully
+    Complete,
+    /// Job failed with an error
+    Failed,
+    /// Job was cancelled
+    Cancelled,
+}
+
+/// Information about a job and its result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobInfo {
+    pub job_id: JobId,
+    pub status: JobStatus,
+    /// Source identifier (tool name in hootenanny, script hash in luanette)
+    pub source: String,
+    pub result: Option<serde_json::Value>,
+    pub error: Option<String>,
+    pub created_at: u64,
+    pub started_at: Option<u64>,
+    pub completed_at: Option<u64>,
+}
+
+impl JobInfo {
+    pub fn new(job_id: JobId, source: String) -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        Self {
+            job_id,
+            status: JobStatus::Pending,
+            source,
+            result: None,
+            error: None,
+            created_at: now,
+            started_at: None,
+            completed_at: None,
+        }
+    }
+
+    pub fn mark_running(&mut self) {
+        self.status = JobStatus::Running;
+        self.started_at = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        );
+    }
+
+    pub fn mark_complete(&mut self, result: serde_json::Value) {
+        self.status = JobStatus::Complete;
+        self.result = Some(result);
+        self.completed_at = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        );
+    }
+
+    pub fn mark_failed(&mut self, error: String) {
+        self.status = JobStatus::Failed;
+        self.error = Some(error);
+        self.completed_at = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        );
+    }
+
+    pub fn mark_cancelled(&mut self) {
+        self.status = JobStatus::Cancelled;
+        self.completed_at = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        );
+    }
+
+    /// Duration in seconds if job has started
+    pub fn duration_secs(&self) -> Option<u64> {
+        self.started_at.map(|started| {
+            let end = self.completed_at.unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            });
+            end.saturating_sub(started)
+        })
+    }
+}
+
+/// Statistics about job store state
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct JobStoreStats {
+    pub total: usize,
+    pub pending: usize,
+    pub running: usize,
+    pub completed: usize,
+    pub failed: usize,
+    pub cancelled: usize,
+}
+
+// ============================================================================
+// ZMQ Message Types
+// ============================================================================
 
 /// Envelope wraps all ZMQ messages with routing and tracing metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

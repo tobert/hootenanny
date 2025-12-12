@@ -18,8 +18,9 @@ use std::time::Duration;
 
 use crate::clients::ClientManager;
 use crate::error::format_lua_error;
-use crate::job_system::{JobId, JobStatus, JobStore};
+use crate::job_system::JobStore;
 use crate::runtime::LuaRuntime;
+use hooteproto::{JobId, JobStatus};
 use crate::schema::{
     JobCancelRequest, JobCancelResponse, JobListRequest, JobListResponse, JobPollRequest,
     JobPollResponse, JobStatsRequest, JobStatsResponse, JobStatusRequest, JobStatusResponse,
@@ -1085,7 +1086,7 @@ impl LuanetteHandler {
                 serde_json::json!({
                     "job_id": job.job_id.to_string(),
                     "status": format!("{:?}", job.status),
-                    "script_hash": job.script_hash,
+                    "script_hash": job.source,
                     "created_at_unix": job.created_at,
                 })
             })
@@ -1108,7 +1109,7 @@ impl LuanetteHandler {
         let job_detail = serde_json::json!({
             "job_id": job.job_id.to_string(),
             "status": format!("{:?}", job.status),
-            "script_hash": job.script_hash,
+            "script_hash": job.source,
             "created_at_unix": job.created_at,
             "started_at_unix": job.started_at,
             "completed_at_unix": job.completed_at,

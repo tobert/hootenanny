@@ -368,7 +368,7 @@ async fn test_describe_function() {
 
 #[tokio::test]
 async fn test_job_lifecycle() {
-    use luanette::job_system::{JobStatus, JobStore};
+    use luanette::{JobStatus, JobStore};
 
     let store = JobStore::new();
 
@@ -395,7 +395,7 @@ async fn test_job_lifecycle() {
 
 #[tokio::test]
 async fn test_job_cancellation() {
-    use luanette::job_system::{JobStatus, JobStore};
+    use luanette::{JobStatus, JobStore};
 
     let store = JobStore::new();
     let job_id = store.create_job("long_script".to_string());

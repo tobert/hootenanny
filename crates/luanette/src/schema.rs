@@ -1,10 +1,9 @@
 //! Request and response types for Luanette MCP tools.
 
+use hooteproto::{JobInfo, JobStatus};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-use crate::job_system::{JobInfo, JobStatus};
 
 /// Request to execute a Lua script stored in CAS.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -144,7 +143,7 @@ impl From<JobInfo> for JobStatusResponse {
         Self {
             job_id: info.job_id.to_string(),
             status: status.to_string(),
-            script_hash: info.script_hash,
+            script_hash: info.source,
             result: info.result,
             error: info.error,
             created_at: info.created_at,

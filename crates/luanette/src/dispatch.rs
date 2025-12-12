@@ -3,14 +3,14 @@
 //! This module bridges hooteproto messages to the existing Luanette
 //! implementation, handling conversion between protocol types and internal types.
 
-use hooteproto::{Payload, PollMode, ToolInfo};
+use hooteproto::{JobId, JobStatus, Payload, PollMode, ToolInfo};
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, instrument};
 
 use crate::error::format_lua_error;
-use crate::job_system::{JobId, JobStatus, JobStore};
+use crate::job_system::JobStore;
 use crate::runtime::LuaRuntime;
 
 /// Dispatcher handles hooteproto Payload messages

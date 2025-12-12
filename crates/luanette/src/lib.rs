@@ -33,5 +33,6 @@ pub mod zmq_server;
 // Re-export key types for library users
 pub use dispatch::Dispatcher;
 pub use handler::LuanetteHandler;
-pub use job_system::{JobId, JobInfo, JobStatus, JobStore};
+pub use hooteproto::{JobId, JobInfo, JobStatus};
+pub use job_system::JobStore;
 pub use zmq_server::{Server as ZmqServer, ServerConfig as ZmqServerConfig};
