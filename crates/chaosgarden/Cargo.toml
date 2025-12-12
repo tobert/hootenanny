@@ -17,6 +17,9 @@ serde_json = "1"
 anyhow = "1"
 thiserror = "2"
 
+# Shared CAS
+cas = { path = "../cas" }
+
 # Graph (future use)
 petgraph = "0.6"
 

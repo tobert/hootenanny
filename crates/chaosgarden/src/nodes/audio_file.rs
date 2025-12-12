@@ -54,27 +54,35 @@ pub trait ContentResolver: Send + Sync {
     fn resolve(&self, content_hash: &str) -> Result<Vec<u8>>;
 }
 
-/// Direct filesystem access to CAS
+/// Direct filesystem access to CAS via shared crate.
 ///
-/// CAS is stored as: `{base_path}/{hash[0..2]}/{hash}`
+/// This wrapper implements `ContentResolver` using the shared `cas::FileStore`.
 pub struct FileCasClient {
-    base_path: PathBuf,
+    store: cas::FileStore,
 }
 
 impl FileCasClient {
-    pub fn new(base_path: impl Into<PathBuf>) -> Self {
-        Self {
-            base_path: base_path.into(),
-        }
+    /// Create a new CAS client at the given path.
+    pub fn new(base_path: impl Into<PathBuf>) -> Result<Self> {
+        let store = cas::FileStore::read_only_at(base_path)?;
+        Ok(Self { store })
+    }
+
+    /// Create from an existing FileStore (for sharing).
+    pub fn from_store(store: cas::FileStore) -> Self {
+        Self { store }
     }
 }
 
 impl ContentResolver for FileCasClient {
     fn resolve(&self, content_hash: &str) -> Result<Vec<u8>> {
-        // CAS layout: {base}/{prefix}/{hash}
-        let prefix = &content_hash[0..2.min(content_hash.len())];
-        let path = self.base_path.join(prefix).join(content_hash);
-        std::fs::read(&path).with_context(|| format!("CAS read failed: {}", path.display()))
+        use cas::ContentStore;
+        let hash: cas::ContentHash = content_hash
+            .parse()
+            .with_context(|| format!("invalid hash format: {}", content_hash))?;
+        self.store
+            .retrieve(&hash)?
+            .ok_or_else(|| anyhow!("CAS content not found: {}", content_hash))
     }
 }
 
@@ -771,17 +779,25 @@ mod tests {
     }
 
     #[test]
-    fn test_file_cas_client_path_construction() {
-        // Can't test actual file read without setup, but test path logic
-        let client = FileCasClient::new("/tmp/cas");
+    fn test_file_cas_client_construction() {
+        // Can't test actual file read without a temp dir, but test that read-only
+        // construction doesn't fail when path doesn't exist (it's read-only so it won't create)
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cas_path = temp_dir.path().join("cas");
+        // Note: read_only_at doesn't create directories, so this may fail.
+        // Let's just test the unwrap behavior for now.
 
-        // resolve() will fail since file doesn't exist, but we can verify the path format
-        // by checking the error message
+        // Create the base dir so the FileStore can be created
+        std::fs::create_dir_all(&cas_path).unwrap();
+
+        let client = FileCasClient::new(&cas_path).unwrap();
+
+        // resolve() will fail since content doesn't exist
         let err = client
-            .resolve("abc123")
-            .expect_err("should fail for missing file");
+            .resolve("12345678901234567890123456789012") // 32 hex chars
+            .expect_err("should fail for missing content");
         let msg = err.to_string();
-        assert!(msg.contains("/tmp/cas/ab/abc123"));
+        assert!(msg.contains("not found") || msg.contains("12345678901234567890123456789012"));
     }
 
     #[test]
