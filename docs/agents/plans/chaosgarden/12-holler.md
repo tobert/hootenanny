@@ -1,7 +1,7 @@
 # 12-holler: MCP Gateway
 
 **Prerequisite**: 10-hootenanny-zmq ✅
-**Status**: In Progress (Phases 1-5, 7-8 complete; Phase 6 SSE pending)
+**Status**: ✅ Complete (All phases done)
 
 **Note**: hooteproto (Phase 1) and holler CLI (Phase 2) can be built before any backend is converted. These phases validate the protocol design. Phases 3+ depend on backends being converted to ZMQ (see 11-luanette-zmq).
 
@@ -22,6 +22,9 @@
 
 # Run holler as MCP gateway
 ./target/debug/holler serve --port 8081 --hootenanny tcp://127.0.0.1:5580
+
+# Connect to SSE for notifications
+curl -N http://127.0.0.1:8081/sse
 ```
 
 ### Test Results
@@ -227,11 +230,12 @@ The `holler serve` subcommand (Phase 3+) runs the MCP gateway.
 - [x] Tool discovery aggregation from all backends
 - [x] Handle unknown tools with clear error
 
-### Phase 6: MCP HTTP Server (`holler serve`) - Partial
+### Phase 6: MCP HTTP Server (`holler serve`) ✅
 - [x] Create `serve.rs` - axum setup with graceful shutdown
 - [x] Create `mcp.rs` - Streamable HTTP handlers (POST /mcp)
-- [ ] SSE support for server-initiated notifications
+- [x] Create `sse.rs` - SSE endpoint for server-initiated notifications (GET /sse)
 - [x] Health check endpoint (GET /health)
+- [x] Broadcast channel for forwarding events to SSE clients
 
 ### Phase 7: OTEL Integration ✅
 - [x] Extract traceparent from HTTP headers (`telemetry::extract_traceparent`)

@@ -8,6 +8,7 @@ use tracing::info;
 
 use crate::backend::BackendPool;
 use crate::mcp::{handle_health, handle_mcp, AppState};
+use crate::sse::{create_broadcast_channel, sse_handler};
 
 /// Server configuration
 pub struct ServeConfig {
@@ -50,15 +51,20 @@ pub async fn run(config: ServeConfig) -> Result<()> {
             .context("Failed to connect to Chaosgarden")?;
     }
 
+    // Create broadcast channel for SSE events
+    let (broadcast_tx, _broadcast_rx) = create_broadcast_channel();
+
     // Create shared state
     let state = AppState {
         backends: Arc::new(backends),
         start_time: Instant::now(),
+        broadcast_tx,
     };
 
     // Build router
     let app = Router::new()
         .route("/mcp", post(handle_mcp))
+        .route("/sse", get(sse_handler))
         .route("/health", get(handle_health))
         .with_state(state);
 
@@ -70,6 +76,7 @@ pub async fn run(config: ServeConfig) -> Result<()> {
 
     info!("🎺 Holler ready!");
     info!("   MCP: POST http://{}/mcp", addr);
+    info!("   SSE: GET http://{}/sse", addr);
     info!("   Health: GET http://{}/health", addr);
 
     axum::serve(listener, app)

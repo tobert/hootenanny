@@ -14,6 +14,7 @@ mod client;
 mod commands;
 mod mcp;
 mod serve;
+mod sse;
 mod telemetry;
 
 #[derive(Parser)]

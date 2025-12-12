@@ -233,18 +233,68 @@ pub struct ToolInfo {
 }
 
 /// Broadcast messages via PUB/SUB
+///
+/// These are pushed from backends to holler, which forwards them to SSE clients.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Broadcast {
+    /// Configuration value changed
     ConfigUpdate {
         key: String,
         value: serde_json::Value,
     },
+
+    /// Backend is shutting down
     Shutdown {
         reason: String,
     },
+
+    /// Script cache invalidated
     ScriptInvalidate {
         hash: String,
+    },
+
+    /// Job state changed (queued, running, completed, failed)
+    JobStateChanged {
+        job_id: String,
+        state: String,
+        result: Option<serde_json::Value>,
+    },
+
+    /// New artifact created
+    ArtifactCreated {
+        artifact_id: String,
+        content_hash: String,
+        tags: Vec<String>,
+        creator: Option<String>,
+    },
+
+    /// Timeline transport state changed (play/stop/seek)
+    TransportStateChanged {
+        state: String,
+        position_beats: f64,
+        tempo_bpm: f64,
+    },
+
+    /// Timeline marker reached during playback
+    MarkerReached {
+        position_beats: f64,
+        marker_type: String,
+        metadata: serde_json::Value,
+    },
+
+    /// Beat tick (for sync, sent at configurable interval)
+    BeatTick {
+        beat: u64,
+        position_beats: f64,
+        tempo_bpm: f64,
+    },
+
+    /// Log message from backend
+    Log {
+        level: String,
+        message: String,
+        source: String,
     },
 }
 

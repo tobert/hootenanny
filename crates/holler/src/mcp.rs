@@ -8,10 +8,12 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use hooteproto::{Payload, ToolInfo};
+use hooteproto::{Broadcast, Payload, ToolInfo};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::Instant;
+use tokio::sync::broadcast;
 use tracing::{debug, error, info, instrument};
 
 use crate::backend::BackendPool;
@@ -21,7 +23,9 @@ use crate::telemetry;
 #[derive(Clone)]
 pub struct AppState {
     pub backends: Arc<BackendPool>,
-    pub start_time: std::time::Instant,
+    pub start_time: Instant,
+    /// Broadcast channel for SSE events
+    pub broadcast_tx: broadcast::Sender<Broadcast>,
 }
 
 /// JSON-RPC request wrapper
