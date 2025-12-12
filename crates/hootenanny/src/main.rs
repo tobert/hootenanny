@@ -58,6 +58,10 @@ struct Cli {
     /// Bind a hooteproto ZMQ ROUTER for holler gateway (e.g., "tcp://0.0.0.0:5580")
     #[arg(long)]
     zmq_bind: Option<String>,
+
+    /// Bind a ZMQ PUB socket for broadcasting events to holler (e.g., "tcp://0.0.0.0:5581")
+    #[arg(long)]
+    zmq_pub: Option<String>,
 }
 
 #[tokio::main]
@@ -191,6 +195,21 @@ async fn main() -> Result<()> {
         None
     };
 
+    // --- ZMQ PUB socket for broadcasts (optional, for holler SSE) ---
+    let broadcast_publisher: Option<zmq::BroadcastPublisher> = if let Some(ref zmq_pub) = cli.zmq_pub {
+        tracing::info!("📢 Starting ZMQ PUB socket for broadcasts...");
+        let (pub_server, publisher) = zmq::PublisherServer::new(zmq_pub.clone(), 256);
+        tokio::spawn(async move {
+            if let Err(e) = pub_server.run().await {
+                tracing::error!("ZMQ PUB server error: {}", e);
+            }
+        });
+        tracing::info!("   ZMQ PUB: {}", zmq_pub);
+        Some(publisher)
+    } else {
+        None
+    };
+
     tracing::info!("🎵 Event Duality Server starting on http://{}", addr);
     tracing::info!("   MCP Streamable HTTP: POST http://{}/mcp (recommended)", addr);
     tracing::info!("   MCP SSE (legacy): GET http://{}/mcp/sse", addr);
@@ -200,7 +219,10 @@ async fn main() -> Result<()> {
     tracing::info!("   Artifacts List: GET http://{}/artifacts", addr);
     tracing::info!("   Health: GET http://{}/health", addr);
     if cli.zmq_bind.is_some() {
-        tracing::info!("   ZMQ hooteproto: {} (for holler)", cli.zmq_bind.as_ref().unwrap());
+        tracing::info!("   ZMQ ROUTER: {} (for holler)", cli.zmq_bind.as_ref().unwrap());
+    }
+    if cli.zmq_pub.is_some() {
+        tracing::info!("   ZMQ PUB: {} (for SSE broadcasts)", cli.zmq_pub.as_ref().unwrap());
     }
 
     // Create the EventDualityServer

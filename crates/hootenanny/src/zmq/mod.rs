@@ -5,9 +5,11 @@
 
 mod hooteproto_server;
 mod manager;
+mod publisher;
 
 pub use hooteproto_server::HooteprotoServer;
 pub use manager::GardenManager;
+pub use publisher::{BroadcastPublisher, PublisherServer};
 
 // Re-export types from chaosgarden for convenience
 pub use chaosgarden::ipc::{
