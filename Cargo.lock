@@ -1558,8 +1558,10 @@ name = "holler"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum 0.8.7",
  "base64",
+ "baton",
  "clap",
  "futures",
  "hooteproto",
@@ -1572,6 +1574,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tower 0.5.2",
  "tower-http",
  "tracing",

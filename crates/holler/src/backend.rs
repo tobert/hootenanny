@@ -160,23 +160,35 @@ impl BackendPool {
 
     /// Route a tool call to the appropriate backend based on prefix
     pub fn route_tool(&self, tool_name: &str) -> Option<Arc<Backend>> {
-        // Route by prefix
+        // Route by prefix - Luanette handles Lua scripts and job orchestration
         if tool_name.starts_with("lua_")
-            || tool_name.starts_with("job_")
             || tool_name.starts_with("script_")
-            || tool_name.starts_with("orpheus_")
-            || tool_name.starts_with("musicgen_")
         {
             return self.luanette.clone();
         }
 
+        // Hootenanny handles everything else: CAS, artifacts, graph, orpheus, musicgen,
+        // soundfont, ABC, analysis, generation, garden proxy, jobs, etc.
         if tool_name.starts_with("cas_")
             || tool_name.starts_with("artifact_")
             || tool_name.starts_with("graph_")
+            || tool_name.starts_with("add_annotation")
+            || tool_name.starts_with("orpheus_")
+            || tool_name.starts_with("musicgen_")
+            || tool_name.starts_with("yue_")
+            || tool_name.starts_with("convert_")
+            || tool_name.starts_with("soundfont_")
+            || tool_name.starts_with("abc_")
+            || tool_name.starts_with("beatthis_")
+            || tool_name.starts_with("clap_")
+            || tool_name.starts_with("garden_")
+            || tool_name.starts_with("job_")
+            || tool_name.starts_with("sample_llm")
         {
             return self.hootenanny.clone();
         }
 
+        // Chaosgarden handles transport and timeline
         if tool_name.starts_with("transport_") || tool_name.starts_with("timeline_") {
             return self.chaosgarden.clone();
         }

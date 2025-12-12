@@ -107,6 +107,7 @@ pub fn init(otlp_endpoint: &str) -> Result<()> {
 /// Get current traceparent string (W3C Trace Context format).
 ///
 /// Returns None if not in an active span.
+#[allow(dead_code)]
 pub fn current_traceparent() -> Option<String> {
     use opentelemetry::trace::TraceContextExt;
     use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -129,6 +130,7 @@ pub fn current_traceparent() -> Option<String> {
 }
 
 /// Extract traceparent from HTTP headers.
+#[allow(dead_code)]
 pub fn extract_traceparent(headers: &axum::http::HeaderMap) -> Option<String> {
     headers
         .get("traceparent")

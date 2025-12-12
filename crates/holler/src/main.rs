@@ -12,9 +12,8 @@ use clap::{Parser, Subcommand};
 mod backend;
 mod client;
 mod commands;
-mod mcp;
+mod handler;
 mod serve;
-mod sse;
 mod subscriber;
 mod telemetry;
 

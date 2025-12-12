@@ -1,14 +1,16 @@
 //! MCP gateway server implementation
+//!
+//! Uses baton for MCP protocol handling, forwarding tool calls to ZMQ backends.
 
 use anyhow::{Context, Result};
-use axum::{routing::{get, post}, Router};
+use axum::{routing::get, Router};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::backend::BackendPool;
-use crate::mcp::{handle_health, handle_mcp, AppState};
-use crate::sse::{create_broadcast_channel, sse_handler};
+use crate::handler::ZmqHandler;
 use crate::subscriber::spawn_subscribers;
 
 /// Server configuration
@@ -22,6 +24,31 @@ pub struct ServeConfig {
     pub luanette_pub: Option<String>,
     pub hootenanny_pub: Option<String>,
     pub chaosgarden_pub: Option<String>,
+}
+
+/// Server state for health endpoint
+#[derive(Clone)]
+pub struct HealthState {
+    pub backends: Arc<BackendPool>,
+    pub start_time: Instant,
+}
+
+/// Health check endpoint
+pub async fn handle_health(
+    axum::extract::State(state): axum::extract::State<HealthState>,
+) -> axum::Json<serde_json::Value> {
+    let uptime = state.start_time.elapsed();
+
+    axum::Json(serde_json::json!({
+        "status": "healthy",
+        "uptime_secs": uptime.as_secs(),
+        "version": env!("CARGO_PKG_VERSION"),
+        "backends": {
+            "luanette": state.backends.luanette.is_some(),
+            "hootenanny": state.backends.hootenanny.is_some(),
+            "chaosgarden": state.backends.chaosgarden.is_some(),
+        }
+    }))
 }
 
 /// Run the MCP gateway server
@@ -57,10 +84,9 @@ pub async fn run(config: ServeConfig) -> Result<()> {
             .context("Failed to connect to Chaosgarden")?;
     }
 
-    // Create broadcast channel for SSE events
-    let (broadcast_tx, _broadcast_rx) = create_broadcast_channel();
+    let backends = Arc::new(backends);
 
-    // Spawn ZMQ SUB subscribers for backend broadcasts
+    // Spawn ZMQ SUB subscribers for backend broadcasts (TODO: wire to baton notifications)
     let has_subs = config.luanette_pub.is_some()
         || config.hootenanny_pub.is_some()
         || config.chaosgarden_pub.is_some();
@@ -77,27 +103,51 @@ pub async fn run(config: ServeConfig) -> Result<()> {
             info!("      Chaosgarden PUB: {}", ep);
         }
 
+        // Create a dummy broadcast channel for now - subscribers will be updated
+        // to use baton's notification system in a future iteration
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel::<hooteproto::Broadcast>(256);
         spawn_subscribers(
-            broadcast_tx.clone(),
+            broadcast_tx,
             config.luanette_pub,
             config.hootenanny_pub,
             config.chaosgarden_pub,
         );
     }
 
-    // Create shared state
-    let state = AppState {
-        backends: Arc::new(backends),
+    // Create baton MCP state with our ZMQ handler
+    let handler = ZmqHandler::new(Arc::clone(&backends));
+    let mcp_state = Arc::new(baton::McpState::new(
+        handler,
+        "holler",
+        env!("CARGO_PKG_VERSION"),
+    ));
+
+    // Spawn session cleanup task
+    let cancel_token = CancellationToken::new();
+    let _cleanup_handle = baton::spawn_cleanup_task(
+        Arc::clone(&mcp_state.sessions),
+        Duration::from_secs(60),
+        Duration::from_secs(300),
+        cancel_token.clone(),
+    );
+
+    // Health check state
+    let health_state = HealthState {
+        backends: Arc::clone(&backends),
         start_time: Instant::now(),
-        broadcast_tx,
     };
 
-    // Build router
-    let app = Router::new()
-        .route("/mcp", post(handle_mcp))
-        .route("/sse", get(sse_handler))
+    // Build router - use baton's dual_router for MCP, add health endpoint
+    let mcp_router = baton::dual_router(mcp_state);
+
+    // Health endpoint needs its own router merged in
+    let health_router = Router::new()
         .route("/health", get(handle_health))
-        .with_state(state);
+        .with_state(health_state);
+
+    let app = Router::new()
+        .nest("/mcp", mcp_router)
+        .merge(health_router);
 
     // Bind and serve
     let addr = format!("0.0.0.0:{}", config.port);
@@ -106,8 +156,8 @@ pub async fn run(config: ServeConfig) -> Result<()> {
         .with_context(|| format!("Failed to bind to {}", addr))?;
 
     info!("🎺 Holler ready!");
-    info!("   MCP: POST http://{}/mcp", addr);
-    info!("   SSE: GET http://{}/sse", addr);
+    info!("   MCP (Streamable): POST http://{}/mcp", addr);
+    info!("   MCP (SSE): GET http://{}/mcp/sse + POST http://{}/mcp/message", addr, addr);
     info!("   Health: GET http://{}/health", addr);
 
     axum::serve(listener, app)

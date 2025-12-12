@@ -297,8 +297,128 @@ pub enum Payload {
     CasGet {
         hash: String,
     },
+    CasUploadFile {
+        file_path: String,
+    },
+
+    // === Orpheus Tools (Holler → Hootenanny) ===
+    OrpheusGenerate {
+        temperature: Option<f64>,
+        top_p: Option<f64>,
+        cfg_coef: Option<f64>,
+        seed: Option<u64>,
+    },
+    OrpheusGenerateSeeded {
+        seed_hash: String,
+        temperature: Option<f64>,
+        top_p: Option<f64>,
+        cfg_coef: Option<f64>,
+    },
+    OrpheusContinue {
+        midi_hash: String,
+        temperature: Option<f64>,
+        num_tokens: Option<u32>,
+    },
+    OrpheusBridge {
+        from_hash: String,
+        to_hash: String,
+        temperature: Option<f64>,
+    },
+    OrpheusLoops {
+        num_loops: Option<u32>,
+        temperature: Option<f64>,
+        density: Option<String>,
+    },
+    OrpheusClassify {
+        midi_hash: String,
+    },
+
+    // === MIDI/Audio Tools (Holler → Hootenanny) ===
+    ConvertMidiToWav {
+        midi_hash: String,
+        soundfont_hash: Option<String>,
+        sample_rate: Option<u32>,
+    },
+    SoundfontInspect {
+        soundfont_hash: String,
+    },
+    SoundfontPresetInspect {
+        soundfont_hash: String,
+        bank: u16,
+        program: u16,
+    },
+
+    // === ABC Notation Tools (Holler → Hootenanny) ===
+    AbcParse {
+        abc: String,
+    },
+    AbcToMidi {
+        abc: String,
+    },
+    AbcValidate {
+        abc: String,
+    },
+    AbcTranspose {
+        abc: String,
+        semitones: Option<i32>,
+        target_key: Option<String>,
+    },
+
+    // === Analysis Tools (Holler → Hootenanny) ===
+    BeatthisAnalyze {
+        audio_hash: String,
+        include_probabilities: Option<bool>,
+    },
+    ClapAnalyze {
+        audio_hash: String,
+        mode: Option<String>,
+        compare_to: Option<String>,
+    },
+
+    // === Generation Tools (Holler → Hootenanny) ===
+    MusicgenGenerate {
+        prompt: String,
+        duration_secs: Option<f64>,
+        temperature: Option<f64>,
+    },
+    YueGenerate {
+        lyrics: String,
+        style: Option<String>,
+    },
+
+    // === Garden Tools (Holler → Hootenanny → Chaosgarden) ===
+    GardenStatus,
+    GardenPlay,
+    GardenPause,
+    GardenStop,
+    GardenSeek {
+        beat: f64,
+    },
+    GardenSetTempo {
+        bpm: f64,
+    },
+    GardenQuery {
+        query: String,
+        variables: Option<serde_json::Value>,
+    },
+    GardenEmergencyPause,
+
+    // === Misc Tools ===
+    JobSleep {
+        duration_ms: u64,
+    },
+    SampleLlm {
+        prompt: String,
+        max_tokens: Option<u32>,
+    },
 
     // === Artifact Tools (Holler → Hootenanny) ===
+    ArtifactUpload {
+        file_path: String,
+        tags: Vec<String>,
+        creator: Option<String>,
+        parent_id: Option<String>,
+    },
     ArtifactGet {
         id: String,
     },
@@ -321,6 +441,30 @@ pub enum Payload {
     GraphBind {
         identity: String,
         hints: Vec<String>,
+    },
+    GraphTag {
+        identity: String,
+        tag: String,
+    },
+    GraphConnect {
+        source_identity: String,
+        sink_identity: String,
+        transport: Option<String>,
+    },
+    GraphFind {
+        hint_pattern: Option<String>,
+        tag: Option<String>,
+        limit: Option<usize>,
+    },
+    GraphContext {
+        tag: Option<String>,
+        creator: Option<String>,
+        vibe: Option<String>,
+        limit: Option<usize>,
+    },
+    AddAnnotation {
+        artifact_id: String,
+        vibe: String,
     },
 
     // === Transport Tools (Holler → Chaosgarden) ===
