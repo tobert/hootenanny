@@ -1617,8 +1617,6 @@ dependencies = [
  "hex",
  "hooteproto",
  "hound",
- "llm-mcp-bridge",
- "llmchat",
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",

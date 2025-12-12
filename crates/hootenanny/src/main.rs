@@ -13,20 +13,18 @@ mod zmq;
 use anyhow::{Context, Result};
 use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use clap::Parser;
-use api::composite::CompositeHandler;
-use api::handler::HootHandler;
 use api::service::EventDualityServer;
 use mcp_tools::local_models::LocalModels;
 use cas::FileStore;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use llm_mcp_bridge::{AgentChatHandler, AgentManager, BackendConfig, BridgeConfig};
-use llmchat::ConversationDb;
-
-/// The Hootenanny MCP Server
+/// The Hootenanny ZMQ Server
+///
+/// Provides music generation and audio graph tools over ZMQ.
+/// MCP gateway functionality is provided by holler.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -35,17 +33,13 @@ struct Cli {
     #[arg(short, long)]
     state_dir: Option<PathBuf>,
 
-    /// Port to listen on
+    /// Port for HTTP endpoints (health, artifacts)
     #[arg(short, long, default_value = "8080")]
     port: u16,
 
     /// Orpheus Model Port
     #[arg(long, default_value = "2000")]
     orpheus_port: u16,
-
-    /// LLM Model Port (vLLM OpenAI-compatible API, e.g. Qwen)
-    #[arg(long, default_value = "2020")]
-    llm_port: u16,
 
     /// OTLP gRPC endpoint for OpenTelemetry (e.g., "127.0.0.1:35991")
     #[arg(long, default_value = "127.0.0.1:35991")]
@@ -175,27 +169,8 @@ async fn main() -> Result<()> {
 
     let addr = format!("0.0.0.0:{}", cli.port);
 
-    // --- Hooteproto ZMQ Server (optional, for holler gateway) ---
-    let zmq_shutdown_tx: Option<tokio::sync::broadcast::Sender<()>> = if let Some(ref zmq_bind) = cli.zmq_bind {
-        tracing::info!("📡 Starting hooteproto ZMQ server...");
-        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
-        let zmq_server = zmq::HooteprotoServer::new(
-            zmq_bind.clone(),
-            Arc::new(cas.clone()),
-            artifact_store.clone(),
-        );
-        tokio::spawn(async move {
-            if let Err(e) = zmq_server.run(shutdown_rx).await {
-                tracing::error!("ZMQ server error: {}", e);
-            }
-        });
-        tracing::info!("   ZMQ ROUTER: {}", zmq_bind);
-        Some(shutdown_tx)
-    } else {
-        None
-    };
-
     // --- ZMQ PUB socket for broadcasts (optional, for holler SSE) ---
+    // Create this first so we can pass it to EventDualityServer
     let broadcast_publisher: Option<zmq::BroadcastPublisher> = if let Some(ref zmq_pub) = cli.zmq_pub {
         tracing::info!("📢 Starting ZMQ PUB socket for broadcasts...");
         let (pub_server, publisher) = zmq::PublisherServer::new(zmq_pub.clone(), 256);
@@ -210,22 +185,7 @@ async fn main() -> Result<()> {
         None
     };
 
-    tracing::info!("🎵 Event Duality Server starting on http://{}", addr);
-    tracing::info!("   MCP Streamable HTTP: POST http://{}/mcp (recommended)", addr);
-    tracing::info!("   MCP SSE (legacy): GET http://{}/mcp/sse", addr);
-    tracing::info!("   Agent Chat: agent_chat_* tools via MCP");
-    tracing::info!("   Artifact Content: GET http://{}/artifact/:id", addr);
-    tracing::info!("   Artifact Meta: GET http://{}/artifact/:id/meta", addr);
-    tracing::info!("   Artifacts List: GET http://{}/artifacts", addr);
-    tracing::info!("   Health: GET http://{}/health", addr);
-    if cli.zmq_bind.is_some() {
-        tracing::info!("   ZMQ ROUTER: {} (for holler)", cli.zmq_bind.as_ref().unwrap());
-    }
-    if cli.zmq_pub.is_some() {
-        tracing::info!("   ZMQ PUB: {} (for SSE broadcasts)", cli.zmq_pub.as_ref().unwrap());
-    }
-
-    // Create the EventDualityServer
+    // Create the EventDualityServer (before ZMQ server so we can pass it)
     let event_duality_server = Arc::new(EventDualityServer::new(
         local_models.clone(),
         artifact_store.clone(),
@@ -237,45 +197,40 @@ async fn main() -> Result<()> {
     .with_garden(garden_manager.clone())
     .with_broadcaster(broadcast_publisher));
 
-    // --- LLM Agent Bridge Initialization ---
-    tracing::info!("🤖 Initializing LLM Agent Bridge...");
-    let conversations_db_path = state_dir.join("conversations.db");
-    let conversations_db = ConversationDb::open(&conversations_db_path)
-        .context("Failed to open conversations database")?;
-    tracing::info!("   Conversations DB: {}", conversations_db_path.display());
-
-    let bridge_config = BridgeConfig {
-        mcp_url: format!("http://127.0.0.1:{}/mcp", cli.port),
-        backends: vec![
-            BackendConfig {
-                id: "qwen".to_string(),
-                display_name: "Qwen 2.5 Instruct".to_string(),
-                base_url: format!("http://127.0.0.1:{}/v1", cli.llm_port),
-                api_key: None,
-                default_model: "Qwen2.5-7B-Instruct".to_string(),
-                summary_model: None,
-                supports_tools: true,
-                max_tokens: Some(4096),
-                default_temperature: Some(0.7),
-            },
-        ],
+    // --- Hooteproto ZMQ Server (required for tool dispatch) ---
+    let zmq_shutdown_tx: Option<tokio::sync::broadcast::Sender<()>> = if let Some(ref zmq_bind) = cli.zmq_bind {
+        tracing::info!("📡 Starting hooteproto ZMQ server (with full tool dispatch)...");
+        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
+        let zmq_server = zmq::HooteprotoServer::with_event_server(
+            zmq_bind.clone(),
+            Arc::new(cas.clone()),
+            artifact_store.clone(),
+            event_duality_server.clone(),
+        );
+        tokio::spawn(async move {
+            if let Err(e) = zmq_server.run(shutdown_rx).await {
+                tracing::error!("ZMQ server error: {}", e);
+            }
+        });
+        tracing::info!("   ZMQ ROUTER: {}", zmq_bind);
+        Some(shutdown_tx)
+    } else {
+        tracing::warn!("⚠️  No --zmq-bind specified. Tools will not be available.");
+        tracing::warn!("    Use --zmq-bind tcp://0.0.0.0:5580 to enable holler gateway.");
+        None
     };
-    tracing::info!("   Qwen backend: http://127.0.0.1:{}/v1", cli.llm_port);
 
-    let agent_manager = Arc::new(
-        AgentManager::new(bridge_config, conversations_db)
-            .context("Failed to create agent manager")?
-    );
-    let agent_handler = AgentChatHandler::new(agent_manager);
-
-    // Create baton MCP handler and state (composite of Hoot + Agent)
-    let hoot_handler = HootHandler::new(event_duality_server.clone());
-    let composite_handler = CompositeHandler::new(hoot_handler, agent_handler);
-    let mcp_state = Arc::new(baton::McpState::new(
-        composite_handler,
-        "hootenanny",
-        env!("CARGO_PKG_VERSION"),
-    ));
+    tracing::info!("🎵 Hootenanny starting on http://{}", addr);
+    tracing::info!("   Artifact Content: GET http://{}/artifact/:id", addr);
+    tracing::info!("   Artifact Meta: GET http://{}/artifact/:id/meta", addr);
+    tracing::info!("   Artifacts List: GET http://{}/artifacts", addr);
+    tracing::info!("   Health: GET http://{}/health", addr);
+    if cli.zmq_bind.is_some() {
+        tracing::info!("   ZMQ ROUTER: {} (for holler MCP gateway)", cli.zmq_bind.as_ref().unwrap());
+    }
+    if cli.zmq_pub.is_some() {
+        tracing::info!("   ZMQ PUB: {} (for SSE broadcasts)", cli.zmq_pub.as_ref().unwrap());
+    }
 
     let shutdown_token = CancellationToken::new();
 
@@ -285,26 +240,14 @@ async fn main() -> Result<()> {
         cas: Arc::new(cas.clone()),
     };
     let artifact_router = web::router(web_state);
-    // dual_router supports both Streamable HTTP (POST /) and SSE (GET /sse + POST /message)
-    let mcp_router = baton::dual_router(mcp_state.clone());
 
     // Track server start time for uptime
     let server_start = Instant::now();
-
-    // Handler for OAuth discovery - return 404 with JSON to indicate no OAuth required
-    async fn no_oauth() -> impl axum::response::IntoResponse {
-        (
-            axum::http::StatusCode::NOT_FOUND,
-            [(axum::http::header::CONTENT_TYPE, "application/json")],
-            r#"{"error": "not_found", "error_description": "This MCP server does not require authentication"}"#
-        )
-    }
 
     // Health endpoint state
     #[derive(Clone)]
     struct HealthState {
         job_store: Arc<job_system::JobStore>,
-        sessions: Arc<dyn baton::SessionStore>,
         start_time: Instant,
     }
 
@@ -312,17 +255,12 @@ async fn main() -> Result<()> {
         axum::extract::State(state): axum::extract::State<HealthState>,
     ) -> axum::Json<serde_json::Value> {
         let job_stats = state.job_store.stats();
-        let session_stats = state.sessions.stats();
         let uptime = state.start_time.elapsed();
 
         axum::Json(serde_json::json!({
             "status": "healthy",
             "uptime_secs": uptime.as_secs(),
             "version": env!("CARGO_PKG_VERSION"),
-            "sessions": {
-                "total": session_stats.total,
-                "connected": session_stats.connected,
-            },
             "jobs": {
                 "pending": job_stats.pending,
                 "running": job_stats.running,
@@ -332,23 +270,16 @@ async fn main() -> Result<()> {
 
     let health_state = HealthState {
         job_store: job_store.clone(),
-        sessions: mcp_state.sessions.clone(),
         start_time: server_start,
     };
 
     // Build the main application router
-    // Each sub-router has its own state type, so we use nest() for CAS
     let health_router = axum::Router::new()
         .route("/health", axum::routing::get(health_handler))
         .with_state(health_state);
 
     let app_router = axum::Router::new()
         .merge(health_router)
-        .route("/mcp/.well-known/oauth-authorization-server", axum::routing::get(no_oauth))
-        .route("/mcp/.well-known/oauth-protected-resource", axum::routing::get(no_oauth))
-        .route("/.well-known/oauth-authorization-server", axum::routing::get(no_oauth))
-        .route("/.well-known/oauth-protected-resource", axum::routing::get(no_oauth))
-        .nest("/mcp", mcp_router)
         .merge(artifact_router);
 
     let bind_addr: std::net::SocketAddr = addr.parse().context("Failed to parse bind address")?;
@@ -372,7 +303,6 @@ async fn main() -> Result<()> {
 
     // Spawn background task for periodic statistics logging
     let stats_job_store = job_store.clone();
-    let stats_sessions = mcp_state.sessions.clone();
     let stats_ct = shutdown_token.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -380,7 +310,6 @@ async fn main() -> Result<()> {
             tokio::select! {
                 _ = interval.tick() => {
                     let job_stats = stats_job_store.stats();
-                    let session_stats = stats_sessions.stats();
                     tracing::info!(
                         jobs.total = job_stats.total,
                         jobs.pending = job_stats.pending,
@@ -388,9 +317,6 @@ async fn main() -> Result<()> {
                         jobs.completed = job_stats.completed,
                         jobs.failed = job_stats.failed,
                         jobs.cancelled = job_stats.cancelled,
-                        sessions.total = session_stats.total,
-                        sessions.connected = session_stats.connected,
-                        sessions.disconnected = session_stats.disconnected,
                         "Server statistics"
                     );
                 }
@@ -400,14 +326,6 @@ async fn main() -> Result<()> {
             }
         }
     });
-
-    // Spawn background task for session cleanup
-    baton::spawn_cleanup_task(
-        mcp_state.sessions.clone(),
-        Duration::from_secs(30),   // cleanup interval
-        Duration::from_secs(1800), // 30 min max idle
-        shutdown_token.clone(),
-    );
 
     // Handle both SIGINT (Ctrl+C) and SIGTERM (cargo-watch, systemd, etc.)
     tokio::select! {

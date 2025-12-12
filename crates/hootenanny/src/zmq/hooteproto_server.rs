@@ -1,9 +1,8 @@
 //! ZMQ ROUTER server for Hootenanny using hooteproto
 //!
-//! Exposes CAS, artifact, and graph tools over ZMQ for Holler to route to.
-//! Can operate in two modes:
-//! 1. Standalone - with direct CAS/artifact access (original mode)
-//! 2. With EventDualityServer - for full tool dispatch (future mode)
+//! Exposes all hootenanny tools over ZMQ for Holler to route to.
+//! This is the primary interface for the MCP-over-ZMQ architecture where
+//! holler acts as the MCP gateway and hootenanny handles the actual tool execution.
 
 use anyhow::{Context, Result};
 use cas::ContentStore;
@@ -15,19 +14,27 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 use zeromq::{RouterSocket, Socket, SocketRecv, SocketSend, ZmqMessage};
 
+use crate::api::service::EventDualityServer;
 use crate::artifact_store::{self, ArtifactStore as _};
 use crate::cas::FileStore;
 use crate::telemetry;
 
 /// ZMQ server for hooteproto messages
+///
+/// Can operate in two modes:
+/// 1. Standalone - with direct CAS/artifact access (legacy, for basic operations)
+/// 2. Full - with EventDualityServer for complete tool dispatch
 pub struct HooteprotoServer {
     bind_address: String,
     cas: Arc<FileStore>,
     artifacts: Arc<RwLock<artifact_store::FileStore>>,
     start_time: Instant,
+    /// Optional EventDualityServer for full tool dispatch
+    event_server: Option<Arc<EventDualityServer>>,
 }
 
 impl HooteprotoServer {
+    /// Create a new server in standalone mode (CAS + artifacts only)
     pub fn new(
         bind_address: String,
         cas: Arc<FileStore>,
@@ -38,6 +45,23 @@ impl HooteprotoServer {
             cas,
             artifacts,
             start_time: Instant::now(),
+            event_server: None,
+        }
+    }
+
+    /// Create a new server with full tool dispatch via EventDualityServer
+    pub fn with_event_server(
+        bind_address: String,
+        cas: Arc<FileStore>,
+        artifacts: Arc<RwLock<artifact_store::FileStore>>,
+        event_server: Arc<EventDualityServer>,
+    ) -> Self {
+        Self {
+            bind_address,
+            cas,
+            artifacts,
+            start_time: Instant::now(),
+            event_server: Some(event_server),
         }
     }
 
@@ -117,32 +141,72 @@ impl HooteprotoServer {
     }
 
     async fn dispatch(&self, payload: Payload) -> Payload {
-        match payload {
-            Payload::Ping => Payload::Pong {
-                worker_id: Uuid::new_v4(),
-                uptime_secs: self.start_time.elapsed().as_secs(),
-            },
+        // Handle administrative messages first
+        match &payload {
+            Payload::Ping => {
+                return Payload::Pong {
+                    worker_id: Uuid::new_v4(),
+                    uptime_secs: self.start_time.elapsed().as_secs(),
+                };
+            }
+            Payload::ListTools => {
+                return self.list_tools();
+            }
+            _ => {}
+        }
 
-            Payload::CasStore { data, mime_type } => self.cas_store(data, mime_type).await,
+        // If we have an EventDualityServer, route through it for full functionality
+        if let Some(ref server) = self.event_server {
+            return self.dispatch_via_server(server, payload).await;
+        }
+
+        // Fallback to standalone mode for basic CAS/artifact operations
+        match payload {
+            Payload::CasStore { data, mime_type } => self.cas_store(data, Some(mime_type)).await,
             Payload::CasInspect { hash } => self.cas_inspect(&hash).await,
             Payload::CasGet { hash } => self.cas_get(&hash).await,
 
             Payload::ArtifactList { tag, creator } => self.artifact_list(tag, creator).await,
             Payload::ArtifactGet { id } => self.artifact_get(&id).await,
 
-            Payload::ListTools => self.list_tools(),
-
             other => {
-                warn!("Unhandled payload: {:?}", payload_type_name(&other));
+                warn!("Unhandled payload in standalone mode: {:?}", payload_type_name(&other));
                 Payload::Error {
                     code: "not_implemented".to_string(),
                     message: format!(
-                        "Tool '{}' not yet implemented in ZMQ server. Use MCP endpoint for full functionality.",
+                        "Tool '{}' requires EventDualityServer. Start hootenanny with full services.",
                         payload_type_name(&other)
                     ),
                     details: None,
                 }
             }
+        }
+    }
+
+    /// Dispatch via EventDualityServer for full tool functionality
+    async fn dispatch_via_server(&self, server: &EventDualityServer, payload: Payload) -> Payload {
+        use crate::api::dispatch::{dispatch_tool, ToolError};
+
+        // Convert Payload to tool name and arguments
+        let (tool_name, args) = match payload_to_tool_args(payload) {
+            Ok(v) => v,
+            Err(e) => {
+                return Payload::Error {
+                    code: "conversion_error".to_string(),
+                    message: e.to_string(),
+                    details: None,
+                };
+            }
+        };
+
+        // Call the tool via dispatch
+        match dispatch_tool(server, &tool_name, args).await {
+            Ok(result) => Payload::Success { result },
+            Err(ToolError { code, message, details }) => Payload::Error {
+                code,
+                message,
+                details,
+            },
         }
     }
 
@@ -431,3 +495,21 @@ fn payload_type_name(payload: &Payload) -> &'static str {
         Payload::Error { .. } => "error",
     }
 }
+
+/// Convert a hooteproto Payload to a tool name and JSON arguments
+fn payload_to_tool_args(payload: Payload) -> anyhow::Result<(String, serde_json::Value)> {
+    // Serialize the payload to JSON, then extract the tool-specific fields
+    let json = serde_json::to_value(&payload)?;
+    let tool_name = payload_type_name(&payload).to_string();
+
+    // The payload is tagged, so we need to extract the inner object
+    // After serialization: {"type":"cas_store","data":"...","mime_type":"..."}
+    // We want just: {"data":"...","mime_type":"..."}
+    let mut args = json.as_object()
+        .cloned()
+        .unwrap_or_default();
+    args.remove("type");  // Remove the discriminator tag
+
+    Ok((tool_name, serde_json::Value::Object(args)))
+}
+

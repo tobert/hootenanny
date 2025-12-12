@@ -264,14 +264,18 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
             use base64::{engine::general_purpose::STANDARD, Engine};
             let data_str = args
                 .get("data")
+                .or_else(|| args.get("content_base64"))
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Missing 'data' argument (base64)"))?;
+                .ok_or_else(|| anyhow::anyhow!("Missing 'data' or 'content_base64' argument"))?;
             let data = STANDARD
                 .decode(data_str)
                 .map_err(|e| anyhow::anyhow!("Invalid base64 data: {}", e))?;
             Ok(Payload::CasStore {
                 data,
-                mime_type: args.get("mime_type").and_then(|v| v.as_str()).map(String::from),
+                mime_type: args.get("mime_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("application/octet-stream")
+                    .to_string(),
             })
         }
 
@@ -338,24 +342,41 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
                 .get("variables")
                 .cloned()
                 .unwrap_or(Value::Object(Default::default())),
+            limit: args.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize),
         }),
 
-        "graph_bind" => Ok(Payload::GraphBind {
-            identity: args
-                .get("identity")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Missing 'identity' argument"))?
-                .to_string(),
-            hints: args
+        "graph_bind" => {
+            let hints = args
                 .get("hints")
                 .and_then(|v| v.as_array())
                 .map(|arr| {
                     arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
+                        .filter_map(|v| {
+                            let obj = v.as_object()?;
+                            Some(hooteproto::GraphHint {
+                                kind: obj.get("kind")?.as_str()?.to_string(),
+                                value: obj.get("value")?.as_str()?.to_string(),
+                                confidence: obj.get("confidence").and_then(|c| c.as_f64()).unwrap_or(1.0),
+                            })
+                        })
                         .collect()
                 })
-                .unwrap_or_default(),
-        }),
+                .unwrap_or_default();
+
+            Ok(Payload::GraphBind {
+                id: args
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Missing 'id' argument"))?
+                    .to_string(),
+                name: args
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Missing 'name' argument"))?
+                    .to_string(),
+                hints,
+            })
+        }
 
         // === Transport Tools (Chaosgarden) ===
         "transport_play" => Ok(Payload::TransportPlay),
@@ -393,43 +414,60 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
 
         // === Additional Graph Tools (Hootenanny) ===
         "graph_tag" => Ok(Payload::GraphTag {
-            identity: args
-                .get("identity")
+            identity_id: args
+                .get("identity_id")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Missing 'identity' argument"))?
+                .ok_or_else(|| anyhow::anyhow!("Missing 'identity_id' argument"))?
                 .to_string(),
-            tag: args
-                .get("tag")
+            namespace: args
+                .get("namespace")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Missing 'tag' argument"))?
+                .ok_or_else(|| anyhow::anyhow!("Missing 'namespace' argument"))?
+                .to_string(),
+            value: args
+                .get("value")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'value' argument"))?
                 .to_string(),
         }),
 
         "graph_connect" => Ok(Payload::GraphConnect {
-            source_identity: args
-                .get("source_identity")
+            from_identity: args
+                .get("from_identity")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Missing 'source_identity' argument"))?
+                .ok_or_else(|| anyhow::anyhow!("Missing 'from_identity' argument"))?
                 .to_string(),
-            sink_identity: args
-                .get("sink_identity")
+            from_port: args
+                .get("from_port")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Missing 'sink_identity' argument"))?
+                .ok_or_else(|| anyhow::anyhow!("Missing 'from_port' argument"))?
+                .to_string(),
+            to_identity: args
+                .get("to_identity")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'to_identity' argument"))?
+                .to_string(),
+            to_port: args
+                .get("to_port")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'to_port' argument"))?
                 .to_string(),
             transport: args.get("transport").and_then(|v| v.as_str()).map(String::from),
         }),
 
         "graph_find" => Ok(Payload::GraphFind {
-            hint_pattern: args.get("hint_pattern").and_then(|v| v.as_str()).map(String::from),
-            tag: args.get("tag").and_then(|v| v.as_str()).map(String::from),
-            limit: args.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize),
+            name: args.get("name").and_then(|v| v.as_str()).map(String::from),
+            tag_namespace: args.get("tag_namespace").and_then(|v| v.as_str()).map(String::from),
+            tag_value: args.get("tag_value").and_then(|v| v.as_str()).map(String::from),
         }),
 
         "graph_context" => Ok(Payload::GraphContext {
             tag: args.get("tag").and_then(|v| v.as_str()).map(String::from),
+            vibe_search: args.get("vibe_search").or_else(|| args.get("vibe")).and_then(|v| v.as_str()).map(String::from),
             creator: args.get("creator").and_then(|v| v.as_str()).map(String::from),
-            vibe: args.get("vibe").and_then(|v| v.as_str()).map(String::from),
             limit: args.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize),
+            include_metadata: args.get("include_metadata").and_then(|v| v.as_bool()).unwrap_or(false),
+            include_annotations: args.get("include_annotations").and_then(|v| v.as_bool()).unwrap_or(true),
         }),
 
         "add_annotation" => Ok(Payload::AddAnnotation {
@@ -438,11 +476,13 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Missing 'artifact_id' argument"))?
                 .to_string(),
-            vibe: args
-                .get("vibe")
+            message: args
+                .get("message")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Missing 'vibe' argument"))?
+                .ok_or_else(|| anyhow::anyhow!("Missing 'message' argument"))?
                 .to_string(),
+            vibe: args.get("vibe").and_then(|v| v.as_str()).map(String::from),
+            source: args.get("source").and_then(|v| v.as_str()).map(String::from),
         }),
 
         // === CAS Upload (Hootenanny) ===
@@ -451,6 +491,11 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
                 .get("file_path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Missing 'file_path' argument"))?
+                .to_string(),
+            mime_type: args
+                .get("mime_type")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'mime_type' argument"))?
                 .to_string(),
         }),
 
@@ -461,21 +506,33 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Missing 'file_path' argument"))?
                 .to_string(),
+            mime_type: args
+                .get("mime_type")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'mime_type' argument"))?
+                .to_string(),
+            variation_set_id: args.get("variation_set_id").and_then(|v| v.as_str()).map(String::from),
+            parent_id: args.get("parent_id").and_then(|v| v.as_str()).map(String::from),
             tags: args
                 .get("tags")
                 .and_then(|v| v.as_array())
                 .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default(),
             creator: args.get("creator").and_then(|v| v.as_str()).map(String::from),
-            parent_id: args.get("parent_id").and_then(|v| v.as_str()).map(String::from),
         }),
 
         // === Orpheus Tools (Hootenanny) ===
+        // Aligned with hootenanny api::schema types
         "orpheus_generate" => Ok(Payload::OrpheusGenerate {
-            temperature: args.get("temperature").and_then(|v| v.as_f64()),
-            top_p: args.get("top_p").and_then(|v| v.as_f64()),
-            cfg_coef: args.get("cfg_coef").and_then(|v| v.as_f64()),
-            seed: args.get("seed").and_then(|v| v.as_u64()),
+            model: args.get("model").and_then(|v| v.as_str()).map(String::from),
+            temperature: args.get("temperature").and_then(|v| v.as_f64()).map(|v| v as f32),
+            top_p: args.get("top_p").and_then(|v| v.as_f64()).map(|v| v as f32),
+            max_tokens: args.get("max_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
+            num_variations: args.get("num_variations").and_then(|v| v.as_u64()).map(|v| v as u32),
+            variation_set_id: args.get("variation_set_id").and_then(|v| v.as_str()).map(String::from),
+            parent_id: args.get("parent_id").and_then(|v| v.as_str()).map(String::from),
+            tags: extract_string_array(args, "tags"),
+            creator: args.get("creator").and_then(|v| v.as_str()).map(String::from),
         }),
 
         "orpheus_generate_seeded" => Ok(Payload::OrpheusGenerateSeeded {
@@ -484,39 +541,63 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Missing 'seed_hash' argument"))?
                 .to_string(),
-            temperature: args.get("temperature").and_then(|v| v.as_f64()),
-            top_p: args.get("top_p").and_then(|v| v.as_f64()),
-            cfg_coef: args.get("cfg_coef").and_then(|v| v.as_f64()),
+            model: args.get("model").and_then(|v| v.as_str()).map(String::from),
+            temperature: args.get("temperature").and_then(|v| v.as_f64()).map(|v| v as f32),
+            top_p: args.get("top_p").and_then(|v| v.as_f64()).map(|v| v as f32),
+            max_tokens: args.get("max_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
+            num_variations: args.get("num_variations").and_then(|v| v.as_u64()).map(|v| v as u32),
+            variation_set_id: args.get("variation_set_id").and_then(|v| v.as_str()).map(String::from),
+            parent_id: args.get("parent_id").and_then(|v| v.as_str()).map(String::from),
+            tags: extract_string_array(args, "tags"),
+            creator: args.get("creator").and_then(|v| v.as_str()).map(String::from),
         }),
 
         "orpheus_continue" => Ok(Payload::OrpheusContinue {
-            midi_hash: args
-                .get("midi_hash")
+            input_hash: args
+                .get("input_hash")
+                .or_else(|| args.get("midi_hash"))
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Missing 'midi_hash' argument"))?
+                .ok_or_else(|| anyhow::anyhow!("Missing 'input_hash' argument"))?
                 .to_string(),
-            temperature: args.get("temperature").and_then(|v| v.as_f64()),
-            num_tokens: args.get("num_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
+            model: args.get("model").and_then(|v| v.as_str()).map(String::from),
+            temperature: args.get("temperature").and_then(|v| v.as_f64()).map(|v| v as f32),
+            top_p: args.get("top_p").and_then(|v| v.as_f64()).map(|v| v as f32),
+            max_tokens: args.get("max_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
+            num_variations: args.get("num_variations").and_then(|v| v.as_u64()).map(|v| v as u32),
+            variation_set_id: args.get("variation_set_id").and_then(|v| v.as_str()).map(String::from),
+            parent_id: args.get("parent_id").and_then(|v| v.as_str()).map(String::from),
+            tags: extract_string_array(args, "tags"),
+            creator: args.get("creator").and_then(|v| v.as_str()).map(String::from),
         }),
 
         "orpheus_bridge" => Ok(Payload::OrpheusBridge {
-            from_hash: args
-                .get("from_hash")
+            section_a_hash: args
+                .get("section_a_hash")
+                .or_else(|| args.get("from_hash"))
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Missing 'from_hash' argument"))?
+                .ok_or_else(|| anyhow::anyhow!("Missing 'section_a_hash' argument"))?
                 .to_string(),
-            to_hash: args
-                .get("to_hash")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Missing 'to_hash' argument"))?
-                .to_string(),
-            temperature: args.get("temperature").and_then(|v| v.as_f64()),
+            section_b_hash: args.get("section_b_hash").or_else(|| args.get("to_hash")).and_then(|v| v.as_str()).map(String::from),
+            model: args.get("model").and_then(|v| v.as_str()).map(String::from),
+            temperature: args.get("temperature").and_then(|v| v.as_f64()).map(|v| v as f32),
+            top_p: args.get("top_p").and_then(|v| v.as_f64()).map(|v| v as f32),
+            max_tokens: args.get("max_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
+            variation_set_id: args.get("variation_set_id").and_then(|v| v.as_str()).map(String::from),
+            parent_id: args.get("parent_id").and_then(|v| v.as_str()).map(String::from),
+            tags: extract_string_array(args, "tags"),
+            creator: args.get("creator").and_then(|v| v.as_str()).map(String::from),
         }),
 
         "orpheus_loops" => Ok(Payload::OrpheusLoops {
-            num_loops: args.get("num_loops").and_then(|v| v.as_u64()).map(|v| v as u32),
-            temperature: args.get("temperature").and_then(|v| v.as_f64()),
-            density: args.get("density").and_then(|v| v.as_str()).map(String::from),
+            temperature: args.get("temperature").and_then(|v| v.as_f64()).map(|v| v as f32),
+            top_p: args.get("top_p").and_then(|v| v.as_f64()).map(|v| v as f32),
+            max_tokens: args.get("max_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
+            num_variations: args.get("num_variations").and_then(|v| v.as_u64()).map(|v| v as u32),
+            seed_hash: args.get("seed_hash").and_then(|v| v.as_str()).map(String::from),
+            variation_set_id: args.get("variation_set_id").and_then(|v| v.as_str()).map(String::from),
+            parent_id: args.get("parent_id").and_then(|v| v.as_str()).map(String::from),
+            tags: extract_string_array(args, "tags"),
+            creator: args.get("creator").and_then(|v| v.as_str()).map(String::from),
         }),
 
         "orpheus_classify" => Ok(Payload::OrpheusClassify {
@@ -529,13 +610,22 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
 
         // === MIDI/Audio Tools (Hootenanny) ===
         "convert_midi_to_wav" => Ok(Payload::ConvertMidiToWav {
-            midi_hash: args
-                .get("midi_hash")
+            input_hash: args
+                .get("input_hash")
+                .or_else(|| args.get("midi_hash"))
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Missing 'midi_hash' argument"))?
+                .ok_or_else(|| anyhow::anyhow!("Missing 'input_hash' argument"))?
                 .to_string(),
-            soundfont_hash: args.get("soundfont_hash").and_then(|v| v.as_str()).map(String::from),
+            soundfont_hash: args
+                .get("soundfont_hash")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'soundfont_hash' argument"))?
+                .to_string(),
             sample_rate: args.get("sample_rate").and_then(|v| v.as_u64()).map(|v| v as u32),
+            variation_set_id: args.get("variation_set_id").and_then(|v| v.as_str()).map(String::from),
+            parent_id: args.get("parent_id").and_then(|v| v.as_str()).map(String::from),
+            tags: extract_string_array(args, "tags"),
+            creator: args.get("creator").and_then(|v| v.as_str()).map(String::from),
         }),
 
         "soundfont_inspect" => Ok(Payload::SoundfontInspect {
@@ -544,6 +634,7 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Missing 'soundfont_hash' argument"))?
                 .to_string(),
+            include_drum_map: args.get("include_drum_map").and_then(|v| v.as_bool()).unwrap_or(false),
         }),
 
         "soundfont_preset_inspect" => Ok(Payload::SoundfontPresetInspect {
@@ -554,12 +645,12 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
                 .to_string(),
             bank: args
                 .get("bank")
-                .and_then(|v| v.as_u64())
-                .ok_or_else(|| anyhow::anyhow!("Missing 'bank' argument"))? as u16,
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'bank' argument"))? as i32,
             program: args
                 .get("program")
-                .and_then(|v| v.as_u64())
-                .ok_or_else(|| anyhow::anyhow!("Missing 'program' argument"))? as u16,
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'program' argument"))? as i32,
         }),
 
         // === ABC Notation Tools (Hootenanny) ===
@@ -577,6 +668,14 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Missing 'abc' argument"))?
                 .to_string(),
+            tempo_override: args.get("tempo_override").and_then(|v| v.as_u64()).map(|v| v as u16),
+            transpose: args.get("transpose").and_then(|v| v.as_i64()).map(|v| v as i8),
+            velocity: args.get("velocity").and_then(|v| v.as_u64()).map(|v| v as u8),
+            channel: args.get("channel").and_then(|v| v.as_u64()).map(|v| v as u8),
+            variation_set_id: args.get("variation_set_id").and_then(|v| v.as_str()).map(String::from),
+            parent_id: args.get("parent_id").and_then(|v| v.as_str()).map(String::from),
+            tags: extract_string_array(args, "tags"),
+            creator: args.get("creator").and_then(|v| v.as_str()).map(String::from),
         }),
 
         "abc_validate" => Ok(Payload::AbcValidate {
@@ -593,18 +692,15 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Missing 'abc' argument"))?
                 .to_string(),
-            semitones: args.get("semitones").and_then(|v| v.as_i64()).map(|v| v as i32),
+            semitones: args.get("semitones").and_then(|v| v.as_i64()).map(|v| v as i8),
             target_key: args.get("target_key").and_then(|v| v.as_str()).map(String::from),
         }),
 
         // === Analysis Tools (Hootenanny) ===
         "beatthis_analyze" => Ok(Payload::BeatthisAnalyze {
-            audio_hash: args
-                .get("audio_hash")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Missing 'audio_hash' argument"))?
-                .to_string(),
-            include_probabilities: args.get("include_probabilities").and_then(|v| v.as_bool()),
+            audio_path: args.get("audio_path").and_then(|v| v.as_str()).map(String::from),
+            audio_hash: args.get("audio_hash").and_then(|v| v.as_str()).map(String::from),
+            include_frames: args.get("include_frames").and_then(|v| v.as_bool()).unwrap_or(false),
         }),
 
         "clap_analyze" => Ok(Payload::ClapAnalyze {
@@ -613,19 +709,26 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Missing 'audio_hash' argument"))?
                 .to_string(),
-            mode: args.get("mode").and_then(|v| v.as_str()).map(String::from),
-            compare_to: args.get("compare_to").and_then(|v| v.as_str()).map(String::from),
+            tasks: extract_string_array(args, "tasks"),
+            audio_b_hash: args.get("audio_b_hash").and_then(|v| v.as_str()).map(String::from),
+            text_candidates: extract_string_array(args, "text_candidates"),
+            parent_id: args.get("parent_id").and_then(|v| v.as_str()).map(String::from),
+            creator: args.get("creator").and_then(|v| v.as_str()).map(String::from),
         }),
 
         // === Generation Tools (Hootenanny) ===
         "musicgen_generate" => Ok(Payload::MusicgenGenerate {
-            prompt: args
-                .get("prompt")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Missing 'prompt' argument"))?
-                .to_string(),
-            duration_secs: args.get("duration_secs").and_then(|v| v.as_f64()),
-            temperature: args.get("temperature").and_then(|v| v.as_f64()),
+            prompt: args.get("prompt").and_then(|v| v.as_str()).map(String::from),
+            duration: args.get("duration").and_then(|v| v.as_f64()).map(|v| v as f32),
+            temperature: args.get("temperature").and_then(|v| v.as_f64()).map(|v| v as f32),
+            top_k: args.get("top_k").and_then(|v| v.as_u64()).map(|v| v as u32),
+            top_p: args.get("top_p").and_then(|v| v.as_f64()).map(|v| v as f32),
+            guidance_scale: args.get("guidance_scale").and_then(|v| v.as_f64()).map(|v| v as f32),
+            do_sample: args.get("do_sample").and_then(|v| v.as_bool()),
+            variation_set_id: args.get("variation_set_id").and_then(|v| v.as_str()).map(String::from),
+            parent_id: args.get("parent_id").and_then(|v| v.as_str()).map(String::from),
+            tags: extract_string_array(args, "tags"),
+            creator: args.get("creator").and_then(|v| v.as_str()).map(String::from),
         }),
 
         "yue_generate" => Ok(Payload::YueGenerate {
@@ -634,7 +737,14 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Missing 'lyrics' argument"))?
                 .to_string(),
-            style: args.get("style").and_then(|v| v.as_str()).map(String::from),
+            genre: args.get("genre").or_else(|| args.get("style")).and_then(|v| v.as_str()).map(String::from),
+            max_new_tokens: args.get("max_new_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
+            run_n_segments: args.get("run_n_segments").and_then(|v| v.as_u64()).map(|v| v as u32),
+            seed: args.get("seed").and_then(|v| v.as_u64()),
+            variation_set_id: args.get("variation_set_id").and_then(|v| v.as_str()).map(String::from),
+            parent_id: args.get("parent_id").and_then(|v| v.as_str()).map(String::from),
+            tags: extract_string_array(args, "tags"),
+            creator: args.get("creator").and_then(|v| v.as_str()).map(String::from),
         }),
 
         // === Garden Tools (Hootenanny → Chaosgarden) ===
@@ -669,10 +779,11 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
 
         // === Misc Tools ===
         "job_sleep" => Ok(Payload::JobSleep {
-            duration_ms: args
-                .get("duration_ms")
+            milliseconds: args
+                .get("milliseconds")
+                .or_else(|| args.get("duration_ms"))
                 .and_then(|v| v.as_u64())
-                .ok_or_else(|| anyhow::anyhow!("Missing 'duration_ms' argument"))?,
+                .ok_or_else(|| anyhow::anyhow!("Missing 'milliseconds' argument"))?,
         }),
 
         "sample_llm" => Ok(Payload::SampleLlm {
@@ -682,8 +793,22 @@ fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
                 .ok_or_else(|| anyhow::anyhow!("Missing 'prompt' argument"))?
                 .to_string(),
             max_tokens: args.get("max_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
+            temperature: args.get("temperature").and_then(|v| v.as_f64()),
+            system_prompt: args.get("system_prompt").and_then(|v| v.as_str()).map(String::from),
         }),
 
         _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),
     }
+}
+
+/// Helper to extract string arrays from JSON arguments
+fn extract_string_array(args: &Value, key: &str) -> Vec<String> {
+    args.get(key)
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
 }

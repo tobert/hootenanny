@@ -4,8 +4,7 @@
 
 use anyhow::{Context, Result};
 use hooteproto::Broadcast;
-use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use zeromq::{PubSocket, Socket, SocketSend, ZmqMessage};
 

@@ -133,6 +133,70 @@ This ensures a single source of truth for request types and makes ZMQ dispatch t
 
 Current state: hootenanny has both MCP and ZMQ servers.
 - MCP: Full tool suite via baton
-- ZMQ: CAS + artifacts only
+- ZMQ: Full tool suite via EventDualityServer (since 2025-12-12)
 
-For now, tools only available via MCP. Holler's tool_to_payload has all routing ready, but hootenanny's ZMQ server returns "not_implemented" for most tools.
+## Implementation Progress (2025-12-12)
+
+### Completed
+
+1. **Aligned hooteproto Payload types with api/schema request types**
+   - Updated field types (f64 → f32 for temperatures)
+   - Added artifact tracking fields (variation_set_id, parent_id, tags, creator)
+   - Updated field names to match schema (midi_hash → input_hash, from_hash → section_a_hash)
+   - Added `GraphHint` struct matching schema's hint structure
+   - Made `mime_type` required where schema requires it
+
+2. **Added EventDualityServer to HooteprotoServer**
+   - Created `with_event_server()` constructor
+   - Server can now operate in two modes:
+     - Standalone: CAS + artifacts only (legacy)
+     - Full: All tools via EventDualityServer
+
+3. **Implemented dispatch via HootHandler**
+   - `dispatch_via_server()` converts hooteproto Payload to JSON args
+   - Calls existing `HootHandler.call_tool()` method
+   - Converts baton `CallToolResult` back to hooteproto `Payload`
+
+4. **Updated holler's tool_to_payload**
+   - All Orpheus tools now pass new fields (model, max_tokens, etc.)
+   - Graph tools use new schema field names
+   - Added `extract_string_array` helper for tags
+
+5. **Updated main.rs**
+   - Creates EventDualityServer before ZMQ server
+   - Passes EventDualityServer to HooteprotoServer::with_event_server()
+
+### What This Enables
+
+With these changes, holler can route ALL tools through hootenanny's ZMQ server:
+- `holler → hooteproto → hootenanny ZMQ → EventDualityServer → tool handlers`
+
+This paves the way for full MCP removal from hootenanny when ready.
+
+### Completed (2025-12-12 - Full MCP Removal)
+
+MCP/baton removed from hootenanny main.rs and public API:
+
+1. ✅ Removed `api/handler.rs` (baton Handler impl)
+2. ✅ Removed `api/composite.rs`
+3. ✅ Removed MCP routes from main.rs
+4. ✅ Removed llm-mcp-bridge dependency (was MCP-based)
+5. ✅ Created `api/dispatch.rs` for ZMQ tool dispatch
+6. ✅ Cleaned up unused imports
+
+**Note**: baton is still a dependency because `EventDualityServer` methods return `baton::CallToolResult`. The `dispatch.rs` module bridges this by converting to/from JSON. A future refactor could replace these return types with custom types to fully remove baton.
+
+### Architecture After Removal
+
+```
+holler (MCP gateway)
+    ├── baton MCP server (for Claude/clients)
+    └── hooteproto ZMQ client
+           ↓
+hootenanny (ZMQ backend)
+    ├── ZMQ ROUTER (hooteproto)
+    ├── dispatch.rs → EventDualityServer
+    └── HTTP (artifacts, health only)
+```
+
+Hootenanny is now a pure ZMQ backend service. MCP clients connect through holler.

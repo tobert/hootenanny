@@ -286,10 +286,12 @@ pub enum Payload {
     },
 
     // === CAS Tools (Holler → Hootenanny) ===
+    // CasStore uses binary encoding for efficiency over ZMQ
+    // Schema's CasStoreRequest uses content_base64 String
     CasStore {
         #[serde(with = "base64_bytes")]
         data: Vec<u8>,
-        mime_type: Option<String>,
+        mime_type: String,
     },
     CasInspect {
         hash: String,
@@ -299,91 +301,169 @@ pub enum Payload {
     },
     CasUploadFile {
         file_path: String,
+        mime_type: String,
     },
 
     // === Orpheus Tools (Holler → Hootenanny) ===
+    // Aligned with hootenanny api::schema types
     OrpheusGenerate {
-        temperature: Option<f64>,
-        top_p: Option<f64>,
-        cfg_coef: Option<f64>,
-        seed: Option<u64>,
+        model: Option<String>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        max_tokens: Option<u32>,
+        num_variations: Option<u32>,
+        // Artifact tracking
+        variation_set_id: Option<String>,
+        parent_id: Option<String>,
+        tags: Vec<String>,
+        creator: Option<String>,
     },
     OrpheusGenerateSeeded {
         seed_hash: String,
-        temperature: Option<f64>,
-        top_p: Option<f64>,
-        cfg_coef: Option<f64>,
+        model: Option<String>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        max_tokens: Option<u32>,
+        num_variations: Option<u32>,
+        // Artifact tracking
+        variation_set_id: Option<String>,
+        parent_id: Option<String>,
+        tags: Vec<String>,
+        creator: Option<String>,
     },
     OrpheusContinue {
-        midi_hash: String,
-        temperature: Option<f64>,
-        num_tokens: Option<u32>,
+        input_hash: String,
+        model: Option<String>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        max_tokens: Option<u32>,
+        num_variations: Option<u32>,
+        // Artifact tracking
+        variation_set_id: Option<String>,
+        parent_id: Option<String>,
+        tags: Vec<String>,
+        creator: Option<String>,
     },
     OrpheusBridge {
-        from_hash: String,
-        to_hash: String,
-        temperature: Option<f64>,
+        section_a_hash: String,
+        section_b_hash: Option<String>,
+        model: Option<String>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        max_tokens: Option<u32>,
+        // Artifact tracking
+        variation_set_id: Option<String>,
+        parent_id: Option<String>,
+        tags: Vec<String>,
+        creator: Option<String>,
     },
     OrpheusLoops {
-        num_loops: Option<u32>,
-        temperature: Option<f64>,
-        density: Option<String>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        max_tokens: Option<u32>,
+        num_variations: Option<u32>,
+        seed_hash: Option<String>,
+        // Artifact tracking
+        variation_set_id: Option<String>,
+        parent_id: Option<String>,
+        tags: Vec<String>,
+        creator: Option<String>,
     },
     OrpheusClassify {
         midi_hash: String,
     },
 
     // === MIDI/Audio Tools (Holler → Hootenanny) ===
+    // Aligned with hootenanny api::schema types
     ConvertMidiToWav {
-        midi_hash: String,
-        soundfont_hash: Option<String>,
+        input_hash: String,
+        soundfont_hash: String,
         sample_rate: Option<u32>,
+        // Artifact tracking
+        variation_set_id: Option<String>,
+        parent_id: Option<String>,
+        tags: Vec<String>,
+        creator: Option<String>,
     },
     SoundfontInspect {
         soundfont_hash: String,
+        include_drum_map: bool,
     },
     SoundfontPresetInspect {
         soundfont_hash: String,
-        bank: u16,
-        program: u16,
+        bank: i32,
+        program: i32,
     },
 
     // === ABC Notation Tools (Holler → Hootenanny) ===
+    // Aligned with hootenanny api::schema types
     AbcParse {
         abc: String,
     },
     AbcToMidi {
         abc: String,
+        tempo_override: Option<u16>,
+        transpose: Option<i8>,
+        velocity: Option<u8>,
+        channel: Option<u8>,
+        // Artifact tracking
+        variation_set_id: Option<String>,
+        parent_id: Option<String>,
+        tags: Vec<String>,
+        creator: Option<String>,
     },
     AbcValidate {
         abc: String,
     },
     AbcTranspose {
         abc: String,
-        semitones: Option<i32>,
+        semitones: Option<i8>,
         target_key: Option<String>,
     },
 
     // === Analysis Tools (Holler → Hootenanny) ===
+    // Aligned with hootenanny api::schema types
     BeatthisAnalyze {
-        audio_hash: String,
-        include_probabilities: Option<bool>,
+        audio_path: Option<String>,
+        audio_hash: Option<String>,
+        include_frames: bool,
     },
     ClapAnalyze {
         audio_hash: String,
-        mode: Option<String>,
-        compare_to: Option<String>,
+        tasks: Vec<String>,
+        audio_b_hash: Option<String>,
+        text_candidates: Vec<String>,
+        parent_id: Option<String>,
+        creator: Option<String>,
     },
 
     // === Generation Tools (Holler → Hootenanny) ===
+    // Aligned with hootenanny api::schema types
     MusicgenGenerate {
-        prompt: String,
-        duration_secs: Option<f64>,
-        temperature: Option<f64>,
+        prompt: Option<String>,
+        duration: Option<f32>,
+        temperature: Option<f32>,
+        top_k: Option<u32>,
+        top_p: Option<f32>,
+        guidance_scale: Option<f32>,
+        do_sample: Option<bool>,
+        // Artifact tracking
+        variation_set_id: Option<String>,
+        parent_id: Option<String>,
+        tags: Vec<String>,
+        creator: Option<String>,
     },
     YueGenerate {
         lyrics: String,
-        style: Option<String>,
+        genre: Option<String>,
+        max_new_tokens: Option<u32>,
+        run_n_segments: Option<u32>,
+        seed: Option<u64>,
+        // Artifact tracking
+        variation_set_id: Option<String>,
+        parent_id: Option<String>,
+        tags: Vec<String>,
+        creator: Option<String>,
     },
 
     // === Garden Tools (Holler → Hootenanny → Chaosgarden) ===
@@ -404,20 +484,26 @@ pub enum Payload {
     GardenEmergencyPause,
 
     // === Misc Tools ===
+    // Aligned with hootenanny api::schema types
     JobSleep {
-        duration_ms: u64,
+        milliseconds: u64,
     },
     SampleLlm {
         prompt: String,
         max_tokens: Option<u32>,
+        temperature: Option<f64>,
+        system_prompt: Option<String>,
     },
 
     // === Artifact Tools (Holler → Hootenanny) ===
+    // Aligned with hootenanny api::schema types
     ArtifactUpload {
         file_path: String,
+        mime_type: String,
+        variation_set_id: Option<String>,
+        parent_id: Option<String>,
         tags: Vec<String>,
         creator: Option<String>,
-        parent_id: Option<String>,
     },
     ArtifactGet {
         id: String,
@@ -434,37 +520,47 @@ pub enum Payload {
     },
 
     // === Graph Tools (Holler → Hootenanny) ===
+    // Aligned with hootenanny api::schema types
     GraphQuery {
         query: String,
         variables: serde_json::Value,
+        limit: Option<usize>,
     },
     GraphBind {
-        identity: String,
-        hints: Vec<String>,
+        id: String,
+        name: String,
+        hints: Vec<GraphHint>,
     },
     GraphTag {
-        identity: String,
-        tag: String,
+        identity_id: String,
+        namespace: String,
+        value: String,
     },
     GraphConnect {
-        source_identity: String,
-        sink_identity: String,
+        from_identity: String,
+        from_port: String,
+        to_identity: String,
+        to_port: String,
         transport: Option<String>,
     },
     GraphFind {
-        hint_pattern: Option<String>,
-        tag: Option<String>,
-        limit: Option<usize>,
+        name: Option<String>,
+        tag_namespace: Option<String>,
+        tag_value: Option<String>,
     },
     GraphContext {
         tag: Option<String>,
+        vibe_search: Option<String>,
         creator: Option<String>,
-        vibe: Option<String>,
         limit: Option<usize>,
+        include_metadata: bool,
+        include_annotations: bool,
     },
     AddAnnotation {
         artifact_id: String,
-        vibe: String,
+        message: String,
+        vibe: Option<String>,
+        source: Option<String>,
     },
 
     // === Transport Tools (Holler → Chaosgarden) ===
@@ -544,6 +640,19 @@ pub struct ToolInfo {
     pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
+}
+
+/// Graph hint for identity binding (aligned with hootenanny schema)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GraphHint {
+    pub kind: String,
+    pub value: String,
+    #[serde(default = "default_confidence")]
+    pub confidence: f64,
+}
+
+fn default_confidence() -> f64 {
+    1.0
 }
 
 /// Broadcast messages via PUB/SUB
@@ -683,7 +792,7 @@ mod tests {
     fn cas_store_with_binary_data() {
         let envelope = Envelope::new(Payload::CasStore {
             data: vec![0x4d, 0x54, 0x68, 0x64], // MIDI header
-            mime_type: Some("audio/midi".to_string()),
+            mime_type: "audio/midi".to_string(),
         });
         let json = serde_json::to_string(&envelope).unwrap();
         assert!(json.contains("TVRoZA==")); // base64 of MThd
