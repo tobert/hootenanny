@@ -194,7 +194,7 @@ result = job_poll({timeout_ms: 120000, job_ids: jobs, mode: "all"})
 - `abc` - ABC notation parser and MIDI converter
 - `resonode` - Musical domain types
 - `audio-graph-mcp` - Audio routing graph
-- `llm-mcp-bridge` - LLM sub-agent support
+
 
 **Key Patterns:**
 - **Async-by-design:** Slow tools return `job_id` immediately

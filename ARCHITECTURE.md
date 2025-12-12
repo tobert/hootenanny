@@ -117,7 +117,7 @@
 - Unified query layer over artifacts, devices, connections
 - GraphQL-like queries via Trustfall
 
-### llmchat / llm-mcp-bridge
+
 **LLM integration**
 
 - Chat state machine

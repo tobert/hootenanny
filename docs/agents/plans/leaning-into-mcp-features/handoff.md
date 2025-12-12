@@ -71,7 +71,7 @@ A systematic enhancement of the baton MCP library to support all MCP 2025-06-18 
 
 ### What Stays the Same
 
-- `agent_chat_*` tools remain (separate from sampling)
+
 - `job_poll` tool stays available (but rarely used)
 - Baton stays spec-compliant but grows opinionated helpers
 
@@ -263,7 +263,7 @@ Ok(CallToolResult::success(vec![Content::text("Human-readable message")])
 - ✅ SoundFont (2): soundfont_inspect, soundfont_preset_inspect
 - ✅ Graph (5): graph_bind, graph_tag, graph_connect, graph_find (context/query/add_annotation were already done)
 - ✅ Job (1): job_sleep
-- ✅ Agent chat tools: In separate llm-mcp-bridge crate (delegated)
+
 
 **Total**: 27 tools with structured content + output schemas
 

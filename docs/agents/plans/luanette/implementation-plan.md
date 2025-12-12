@@ -41,7 +41,7 @@ Format: YYYY-MM-DD - Phase N progress: Brief summary of what was completed
 - Both transports support: initialize, list_tools, call_tool, complete_argument
 - Traceparent propagation for distributed tracing
 - Migrated luanette to use baton::client::McpClient
-- Migrated llm-mcp-bridge to use baton::client::McpClient (lazy init to avoid circular deps)
+
 - Migrated hrcli to use baton::client::SseClient (thin wrapper with CLI-specific ToolInfo)
 - Reduced mcp_client.rs from 589 lines to 120 lines in hrcli
 - TODO: Revisit AgentManager lazy MCP client initialization design
@@ -843,7 +843,7 @@ local result = mcp.hootenanny.cas_upload_file {
 - `/home/atobey/src/halfremembered-mcp/crates/hootenanny/src/main.rs` - Server startup
 - `/home/atobey/src/halfremembered-mcp/crates/hootenanny/src/api/handler.rs` - Handler pattern
 - `/home/atobey/src/halfremembered-mcp/crates/hootenanny/src/job_system.rs` - Job system
-- `/home/atobey/src/halfremembered-mcp/crates/llm-mcp-bridge/src/mcp_client.rs` - MCP client
+
 - `/home/atobey/src/halfremembered-mcp/crates/hootenanny/src/api/schema.rs` - Schema examples
 - `/home/atobey/src/halfremembered-mcp/crates/hootenanny/src/mcp_tools/local_models.rs:86-105` - Traceparent injection pattern
 - `/home/atobey/src/halfremembered-mcp/crates/hootenanny/src/telemetry.rs` - OpenTelemetry setup
