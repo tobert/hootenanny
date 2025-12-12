@@ -14,8 +14,10 @@
 ### Usage
 
 ```bash
-# Start hootenanny with ZMQ server for holler
-./target/debug/hootenanny --port 8080 --zmq-bind tcp://0.0.0.0:5580
+# Start hootenanny with ZMQ ROUTER + PUB
+./target/debug/hootenanny --port 8080 \
+  --zmq-bind tcp://0.0.0.0:5580 \
+  --zmq-pub tcp://0.0.0.0:5581
 
 # Test connectivity with holler CLI
 ./target/debug/holler ping tcp://127.0.0.1:5580
@@ -33,7 +35,13 @@ curl -N http://127.0.0.1:8081/sse
 
 ```
 cargo test -p hooteproto: 9 passed
-cargo test -p holler: 5 passed (3 ZMQ roundtrip + 2 integration)
+cargo test -p holler: 8 passed (3 ZMQ roundtrip + 2 integration + 3 subscriber)
+```
+
+### Broadcast Flow (Complete)
+
+```
+orpheus_generate → BroadcastPublisher → ZMQ PUB → holler SUB → SSE clients
 ```
 
 ## Goal
