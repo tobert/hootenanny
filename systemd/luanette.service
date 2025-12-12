@@ -1,0 +1,15 @@
+[Unit]
+Description=Luanette Lua Scripting Server
+
+[Service]
+Type=simple
+WorkingDirectory=%h/src/halfremembered-mcp
+ExecStart=%h/src/halfremembered-mcp/target/release/luanette zmq --bind tcp://0.0.0.0:5570 --upstream-url http://127.0.0.1:8080/mcp
+Restart=always
+RestartSec=5
+
+Environment=RUST_LOG=info
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317
+
+[Install]
+WantedBy=default.target

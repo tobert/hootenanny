@@ -1,0 +1,20 @@
+[Unit]
+Description=Chaosgarden Generative System
+
+[Service]
+Type=simple
+WorkingDirectory=%h/src/halfremembered-mcp
+ExecStartPre=/bin/rm -f /tmp/chaosgarden-control /tmp/chaosgarden-shell /tmp/chaosgarden-iopub /tmp/chaosgarden-hb /tmp/chaosgarden-query
+ExecStart=%h/src/halfremembered-mcp/target/release/chaosgarden
+Restart=always
+RestartSec=5
+
+Environment=RUST_LOG=info
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317
+
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+Nice=-11
+
+[Install]
+WantedBy=default.target
