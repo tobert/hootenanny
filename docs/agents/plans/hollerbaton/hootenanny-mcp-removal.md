@@ -118,10 +118,16 @@ The main issue is that `hooteproto::Payload` types don't match `api::schema` req
 - Field names differ (e.g., `cfg_coef` vs none)
 - Schema types have additional fields (variation_set_id, mime_type, etc.)
 
-**Solution options:**
-1. Align hooteproto types with schema types
-2. Create adapter functions for each tool
-3. Bypass schema types and call LocalModels directly from ZMQ dispatch
+**Chosen approach: Align hooteproto to schema types**
+
+The cleanest path forward is to update `hooteproto::Payload` variants to match the `api::schema` request types exactly. This means:
+
+1. Update field types in hooteproto (f64 → f32 where needed)
+2. Add missing fields to Payload variants (variation_set_id, mime_type, etc.)
+3. Remove fields that don't exist in schema (cfg_coef)
+4. Update holler's `tool_to_payload` to match
+
+This ensures a single source of truth for request types and makes ZMQ dispatch trivial - just convert Payload to schema type and call the existing EventDualityServer methods.
 
 ## Alternative: Keep Both
 
