@@ -63,6 +63,7 @@ impl EventDualityServer {
         let artifact_store = Arc::clone(&self.artifact_store);
         let job_store = self.job_store.clone();
         let job_id_clone = job_id.clone();
+        let broadcaster = self.broadcaster.clone();
 
         // Spawn background task
         let handle = tokio::spawn(async move {
@@ -147,6 +148,20 @@ impl EventDualityServer {
 
                     match artifacts_result {
                         Ok(artifacts) => {
+                            // Broadcast artifact creation events
+                            if let Some(ref bc) = broadcaster {
+                                for artifact in &artifacts {
+                                    let bc = bc.clone();
+                                    let id = artifact.id.as_str().to_string();
+                                    let hash = artifact.content_hash.as_str().to_string();
+                                    let tags = artifact.tags.clone();
+                                    let creator = Some(artifact.creator.clone());
+                                    tokio::spawn(async move {
+                                        let _ = bc.artifact_created(&id, &hash, tags, creator).await;
+                                    });
+                                }
+                            }
+
                             let response = serde_json::json!({
                                 "status": result.status,
                                 "output_hashes": result.output_hashes,

@@ -233,7 +233,9 @@ async fn main() -> Result<()> {
         audio_graph_db.clone(),
         graph_adapter.clone(),
         gpu_monitor.clone(),
-    ).with_garden(garden_manager.clone()));
+    )
+    .with_garden(garden_manager.clone())
+    .with_broadcaster(broadcast_publisher));
 
     // --- LLM Agent Bridge Initialization ---
     tracing::info!("🤖 Initializing LLM Agent Bridge...");

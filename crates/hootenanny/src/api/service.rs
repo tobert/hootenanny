@@ -2,6 +2,7 @@ use crate::artifact_store::FileStore;
 use crate::gpu_monitor::GpuMonitor;
 use crate::job_system::JobStore;
 use crate::mcp_tools::local_models::LocalModels;
+use crate::zmq::{BroadcastPublisher, GardenManager};
 use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use std::sync::{Arc, RwLock};
 
@@ -13,6 +14,9 @@ pub struct EventDualityServer {
     pub audio_graph_db: Arc<AudioGraphDb>,
     pub graph_adapter: Arc<AudioGraphAdapter>,
     pub gpu_monitor: Arc<GpuMonitor>,
+    pub garden_manager: Option<Arc<GardenManager>>,
+    /// Optional broadcast publisher for SSE events via holler
+    pub broadcaster: Option<BroadcastPublisher>,
 }
 
 impl std::fmt::Debug for EventDualityServer {
@@ -39,6 +43,40 @@ impl EventDualityServer {
             audio_graph_db,
             graph_adapter,
             gpu_monitor,
+            garden_manager: None,
+            broadcaster: None,
+        }
+    }
+
+    /// Create with garden manager for chaosgarden connection
+    pub fn with_garden(mut self, garden_manager: Option<Arc<GardenManager>>) -> Self {
+        self.garden_manager = garden_manager;
+        self
+    }
+
+    /// Create with broadcast publisher for SSE events
+    pub fn with_broadcaster(mut self, broadcaster: Option<BroadcastPublisher>) -> Self {
+        self.broadcaster = broadcaster;
+        self
+    }
+
+    /// Broadcast an artifact creation event (fire-and-forget)
+    pub fn broadcast_artifact_created(
+        &self,
+        artifact_id: &str,
+        content_hash: &str,
+        tags: Vec<String>,
+        creator: Option<String>,
+    ) {
+        if let Some(ref broadcaster) = self.broadcaster {
+            let broadcaster = broadcaster.clone();
+            let artifact_id = artifact_id.to_string();
+            let content_hash = content_hash.to_string();
+            tokio::spawn(async move {
+                if let Err(e) = broadcaster.artifact_created(&artifact_id, &content_hash, tags, creator).await {
+                    tracing::warn!("Failed to broadcast artifact_created: {}", e);
+                }
+            });
         }
     }
 }
