@@ -19,14 +19,14 @@ use crate::dispatch::Dispatcher;
 /// ZMQ server configuration
 pub struct ServerConfig {
     pub bind_address: String,
-    pub worker_name: String,
+    pub _worker_name: String,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             bind_address: "tcp://0.0.0.0:5570".to_string(),
-            worker_name: "luanette".to_string(),
+            _worker_name: "luanette".to_string(),
         }
     }
 }
@@ -209,7 +209,7 @@ impl Server {
                 warn!("Unhandled payload type: {:?}", other);
                 Payload::Error {
                     code: "unhandled_payload".to_string(),
-                    message: format!("Luanette does not handle this payload type"),
+                    message: "Luanette does not handle this payload type".to_string(),
                     details: Some(serde_json::to_value(&other).unwrap_or_default()),
                 }
             }

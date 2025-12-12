@@ -63,7 +63,7 @@ pub fn graph_find(
     let mut results: Vec<IdentitySummary> = identities
         .into_iter()
         .filter(|i| {
-            name.map_or(true, |n| i.name.to_lowercase().contains(&n.to_lowercase()))
+            name.is_none_or(|n| i.name.to_lowercase().contains(&n.to_lowercase()))
         })
         .map(|i| {
             let tags = db

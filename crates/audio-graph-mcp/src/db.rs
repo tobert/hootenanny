@@ -253,6 +253,7 @@ impl Database {
     }
 
     // Manual Connections
+    #[allow(clippy::too_many_arguments)]
     pub fn add_connection(
         &self,
         id: &str,

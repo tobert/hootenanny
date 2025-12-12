@@ -107,7 +107,7 @@ impl SseClient {
         if !response.status().is_success() {
             return Err(SseClientError::Http {
                 status: response.status().as_u16(),
-                body: format!("SSE connection failed"),
+                body: "SSE connection failed".to_string(),
             });
         }
 
@@ -320,7 +320,7 @@ impl SseClient {
         if response.status() != reqwest::StatusCode::ACCEPTED {
             return Err(SseClientError::Http {
                 status: response.status().as_u16(),
-                body: format!("Request failed"),
+                body: "Request failed".to_string(),
             });
         }
 
@@ -355,7 +355,7 @@ impl SseClient {
         if response.status() != reqwest::StatusCode::ACCEPTED {
             return Err(SseClientError::Http {
                 status: response.status().as_u16(),
-                body: format!("Notification failed"),
+                body: "Notification failed".to_string(),
             });
         }
 
@@ -428,13 +428,13 @@ async fn listen_for_responses(
                         continue;
                     }
 
-                    if trimmed.starts_with("event:") {
-                        current_event_type = Some(trimmed[6..].trim().to_string());
+                    if let Some(stripped) = trimmed.strip_prefix("event:") {
+                        current_event_type = Some(stripped.trim().to_string());
                         continue;
                     }
 
-                    if trimmed.starts_with("data:") {
-                        current_data.push_str(trimmed[5..].trim());
+                    if let Some(stripped) = trimmed.strip_prefix("data:") {
+                        current_data.push_str(stripped.trim());
                     }
                 }
             }

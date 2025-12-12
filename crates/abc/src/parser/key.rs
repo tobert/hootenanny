@@ -66,7 +66,7 @@ pub fn parse_key_field(value: &str, collector: &mut FeedbackCollector) -> Key {
         // Also handle "maj", "major" explicitly
         let mode_str = remaining.split_whitespace().next().unwrap_or("");
 
-        Mode::from_str(mode_str).unwrap_or_else(|| {
+        Mode::parse(mode_str).unwrap_or_else(|| {
             collector.warning(format!("Unknown mode '{}', assuming major", mode_str));
             Mode::Major
         })

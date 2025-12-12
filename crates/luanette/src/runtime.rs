@@ -56,6 +56,7 @@ impl LuaRuntime {
     }
 
     /// Create a new Lua runtime with default configuration.
+    #[allow(dead_code)]
     pub fn with_defaults() -> Self {
         Self::new(SandboxConfig::default())
     }

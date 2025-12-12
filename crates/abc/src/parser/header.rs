@@ -200,10 +200,10 @@ fn parse_tempo(value: &str, collector: &mut FeedbackCollector) -> Tempo {
     let trimmed = value.trim();
 
     // Check for text in quotes
-    let (text, rest) = if trimmed.starts_with('"') {
-        if let Some(end) = trimmed[1..].find('"') {
-            let text = trimmed[1..=end].to_string();
-            let rest = trimmed[end + 2..].trim();
+    let (text, rest) = if let Some(stripped) = trimmed.strip_prefix('"') {
+        if let Some(end) = stripped.find('"') {
+            let text = stripped[..end].to_string();
+            let rest = stripped[end + 1..].trim();
             (Some(text), rest)
         } else {
             (None, trimmed)

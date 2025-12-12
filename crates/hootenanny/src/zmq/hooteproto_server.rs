@@ -318,8 +318,8 @@ impl HooteprotoServer {
                 let artifacts: Vec<_> = all_artifacts
                     .into_iter()
                     .filter(|a| {
-                        let tag_match = tag.as_ref().map_or(true, |t| a.tags.iter().any(|at| at == t));
-                        let creator_match = creator.as_ref().map_or(true, |c| a.creator.as_str() == c);
+                        let tag_match = tag.as_ref().is_none_or(|t| a.tags.iter().any(|at| at == t));
+                        let creator_match = creator.as_ref().is_none_or(|c| a.creator.as_str() == c);
                         tag_match && creator_match
                     })
                     .collect();

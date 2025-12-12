@@ -112,7 +112,7 @@ impl AgentChatHandler {
 
         Ok(baton::types::resource::ReadResourceResult::single(
             ResourceContents::text_with_mime(
-                &format!("conversations://{}", id),
+                format!("conversations://{}", id),
                 json,
                 "application/json",
             ),
@@ -163,7 +163,7 @@ impl AgentChatHandler {
 
         Ok(baton::types::resource::ReadResourceResult::single(
             ResourceContents::text_with_mime(
-                &format!("conversations://{}/tools", conv_id),
+                format!("conversations://{}/tools", conv_id),
                 json,
                 "application/json",
             ),

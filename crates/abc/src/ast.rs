@@ -158,7 +158,7 @@ pub enum Mode {
 
 impl Mode {
     /// Parse mode from string (case-insensitive, allows abbreviations)
-    pub fn from_str(s: &str) -> Option<Mode> {
+    pub fn parse(s: &str) -> Option<Mode> {
         let s = s.to_lowercase();
         match s.as_str() {
             "maj" | "major" | "" => Some(Mode::Major),
@@ -286,21 +286,11 @@ pub enum StemDirection {
 }
 
 /// A voice (track) in the tune
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Voice {
     pub id: Option<String>,
     pub name: Option<String>,
     pub elements: Vec<Element>,
-}
-
-impl Default for Voice {
-    fn default() -> Self {
-        Voice {
-            id: None,
-            name: None,
-            elements: Vec::new(),
-        }
-    }
 }
 
 /// A music element in the body

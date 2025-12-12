@@ -491,6 +491,7 @@ impl LocalModels {
     }
 
     /// Call MusicGen service (port 2006) to generate music from text prompt
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_musicgen_generate(
         &self,
         prompt: String,

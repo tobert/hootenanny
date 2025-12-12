@@ -10,7 +10,7 @@ use super::note::{parse_chord, parse_chord_symbol, parse_note, parse_rest};
 /// Skip whitespace (spaces and tabs) at the start of input, returning count
 fn skip_spaces(input: &mut &str) -> usize {
     let start_len = input.len();
-    *input = input.trim_start_matches(|c| c == ' ' || c == '\t');
+    *input = input.trim_start_matches([' ', '\t']);
     start_len - input.len()
 }
 
@@ -140,8 +140,7 @@ fn try_parse_element(input: &mut &str, collector: &mut FeedbackCollector) -> Opt
     }
 
     // Try slur
-    if input.starts_with('(') && !input.chars().nth(1).map(|c| c.is_ascii_digit()).unwrap_or(false)
-    {
+    if input.starts_with('(') && !input.chars().nth(1).is_some_and(|c| c.is_ascii_digit()) {
         *input = &input[1..];
         return Some(Element::Slur(crate::ast::SlurBoundary::Start));
     }
@@ -179,7 +178,7 @@ fn try_parse_bar(input: &mut &str) -> Option<Bar> {
     }
     if input.starts_with(":|") {
         // Check for :|2 etc.
-        if input.len() >= 3 && input.chars().nth(2).map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        if input.len() >= 3 && input.chars().nth(2).is_some_and(|c| c.is_ascii_digit()) {
             *input = &input[2..];
             // Parse the number
             let num_str: String = input
@@ -215,7 +214,7 @@ fn try_parse_tuplet(input: &mut &str, collector: &mut FeedbackCollector) -> Opti
     }
 
     // Check if followed by a digit
-    if input.len() < 2 || !input.chars().nth(1).map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    if input.len() < 2 || !input.chars().nth(1).is_some_and(|c| c.is_ascii_digit()) {
         return None;
     }
 
@@ -368,26 +367,25 @@ fn try_parse_decoration(input: &mut &str) -> Option<crate::ast::Decoration> {
         *input = &input[1..];
         return Some(Decoration::Roll);
     }
-    if input.starts_with('H') && !input.chars().nth(1).map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
+    if input.starts_with('H') && !input.chars().nth(1).is_some_and(|c| c.is_ascii_lowercase()) {
         // H not followed by lowercase (which would be a note like Ha - invalid anyway)
         // Actually H alone is fermata, but H followed by uppercase might be note
         // Let's be conservative
-        if input.len() == 1 || !input.chars().nth(1).map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
+        if input.len() == 1 || !input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic()) {
             *input = &input[1..];
             return Some(Decoration::Fermata);
         }
     }
-    if input.starts_with('T') && !input.chars().nth(1).map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
-        if input.len() == 1 || !input.chars().nth(1).map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
+    if input.starts_with('T') && !input.chars().nth(1).is_some_and(|c| c.is_ascii_lowercase())
+        && (input.len() == 1 || !input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic())) {
             *input = &input[1..];
             return Some(Decoration::Trill);
-        }
     }
-    if input.starts_with('u') && !input.chars().nth(1).map(|c| c.is_ascii_alphabetic()).unwrap_or(true) {
+    if input.starts_with('u') && !input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic()) {
         *input = &input[1..];
         return Some(Decoration::UpBow);
     }
-    if input.starts_with('v') && !input.chars().nth(1).map(|c| c.is_ascii_alphabetic()).unwrap_or(true) {
+    if input.starts_with('v') && !input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic()) {
         *input = &input[1..];
         return Some(Decoration::DownBow);
     }

@@ -155,10 +155,8 @@ impl EventDualityServer {
         span.record("cas.hash", &*hash);
 
         let mut tags = request.tags.clone();
-        if !tags.iter().any(|t| t.starts_with("type:")) {
-            if request.mime_type.starts_with("audio/") {
-                tags.push(format!("type:{}", request.mime_type.strip_prefix("audio/").unwrap_or("audio")));
-            }
+        if !tags.iter().any(|t| t.starts_with("type:")) && request.mime_type.starts_with("audio/") {
+            tags.push(format!("type:{}", request.mime_type.strip_prefix("audio/").unwrap_or("audio")));
         }
         tags.push("tool:artifact_upload".to_string());
 

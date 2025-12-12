@@ -59,7 +59,7 @@ impl<'a> IdentityMatcher<'a> {
                     matched_hints: matched,
                 };
 
-                if best.as_ref().map_or(true, |b| score > b.score) {
+                if best.as_ref().is_none_or(|b| score > b.score) {
                     best = Some(result);
                 }
             }

@@ -41,10 +41,9 @@ impl AlsaSource {
     pub fn new() -> Self {
         let seq = Seq::open(None, None, false)
             .ok()
-            .map(|s| {
+            .inspect(|s| {
                 s.set_client_name(&std::ffi::CString::new("audio-graph-mcp").unwrap())
                     .ok();
-                s
             });
 
         Self { seq }

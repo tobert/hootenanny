@@ -111,7 +111,7 @@ async fn run_zmq_server(bind: &str, name: &str, timeout_secs: u64) -> Result<()>
     // Create server config
     let config = ServerConfig {
         bind_address: bind.to_string(),
-        worker_name: name.to_string(),
+        _worker_name: name.to_string(),
     };
 
     // Create shutdown channel
