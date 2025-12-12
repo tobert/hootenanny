@@ -279,6 +279,37 @@ impl Handler for HootHandler {
             // Tool::new("anticipatory_embed", "Extract hidden state embeddings from MIDI")
             //     .with_input_schema(schema_for::<AnticipatoryEmbedRequest>())
             //     .read_only(),
+
+            // Chaosgarden control tools
+            Tool::new("garden_status", "Get chaosgarden connection and transport state")
+                .with_icon("🌱")
+                .with_category("Chaosgarden")
+                .read_only(),
+            Tool::new("garden_play", "Start playback in chaosgarden")
+                .with_icon("▶️")
+                .with_category("Chaosgarden"),
+            Tool::new("garden_pause", "Pause playback in chaosgarden")
+                .with_icon("⏸️")
+                .with_category("Chaosgarden"),
+            Tool::new("garden_stop", "Stop playback in chaosgarden")
+                .with_icon("⏹️")
+                .with_category("Chaosgarden"),
+            Tool::new("garden_seek", "Seek to a beat position in chaosgarden")
+                .with_input_schema(schema_for::<super::tools::garden::GardenSeekRequest>())
+                .with_icon("⏩")
+                .with_category("Chaosgarden"),
+            Tool::new("garden_set_tempo", "Set tempo in BPM in chaosgarden")
+                .with_input_schema(schema_for::<super::tools::garden::GardenSetTempoRequest>())
+                .with_icon("🎚️")
+                .with_category("Chaosgarden"),
+            Tool::new("garden_query", "Execute a Trustfall query on chaosgarden's graph")
+                .with_input_schema(schema_for::<super::tools::garden::GardenQueryRequest>())
+                .with_icon("🔍")
+                .with_category("Chaosgarden")
+                .read_only(),
+            Tool::new("garden_emergency_pause", "Emergency pause (priority channel)")
+                .with_icon("🚨")
+                .with_category("Chaosgarden"),
         ]
     }
 
@@ -562,6 +593,38 @@ impl Handler for HootHandler {
             //         .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
             //     self.server.yue_generate(request).await
             // }
+
+            // Chaosgarden control tools
+            "garden_status" => {
+                self.server.garden_status().await
+            }
+            "garden_play" => {
+                self.server.garden_play().await
+            }
+            "garden_pause" => {
+                self.server.garden_pause().await
+            }
+            "garden_stop" => {
+                self.server.garden_stop().await
+            }
+            "garden_seek" => {
+                let request: super::tools::garden::GardenSeekRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.garden_seek(request).await
+            }
+            "garden_set_tempo" => {
+                let request: super::tools::garden::GardenSetTempoRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.garden_set_tempo(request).await
+            }
+            "garden_query" => {
+                let request: super::tools::garden::GardenQueryRequest = serde_json::from_value(args)
+                    .map_err(|e| ErrorData::invalid_params(e.to_string()))?;
+                self.server.garden_query(request).await
+            }
+            "garden_emergency_pause" => {
+                self.server.garden_emergency_pause().await
+            }
 
             _ => Err(ErrorData::tool_not_found(name)),
         }
