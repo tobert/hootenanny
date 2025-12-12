@@ -82,3 +82,6 @@ pub use protocol::{Handler, Sampler, ToolContext};
 
 // Re-export transport types
 pub use transport::{router, streamable_router, dual_router, McpState};
+
+// Re-export schema helpers
+pub use schema_helpers::schema_for;

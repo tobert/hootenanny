@@ -1,8 +1,7 @@
 use crate::api::responses::{JobStatusResponse, JobListResponse, JobSummary, JobCancelResponse, JobPollResponse, JobSleepResponse, GpuInfo, GpuSparklines};
 use crate::api::service::EventDualityServer;
 use crate::api::schema::{GetJobStatusRequest, CancelJobRequest, PollRequest, SleepRequest};
-use hooteproto::{JobId, JobStatus};
-use baton::{ErrorData as McpError, CallToolResult, Content};
+use hooteproto::{JobId, JobStatus, ToolOutput, ToolResult, ToolError};
 use tracing;
 
 impl EventDualityServer {
@@ -17,15 +16,14 @@ impl EventDualityServer {
     pub async fn get_job_status(
         &self,
         request: GetJobStatusRequest,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> ToolResult {
         let job_id = JobId::from(request.job_id);
 
         let job_info = self.job_store.get_job(&job_id)
-            .map_err(|e| McpError::invalid_params(e.to_string()))?;
+            .map_err(|e| ToolError::invalid_params(e.to_string()))?;
 
         tracing::Span::current().record("job.status", format!("{:?}", job_info.status));
 
-        // Convert to response type with structured content
         let status = match job_info.status {
             JobStatus::Pending => crate::api::responses::JobStatus::Pending,
             JobStatus::Running => crate::api::responses::JobStatus::Running,
@@ -45,11 +43,10 @@ impl EventDualityServer {
             completed_at: job_info.completed_at.map(|t| t as i64),
         };
 
-        let json = serde_json::to_string_pretty(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(
+            format!("Job {}: {:?}", job_info.job_id.as_str(), job_info.status),
+            &response,
+        ))
     }
 
     #[tracing::instrument(
@@ -59,12 +56,11 @@ impl EventDualityServer {
             jobs.count = tracing::field::Empty,
         )
     )]
-    pub async fn list_jobs(&self) -> Result<CallToolResult, McpError> {
+    pub async fn list_jobs(&self) -> ToolResult {
         let jobs = self.job_store.list_jobs();
 
         tracing::Span::current().record("jobs.count", jobs.len());
 
-        // Convert to response type
         let job_summaries: Vec<JobSummary> = jobs.iter().map(|j| {
             let status = match j.status {
                 JobStatus::Pending => crate::api::responses::JobStatus::Pending,
@@ -86,11 +82,10 @@ impl EventDualityServer {
             jobs: job_summaries,
         };
 
-        let json = serde_json::to_string_pretty(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(
+            format!("{} jobs", response.total),
+            &response,
+        ))
     }
 
     #[tracing::instrument(
@@ -103,11 +98,11 @@ impl EventDualityServer {
     pub async fn cancel_job(
         &self,
         request: CancelJobRequest,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> ToolResult {
         let job_id = JobId::from(request.job_id);
 
         self.job_store.cancel_job(&job_id)
-            .map_err(|e| McpError::internal_error(e.to_string()))?;
+            .map_err(|e| ToolError::internal(e.to_string()))?;
 
         let response = JobCancelResponse {
             job_id: job_id.as_str().to_string(),
@@ -115,10 +110,10 @@ impl EventDualityServer {
             message: "Job cancelled successfully".to_string(),
         };
 
-        Ok(CallToolResult::success(vec![Content::text(
-            format!("Job {}: {}", job_id.as_str(), response.message)
-        )])
-        .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(
+            format!("Job {}: {}", job_id.as_str(), response.message),
+            &response,
+        ))
     }
 
     #[tracing::instrument(
@@ -135,23 +130,19 @@ impl EventDualityServer {
     pub async fn poll(
         &self,
         request: PollRequest,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> ToolResult {
         use std::time::{Duration, Instant};
 
-        // Cap timeout at 10 seconds (less than 30s SSE keep-alive to prevent disconnects)
-        // This ensures we return frequently enough to keep SSE connection alive
         let timeout_ms = request.timeout_ms.min(10000);
         let timeout = Duration::from_millis(timeout_ms);
         let mode = request.mode.as_deref().unwrap_or("any");
 
-        // Validate mode
         if mode != "any" && mode != "all" {
-            return Err(McpError::invalid_params(
+            return Err(ToolError::invalid_params(
                 format!("mode must be 'any' or 'all', got '{}'", mode)
             ));
         }
 
-        // Convert job_ids to JobId
         let job_ids: Vec<JobId> = request.job_ids.into_iter()
             .map(JobId::from)
             .collect();
@@ -159,16 +150,11 @@ impl EventDualityServer {
         let start = Instant::now();
         let poll_interval = Duration::from_millis(500);
 
-        // SSE keepalive: Always return within 10s to prevent SSE timeout
-        // Even if jobs aren't complete, we return with current status
-        // Caller can poll() again to continue waiting
-
         loop {
             let mut completed = Vec::new();
             let mut pending = Vec::new();
             let mut failed = Vec::new();
 
-            // Check status of all jobs
             for job_id in &job_ids {
                 match self.job_store.get_job(job_id) {
                     Ok(job_info) => {
@@ -179,7 +165,6 @@ impl EventDualityServer {
                         }
                     }
                     Err(_) => {
-                        // Job not found - treat as failed
                         failed.push(job_id.as_str().to_string());
                     }
                 }
@@ -188,38 +173,29 @@ impl EventDualityServer {
             let elapsed = start.elapsed();
             let elapsed_ms = elapsed.as_millis() as u64;
 
-            // Check completion conditions
             let should_return = if job_ids.is_empty() {
-                // No jobs - just timeout/sleep
                 elapsed >= timeout
             } else if mode == "any" {
-                // Return if ANY job completed or failed
                 !completed.is_empty() || !failed.is_empty()
             } else {
-                // mode == "all" - return if ALL jobs done
                 pending.is_empty()
             };
 
-            // ALWAYS return on timeout to prevent SSE disconnects
-            // Caller should poll again if jobs still pending
             let reason = if should_return && (!completed.is_empty() || !failed.is_empty()) {
                 "job_complete"
             } else if elapsed >= timeout {
                 "timeout"
             } else {
-                // Keep polling
                 tokio::time::sleep(poll_interval).await;
                 continue;
             };
 
-            // Record and return
             tracing::Span::current().record("poll.elapsed_ms", elapsed_ms);
             tracing::Span::current().record("poll.reason", reason);
 
-            // Get GPU stats from observer service (condensed for context efficiency)
             let gpu = match self.gpu_monitor.fetch_status().await {
                 Ok(status) => Some(GpuInfo {
-                    summary: status.summary,  // One-liner with all key info
+                    summary: status.summary,
                     health: status.health,
                     utilization: status.gpu.util_pct as u8,
                     status: status.gpu.status,
@@ -228,7 +204,6 @@ impl EventDualityServer {
                     temp_c: status.gpu.temp_c as u8,
                     power_w: status.gpu.power_w as u16,
                     oom_risk: status.gpu.oom_risk,
-                    // Only include sparklines if there's interesting activity
                     sparklines: if status.sparklines.util.peak > 10.0 {
                         Some(GpuSparklines {
                             util: status.sparklines.util.spark,
@@ -241,7 +216,6 @@ impl EventDualityServer {
                     } else {
                         None
                     },
-                    // Skip per-service breakdown - summary already has "N services XGB"
                     services: None,
                 }),
                 Err(e) => {
@@ -259,11 +233,11 @@ impl EventDualityServer {
                 gpu,
             };
 
-            let json = serde_json::to_string_pretty(&response)
-                .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
-
-            return Ok(CallToolResult::success(vec![Content::text(json)])
-                .with_structured(serde_json::to_value(&response).unwrap()));
+            return Ok(ToolOutput::new(
+                format!("Poll: {} completed, {} failed, {} pending ({})",
+                    response.completed.len(), response.failed.len(), response.pending.len(), reason),
+                &response,
+            ));
         }
     }
 
@@ -277,8 +251,7 @@ impl EventDualityServer {
     pub async fn sleep(
         &self,
         request: SleepRequest,
-    ) -> Result<CallToolResult, McpError> {
-        // Cap at 30 seconds
+    ) -> ToolResult {
         let ms = request.milliseconds.min(30000);
 
         tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
@@ -293,8 +266,6 @@ impl EventDualityServer {
             completed_at,
         };
 
-        let text = format!("Slept for {}ms", ms);
-        Ok(CallToolResult::success(vec![Content::text(text)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(format!("Slept for {}ms", ms), &response))
     }
 }

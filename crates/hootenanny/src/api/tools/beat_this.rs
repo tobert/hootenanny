@@ -3,7 +3,7 @@ use crate::api::schema::{AnalyzeBeatsRequest, BeatThisServiceRequest, BeatThisSe
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::types::{ArtifactId, ContentHash};
-use baton::{CallToolResult, Content, ErrorData as McpError};
+use hooteproto::{ToolOutput, ToolResult, ToolError};
 use base64::{engine::general_purpose, Engine as _};
 
 /// Look up an artifact ID by its content hash
@@ -31,10 +31,9 @@ impl EventDualityServer {
     pub async fn analyze_beats(
         &self,
         request: AnalyzeBeatsRequest,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> ToolResult {
         let span = tracing::Span::current();
 
-        // Track source audio hash for artifact metadata
         let source_audio_hash: Option<String>;
 
         let audio_bytes = match (&request.audio_path, &request.audio_hash) {
@@ -42,11 +41,10 @@ impl EventDualityServer {
                 span.record("audio.source", "file");
                 let bytes = tokio::fs::read(path)
                     .await
-                    .map_err(|e| McpError::internal_error(format!("Failed to read audio file: {}", e)))?;
-                // Store in CAS to get hash for provenance
+                    .map_err(|e| ToolError::internal(format!("Failed to read audio file: {}", e)))?;
                 source_audio_hash = Some(self.local_models.store_cas_content(&bytes, "audio/wav")
                     .await
-                    .map_err(|e| McpError::internal_error(format!("Failed to store audio in CAS: {}", e)))?);
+                    .map_err(|e| ToolError::internal(format!("Failed to store audio in CAS: {}", e)))?);
                 bytes
             }
             (None, Some(hash)) => {
@@ -56,21 +54,21 @@ impl EventDualityServer {
                     .local_models
                     .inspect_cas_content(hash)
                     .await
-                    .map_err(|e| McpError::internal_error(format!("Failed to get audio from CAS: {}", e)))?;
+                    .map_err(|e| ToolError::internal(format!("Failed to get audio from CAS: {}", e)))?;
                 let local_path = cas_ref
                     .local_path
-                    .ok_or_else(|| McpError::internal_error("Audio not found in local CAS"))?;
+                    .ok_or_else(|| ToolError::internal("Audio not found in local CAS"))?;
                 tokio::fs::read(&local_path)
                     .await
-                    .map_err(|e| McpError::internal_error(format!("Failed to read CAS audio: {}", e)))?
+                    .map_err(|e| ToolError::internal(format!("Failed to read CAS audio: {}", e)))?
             }
             (Some(_), Some(_)) => {
-                return Err(McpError::invalid_params(
+                return Err(ToolError::invalid_params(
                     "Provide either audio_path or audio_hash, not both",
                 ));
             }
             (None, None) => {
-                return Err(McpError::invalid_params(
+                return Err(ToolError::invalid_params(
                     "Either audio_path or audio_hash is required",
                 ));
             }
@@ -96,13 +94,13 @@ impl EventDualityServer {
             .await
             .map_err(|e| {
                 if e.is_connect() {
-                    McpError::internal_error(
+                    ToolError::internal(
                         "beat-this service not running. Start with: just start beat-this",
                     )
                 } else if e.is_timeout() {
-                    McpError::internal_error("beat-this request timed out (30s limit)")
+                    ToolError::internal("beat-this request timed out (30s limit)")
                 } else {
-                    McpError::internal_error(format!("beat-this request failed: {}", e))
+                    ToolError::internal(format!("beat-this request failed: {}", e))
                 }
             })?;
 
@@ -110,14 +108,14 @@ impl EventDualityServer {
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
             return Err(match status.as_u16() {
-                422 => McpError::invalid_params(format!(
+                422 => ToolError::invalid_params(format!(
                     "Invalid audio format: {}. Required: 22050 Hz mono WAV, ≤30s",
                     error_text
                 )),
-                429 => McpError::internal_error(
+                429 => ToolError::internal(
                     "beat-this service busy (already processing another request)",
                 ),
-                _ => McpError::internal_error(format!(
+                _ => ToolError::internal(format!(
                     "beat-this error ({}): {}",
                     status, error_text
                 )),
@@ -127,7 +125,7 @@ impl EventDualityServer {
         let service_response: BeatThisServiceResponse = response
             .json()
             .await
-            .map_err(|e| McpError::internal_error(format!("Failed to parse response: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to parse response: {}", e)))?;
 
         span.record("beats.count", service_response.num_beats);
         span.record("beats.bpm", service_response.bpm);
@@ -139,16 +137,14 @@ impl EventDualityServer {
             4
         };
 
-        // Look up source audio artifact ID
         let source_artifact_id = if let Some(ref hash) = source_audio_hash {
             let store = self.artifact_store.read()
-                .map_err(|_| McpError::internal_error("Lock poisoned"))?;
+                .map_err(|_| ToolError::internal("Lock poisoned"))?;
             find_artifact_by_hash(&*store, hash)
         } else {
             None
         };
 
-        // Build analysis results for storage
         let analysis_data = if request.include_frames {
             serde_json::json!({
                 "bpm": service_response.bpm,
@@ -172,14 +168,12 @@ impl EventDualityServer {
             })
         };
 
-        // Store analysis results in CAS as JSON
         let analysis_json = serde_json::to_string(&analysis_data)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize analysis: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to serialize analysis: {}", e)))?;
         let analysis_hash = self.local_models.store_cas_content(analysis_json.as_bytes(), "application/json")
             .await
-            .map_err(|e| McpError::internal_error(format!("Failed to store analysis in CAS: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to store analysis in CAS: {}", e)))?;
 
-        // Create artifact for the beat analysis
         let content_hash = ContentHash::new(&analysis_hash);
         let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
 
@@ -208,20 +202,18 @@ impl EventDualityServer {
             format!("bpm:{}", service_response.bpm.round() as u32),
         ]);
 
-        // Store artifact
         let store = self.artifact_store.write()
-            .map_err(|_| McpError::internal_error("Lock poisoned"))?;
+            .map_err(|_| ToolError::internal("Lock poisoned"))?;
         store.put(artifact)
-            .map_err(|e| McpError::internal_error(format!("Failed to store artifact: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to store artifact: {}", e)))?;
         store.flush()
-            .map_err(|e| McpError::internal_error(format!("Failed to flush artifact store: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to flush artifact store: {}", e)))?;
 
-        // Build response with structured content
         let response = BeatthisAnalyzeResponse {
             beats: service_response.beats.clone(),
             downbeats: service_response.downbeats.clone(),
             estimated_bpm: service_response.bpm,
-            confidence: 0.95, // beat-this doesn't provide confidence, using default
+            confidence: 0.95,
         };
 
         let human_text = format!(
@@ -232,18 +224,17 @@ impl EventDualityServer {
             artifact_id.as_str()
         );
 
-        Ok(CallToolResult::success(vec![Content::text(human_text)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(human_text, &response))
     }
 }
 
-fn validate_wav_format(data: &[u8]) -> Result<(), McpError> {
+fn validate_wav_format(data: &[u8]) -> Result<(), ToolError> {
     if data.len() < 44 {
-        return Err(McpError::invalid_params("File too small to be a valid WAV"));
+        return Err(ToolError::invalid_params("File too small to be a valid WAV"));
     }
 
     if &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
-        return Err(McpError::invalid_params(
+        return Err(ToolError::invalid_params(
             "Not a valid WAV file (missing RIFF/WAVE header)",
         ));
     }
@@ -260,14 +251,14 @@ fn validate_wav_format(data: &[u8]) -> Result<(), McpError> {
 
         if chunk_id == b"fmt " {
             if chunk_size < 16 || offset + 8 + chunk_size > data.len() {
-                return Err(McpError::invalid_params("Invalid fmt chunk"));
+                return Err(ToolError::invalid_params("Invalid fmt chunk"));
             }
 
             let fmt_data = &data[offset + 8..];
 
             let audio_format = u16::from_le_bytes([fmt_data[0], fmt_data[1]]);
             if audio_format != 1 {
-                return Err(McpError::invalid_params(format!(
+                return Err(ToolError::invalid_params(format!(
                     "Unsupported audio format: {}. Only PCM (1) supported",
                     audio_format
                 )));
@@ -275,7 +266,7 @@ fn validate_wav_format(data: &[u8]) -> Result<(), McpError> {
 
             let num_channels = u16::from_le_bytes([fmt_data[2], fmt_data[3]]);
             if num_channels != 1 {
-                return Err(McpError::invalid_params(format!(
+                return Err(ToolError::invalid_params(format!(
                     "Audio must be mono. Found {} channels",
                     num_channels
                 )));
@@ -283,7 +274,7 @@ fn validate_wav_format(data: &[u8]) -> Result<(), McpError> {
 
             let sample_rate = u32::from_le_bytes([fmt_data[4], fmt_data[5], fmt_data[6], fmt_data[7]]);
             if sample_rate != REQUIRED_SAMPLE_RATE {
-                return Err(McpError::invalid_params(format!(
+                return Err(ToolError::invalid_params(format!(
                     "Sample rate must be {} Hz. Found {} Hz",
                     REQUIRED_SAMPLE_RATE, sample_rate
                 )));
@@ -298,5 +289,5 @@ fn validate_wav_format(data: &[u8]) -> Result<(), McpError> {
         }
     }
 
-    Err(McpError::invalid_params("WAV file missing fmt chunk"))
+    Err(ToolError::invalid_params("WAV file missing fmt chunk"))
 }

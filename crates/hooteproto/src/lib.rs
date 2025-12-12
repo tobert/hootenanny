@@ -10,6 +10,14 @@
 //! - `JobStatus` - State machine for job lifecycle
 //! - `JobInfo` - Complete job metadata and results
 //! - `JobStoreStats` - Aggregate statistics
+//!
+//! ## Tool Parameter Types
+//!
+//! The `params` module contains types with JsonSchema derives for MCP schema generation.
+//! Use with `baton::schema_for::<ParamType>()` to generate tool input schemas.
+
+pub mod params;
+pub mod schema_helpers;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -172,6 +180,107 @@ pub struct JobStoreStats {
     pub failed: usize,
     pub cancelled: usize,
 }
+
+// ============================================================================
+// Tool Result Types (used by hootenanny, returned over ZMQ)
+// ============================================================================
+
+/// Successful tool output
+///
+/// Contains both a human-readable text summary and structured data for programmatic use.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolOutput {
+    /// Human-readable summary of what the tool did
+    pub text: String,
+    /// Structured data for programmatic use
+    pub data: serde_json::Value,
+}
+
+impl ToolOutput {
+    /// Create a new tool output with text and structured data
+    pub fn new(text: impl Into<String>, data: impl serde::Serialize) -> Self {
+        Self {
+            text: text.into(),
+            data: serde_json::to_value(data).unwrap_or(serde_json::Value::Null),
+        }
+    }
+
+    /// Create a tool output with only text (no structured data)
+    pub fn text_only(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            data: serde_json::Value::Null,
+        }
+    }
+}
+
+/// Tool execution error
+///
+/// Represents an error that occurred during tool execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolError {
+    /// Error code for programmatic handling
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+    /// Optional additional error details
+    pub details: Option<serde_json::Value>,
+}
+
+impl ToolError {
+    /// Create an invalid parameters error
+    pub fn invalid_params(msg: impl Into<String>) -> Self {
+        Self {
+            code: "invalid_params".into(),
+            message: msg.into(),
+            details: None,
+        }
+    }
+
+    /// Create a tool not found error
+    pub fn not_found(tool: &str) -> Self {
+        Self {
+            code: "tool_not_found".into(),
+            message: format!("Unknown tool: {}", tool),
+            details: None,
+        }
+    }
+
+    /// Create an internal error
+    pub fn internal(msg: impl Into<String>) -> Self {
+        Self {
+            code: "internal_error".into(),
+            message: msg.into(),
+            details: None,
+        }
+    }
+
+    /// Create an error with a custom code
+    pub fn with_code(code: impl Into<String>, msg: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: msg.into(),
+            details: None,
+        }
+    }
+
+    /// Add details to this error
+    pub fn with_details(mut self, details: impl serde::Serialize) -> Self {
+        self.details = serde_json::to_value(details).ok();
+        self
+    }
+}
+
+impl std::fmt::Display for ToolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}] {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for ToolError {}
+
+/// Result type for tool execution
+pub type ToolResult = Result<ToolOutput, ToolError>;
 
 // ============================================================================
 // ZMQ Message Types
@@ -682,6 +791,15 @@ pub enum Broadcast {
         job_id: String,
         state: String,
         result: Option<serde_json::Value>,
+    },
+
+    /// Progress update for long-running operations
+    Progress {
+        job_id: String,
+        /// Progress percentage from 0.0 to 1.0
+        percent: f32,
+        /// Human-readable progress message
+        message: String,
     },
 
     /// New artifact created

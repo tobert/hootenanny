@@ -1,4 +1,4 @@
-use baton::schema_helpers::*;
+use hooteproto::schema_helpers::*;
 use serde::{Deserialize, Serialize};
 use schemars;
 

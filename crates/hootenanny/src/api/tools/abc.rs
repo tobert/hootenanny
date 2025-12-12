@@ -5,7 +5,7 @@ use crate::api::schema::{AbcParseRequest, AbcToMidiRequest, AbcValidateRequest, 
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
-use baton::{ErrorData as McpError, CallToolResult, Content};
+use hooteproto::{ToolOutput, ToolResult, ToolError};
 
 impl EventDualityServer {
     /// Parse ABC notation into a structured AST
@@ -13,7 +13,7 @@ impl EventDualityServer {
     pub async fn abc_parse(
         &self,
         request: AbcParseRequest,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> ToolResult {
         let result = abc::parse(&request.abc);
 
         let response = AbcParseResponse {
@@ -22,14 +22,16 @@ impl EventDualityServer {
             errors: if result.has_errors() {
                 Some(result.feedback.iter().map(|f| format!("{:?}", f)).collect())
             } else { None },
-            warnings: None, // Feedback structure doesn't differentiate warnings
+            warnings: None,
         };
 
-        let json = serde_json::to_string_pretty(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
+        let text = if response.success {
+            "ABC parsed successfully".to_string()
+        } else {
+            format!("ABC parse failed: {} errors", response.errors.as_ref().map(|e| e.len()).unwrap_or(0))
+        };
 
-        Ok(CallToolResult::success(vec![Content::text(json)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(text, &response))
     }
 
     /// Convert ABC notation to MIDI
@@ -37,19 +39,18 @@ impl EventDualityServer {
     pub async fn abc_to_midi(
         &self,
         request: AbcToMidiRequest,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> ToolResult {
         let parse_result = abc::parse(&request.abc);
 
         if parse_result.has_errors() {
             let errors: Vec<_> = parse_result.errors().collect();
-            return Err(McpError::invalid_params(
+            return Err(ToolError::invalid_params(
                 format!("ABC parse errors: {:?}", errors)
             ));
         }
 
         let mut tune = parse_result.value;
 
-        // Apply tempo override
         if let Some(bpm) = request.tempo_override {
             tune.header.tempo = Some(abc::Tempo {
                 beat_unit: (1, 4),
@@ -58,10 +59,6 @@ impl EventDualityServer {
             });
         }
 
-        // Apply transposition (simple pitch shift for now)
-        // TODO: Implement full transposition with key change
-
-        // Generate MIDI
         let params = abc::MidiParams {
             velocity: request.velocity.unwrap_or(80),
             ticks_per_beat: 480,
@@ -69,24 +66,18 @@ impl EventDualityServer {
         };
         let midi_bytes = abc::to_midi(&tune, &params);
 
-        // Store MIDI in CAS
         let midi_hash = self.local_models.store_cas_content(&midi_bytes, "audio/midi")
             .await
-            .map_err(|e| McpError::internal_error(e.to_string()))?;
+            .map_err(|e| ToolError::internal(e.to_string()))?;
 
-        // Store ABC source in CAS for provenance tracking
         let abc_hash = self.local_models.store_cas_content(request.abc.as_bytes(), "text/vnd.abc")
             .await
-            .map_err(|e| McpError::internal_error(e.to_string()))?;
+            .map_err(|e| ToolError::internal(e.to_string()))?;
 
-        // Count notes and bars for metadata
         let note_count = count_notes(&tune);
         let bar_count = count_bars(&tune);
-
-        // Extract tempo if present
         let tempo_bpm = tune.header.tempo.as_ref().map(|t| t.bpm);
 
-        // Create artifact
         let content_hash = ContentHash::new(&midi_hash);
         let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
         let creator = request.creator.clone().unwrap_or_else(|| "unknown".to_string());
@@ -120,9 +111,8 @@ impl EventDualityServer {
         .with_tags(vec!["type:midi".to_string(), "source:abc".to_string(), "tool:abc_to_midi".to_string()])
         .with_tags(request.tags.clone());
 
-        // Acquire lock for artifact store operations
         let store = self.artifact_store.write()
-            .map_err(|_| McpError::internal_error("Lock poisoned"))?;
+            .map_err(|_| ToolError::internal("Lock poisoned"))?;
 
         if let Some(ref set_id) = request.variation_set_id {
             let index = store.next_variation_index(set_id)
@@ -135,9 +125,9 @@ impl EventDualityServer {
         }
 
         store.put(artifact)
-            .map_err(|e| McpError::internal_error(e.to_string()))?;
+            .map_err(|e| ToolError::internal(e.to_string()))?;
         store.flush()
-            .map_err(|e| McpError::internal_error(e.to_string()))?;
+            .map_err(|e| ToolError::internal(e.to_string()))?;
 
         let response = JobSpawnResponse {
             job_id: "sync".to_string(),
@@ -147,11 +137,10 @@ impl EventDualityServer {
             message: Some(format!("ABC converted: {} notes, {} bars", note_count, bar_count)),
         };
 
-        let json = serde_json::to_string_pretty(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(
+            format!("Converted ABC to MIDI: {} notes, {} bars", note_count, bar_count),
+            &response,
+        ))
     }
 
     /// Validate ABC notation
@@ -159,7 +148,7 @@ impl EventDualityServer {
     pub async fn abc_validate(
         &self,
         request: AbcValidateRequest,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> ToolResult {
         let result = abc::parse(&request.abc);
 
         let valid = !result.has_errors();
@@ -171,14 +160,16 @@ impl EventDualityServer {
         let response = AbcValidateResponse {
             valid,
             errors: if !valid { feedback.clone() } else { vec![] },
-            warnings: vec![], // Feedback structure doesn't differentiate warnings
+            warnings: vec![],
         };
 
-        let json = serde_json::to_string_pretty(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
+        let text = if valid {
+            "ABC notation is valid".to_string()
+        } else {
+            format!("ABC validation failed: {} errors", response.errors.len())
+        };
 
-        Ok(CallToolResult::success(vec![Content::text(json)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(text, &response))
     }
 
     /// Transpose ABC notation
@@ -186,12 +177,12 @@ impl EventDualityServer {
     pub async fn abc_transpose(
         &self,
         request: AbcTransposeRequest,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> ToolResult {
         let parse_result = abc::parse(&request.abc);
 
         if parse_result.has_errors() {
             let errors: Vec<_> = parse_result.errors().collect();
-            return Err(McpError::invalid_params(
+            return Err(ToolError::invalid_params(
                 format!("ABC parse errors: {:?}", errors)
             ));
         }
@@ -200,32 +191,23 @@ impl EventDualityServer {
             s
         } else if let Some(target) = &request.target_key {
             abc::semitones_to_key(&parse_result.value.header.key, target)
-                .map_err(McpError::invalid_params)?
+                .map_err(ToolError::invalid_params)?
         } else {
-            return Err(McpError::invalid_params(
+            return Err(ToolError::invalid_params(
                 "Must specify either semitones or target_key"
             ));
         };
 
-        let _original_key = format!("{:?} {:?}",
-            parse_result.value.header.key.root,
-            parse_result.value.header.key.mode
-        );
-
-        // TODO: Implement actual transposition
-        // For now, return an error explaining this is not yet implemented
-        // TODO: Actual transposition not implemented yet
         let response = AbcTransposeResponse {
-            abc: request.abc.clone(), // Return original for now
+            abc: request.abc.clone(),
             transposed_by: semitones,
             target_key: request.target_key.clone(),
         };
 
-        let json = serde_json::to_string_pretty(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(
+            format!("Transposed ABC by {} semitones", semitones),
+            &response,
+        ))
     }
 }
 

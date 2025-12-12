@@ -8,43 +8,31 @@
 use crate::api::responses::GraphQueryResponse;
 use crate::api::schema::GraphQueryRequest;
 use crate::api::service::EventDualityServer;
-use baton::{CallToolResult, Content, ErrorData as McpError};
+use hooteproto::{ToolOutput, ToolResult, ToolError};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use trustfall::{execute_query, FieldValue};
 
 impl EventDualityServer {
-    /// Execute a raw Trustfall query against the audio graph
-    ///
-    /// Allows agents to run complex graph queries with full Trustfall power.
-    /// Returns JSON-formatted results.
-    ///
-    /// Available entry points:
-    /// - Identity(id: String, name: String) - Audio device identities
-    /// - PipeWireNode(media_class: String) - Live PipeWire nodes
     #[tracing::instrument(name = "mcp.tool.graph_query", skip(self, request))]
     pub async fn graph_query(
         &self,
         request: GraphQueryRequest,
-    ) -> Result<CallToolResult, McpError> {
-        // Convert JSON variables to Trustfall format
+    ) -> ToolResult {
         let variables = json_to_variables(&request.variables)
-            .map_err(|e| McpError::invalid_params(format!("Invalid variables: {}", e)))?;
+            .map_err(|e| ToolError::invalid_params(format!("Invalid variables: {}", e)))?;
 
-        // Execute the query through the Trustfall adapter
         let schema = self.graph_adapter.schema();
         let adapter_arc: Arc<_> = Arc::clone(&self.graph_adapter);
         let results_iter = execute_query(schema, adapter_arc, &request.query, variables)
-            .map_err(|e| McpError::invalid_params(format!("Query execution failed: {}", e)))?;
+            .map_err(|e| ToolError::invalid_params(format!("Query execution failed: {}", e)))?;
 
-        // Collect results (respecting limit)
         let limit = request.limit.unwrap_or(100);
         let results: Vec<_> = results_iter
             .take(limit)
             .map(result_to_json)
             .collect();
 
-        // Build response
         let count = results.len();
         let response = GraphQueryResponse {
             results,
@@ -52,21 +40,12 @@ impl EventDualityServer {
         };
 
         let json = serde_json::to_string_pretty(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to serialize: {}", e)))?;
 
-        Ok(CallToolResult::success(vec![Content::text(json)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(json, &response))
     }
 }
 
-// ============================================================================
-// Conversion Helpers: JSON ↔ Trustfall FieldValue
-// ============================================================================
-
-/// Convert a single JSON value to Trustfall FieldValue
-///
-/// # Errors
-/// Returns error if JSON type is not supported (e.g., objects)
 fn json_to_field_value(value: &serde_json::Value) -> Result<FieldValue, String> {
     match value {
         serde_json::Value::Null => Ok(FieldValue::Null),
@@ -93,10 +72,6 @@ fn json_to_field_value(value: &serde_json::Value) -> Result<FieldValue, String> 
     }
 }
 
-/// Convert JSON object to Trustfall variables map
-///
-/// # Errors
-/// Returns error if variables are not an object or contain unsupported types
 fn json_to_variables(
     json: &serde_json::Value,
 ) -> Result<BTreeMap<Arc<str>, FieldValue>, String> {
@@ -115,7 +90,6 @@ fn json_to_variables(
     }
 }
 
-/// Convert Trustfall FieldValue to JSON
 fn field_value_to_json(value: &FieldValue) -> serde_json::Value {
     match value {
         FieldValue::Null => serde_json::Value::Null,
@@ -128,12 +102,10 @@ fn field_value_to_json(value: &FieldValue) -> serde_json::Value {
             let arr: Vec<_> = items.iter().map(field_value_to_json).collect();
             serde_json::Value::Array(arr)
         }
-        // DateTimeUtc, Enum, etc. - convert to strings
         _ => serde_json::Value::String(format!("{:?}", value)),
     }
 }
 
-/// Convert a Trustfall query result row to JSON object
 fn result_to_json(result: BTreeMap<Arc<str>, FieldValue>) -> serde_json::Value {
     let mut map = serde_json::Map::new();
     for (key, value) in result {
@@ -148,27 +120,22 @@ mod tests {
 
     #[test]
     fn test_json_to_field_value_primitives() {
-        // Null
         assert!(matches!(
             json_to_field_value(&serde_json::Value::Null),
             Ok(FieldValue::Null)
         ));
 
-        // Boolean
         assert!(matches!(
             json_to_field_value(&serde_json::json!(true)),
             Ok(FieldValue::Boolean(true))
         ));
 
-        // Integer
         let result = json_to_field_value(&serde_json::json!(42)).unwrap();
         assert!(matches!(result, FieldValue::Int64(42)));
 
-        // Float
         let result = json_to_field_value(&serde_json::json!(3.14)).unwrap();
         assert!(matches!(result, FieldValue::Float64(f) if (f - 3.14).abs() < 0.001));
 
-        // String
         let result = json_to_field_value(&serde_json::json!("hello")).unwrap();
         assert!(matches!(result, FieldValue::String(s) if s.as_ref() == "hello"));
     }
@@ -263,17 +230,14 @@ mod tests {
             "array": [1, 2, 3]
         });
 
-        // Convert to variables
         let variables = json_to_variables(&original).unwrap();
 
-        // Convert back to JSON
         let mut roundtrip = serde_json::Map::new();
         for (key, value) in variables {
             roundtrip.insert(key.to_string(), field_value_to_json(&value));
         }
         let roundtrip_json = serde_json::Value::Object(roundtrip);
 
-        // Compare (note: floating point comparison may not be exact)
         assert_eq!(roundtrip_json["string"], original["string"]);
         assert_eq!(roundtrip_json["number"], original["number"]);
         assert_eq!(roundtrip_json["bool"], original["bool"]);

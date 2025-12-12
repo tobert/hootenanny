@@ -184,8 +184,6 @@ MCP/baton removed from hootenanny main.rs and public API:
 5. ✅ Created `api/dispatch.rs` for ZMQ tool dispatch
 6. ✅ Cleaned up unused imports
 
-**Note**: baton is still a dependency because `EventDualityServer` methods return `baton::CallToolResult`. The `dispatch.rs` module bridges this by converting to/from JSON. A future refactor could replace these return types with custom types to fully remove baton.
-
 ### Architecture After Removal
 
 ```
@@ -200,3 +198,9 @@ hootenanny (ZMQ backend)
 ```
 
 Hootenanny is now a pure ZMQ backend service. MCP clients connect through holler.
+
+### Remaining: baton Type Dependency
+
+**Note**: baton is still a dependency because `EventDualityServer` methods return `baton::CallToolResult`. The `dispatch.rs` module bridges this by converting to/from JSON.
+
+**Next phase**: See [baton-decoupling.md](./baton-decoupling.md) for the plan to fully remove baton from hootenanny by moving result types to hooteproto.

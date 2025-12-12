@@ -2,7 +2,7 @@ use crate::api::schema::ClapAnalyzeRequest;
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::types::{ArtifactId, ContentHash};
-use baton::{ErrorData as McpError, CallToolResult, Content};
+use hooteproto::{ToolOutput, ToolResult, ToolError};
 use tracing;
 
 impl EventDualityServer {
@@ -17,38 +17,34 @@ impl EventDualityServer {
     pub async fn clap_analyze(
         &self,
         request: ClapAnalyzeRequest,
-    ) -> Result<CallToolResult, McpError> {
-        // Fetch audio from CAS
+    ) -> ToolResult {
         let cas_ref = self.local_models.inspect_cas_content(&request.audio_hash).await
-            .map_err(|e| McpError::internal_error(format!("Failed to inspect CAS: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to inspect CAS: {}", e)))?;
 
         let audio_path = cas_ref.local_path
-            .ok_or_else(|| McpError::internal_error("Audio not found in local CAS"))?;
+            .ok_or_else(|| ToolError::internal("Audio not found in local CAS"))?;
 
         let audio_bytes = tokio::fs::read(&audio_path).await
-            .map_err(|e| McpError::internal_error(format!("Failed to read audio: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to read audio: {}", e)))?;
 
-        // Base64 encode audio for API
         use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
         let audio_b64 = BASE64.encode(&audio_bytes);
 
-        // Optional: second audio for similarity
         let audio_b_b64 = if let Some(hash_b) = &request.audio_b_hash {
             let cas_ref_b = self.local_models.inspect_cas_content(hash_b).await
-                .map_err(|e| McpError::internal_error(format!("Failed to inspect audio_b CAS: {}", e)))?;
+                .map_err(|e| ToolError::internal(format!("Failed to inspect audio_b CAS: {}", e)))?;
 
             let audio_b_path = cas_ref_b.local_path
-                .ok_or_else(|| McpError::internal_error("Audio B not found in local CAS"))?;
+                .ok_or_else(|| ToolError::internal("Audio B not found in local CAS"))?;
 
             let audio_b_bytes = tokio::fs::read(&audio_b_path).await
-                .map_err(|e| McpError::internal_error(format!("Failed to read audio B: {}", e)))?;
+                .map_err(|e| ToolError::internal(format!("Failed to read audio B: {}", e)))?;
 
             Some(BASE64.encode(&audio_b_bytes))
         } else {
             None
         };
 
-        // Call CLAP service
         let text_candidates = if request.text_candidates.is_empty() {
             None
         } else {
@@ -60,18 +56,16 @@ impl EventDualityServer {
             request.tasks.clone(),
             audio_b_b64,
             text_candidates,
-            None, // client_job_id
+            None,
         ).await
-        .map_err(|e| McpError::internal_error(format!("CLAP analysis failed: {}", e)))?;
+        .map_err(|e| ToolError::internal(format!("CLAP analysis failed: {}", e)))?;
 
-        // Store analysis as JSON artifact
         let analysis_json = serde_json::to_vec(&analysis_result)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize analysis: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to serialize analysis: {}", e)))?;
 
         let analysis_hash = self.local_models.store_cas_content(&analysis_json, "application/json").await
-            .map_err(|e| McpError::internal_error(format!("Failed to store analysis in CAS: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to store analysis in CAS: {}", e)))?;
 
-        // Create artifact
         let content_hash = ContentHash::new(&analysis_hash);
         let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
 
@@ -87,22 +81,19 @@ impl EventDualityServer {
             })
         ).with_tags(vec!["type:analysis", "source:clap", "tool:clap_analyze"]);
 
-        // Set parent if specified
         if let Some(parent_id) = request.parent_id {
             artifact = artifact.with_parent(ArtifactId::new(parent_id));
         }
 
-        // Persist artifact
         {
             let store = self.artifact_store.write()
-                .map_err(|e| McpError::internal_error(format!("Failed to acquire artifact store lock: {}", e)))?;
+                .map_err(|_| ToolError::internal("Failed to acquire artifact store lock"))?;
             store.put(artifact)
-                .map_err(|e| McpError::internal_error(format!("Failed to store artifact: {}", e)))?;
+                .map_err(|e| ToolError::internal(format!("Failed to store artifact: {}", e)))?;
             store.flush()
-                .map_err(|e| McpError::internal_error(format!("Failed to flush artifact store: {}", e)))?;
+                .map_err(|e| ToolError::internal(format!("Failed to flush artifact store: {}", e)))?;
         }
 
-        // Build response summary
         let mut summary_parts = vec![];
         if analysis_result.get("embeddings").is_some() {
             summary_parts.push("embeddings".to_string());
@@ -136,7 +127,6 @@ impl EventDualityServer {
             "summary": summary,
         });
 
-        Ok(CallToolResult::success(vec![Content::text(summary)])
-            .with_structured(response_body))
+        Ok(ToolOutput::new(summary, response_body))
     }
 }

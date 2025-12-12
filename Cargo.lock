@@ -1603,7 +1603,6 @@ dependencies = [
  "audio-graph-mcp",
  "axum 0.8.7",
  "base64",
- "baton",
  "bincode",
  "blake3",
  "bytes",
@@ -1646,6 +1645,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "pretty_assertions",
+ "schemars",
  "serde",
  "serde_json",
  "uuid",

@@ -4,8 +4,7 @@ use crate::api::schema::{CasStoreRequest, CasInspectRequest, UploadFileRequest, 
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::mcp_tools::rustysynth::{render_midi_to_wav, inspect_soundfont, inspect_preset};
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
-use baton::{ErrorData as McpError, CallToolResult, Content};
-use baton::protocol::ProgressSender;
+use hooteproto::{ToolOutput, ToolResult, ToolError};
 use base64::{Engine as _, engine::general_purpose};
 use tracing;
 use std::sync::Arc;
@@ -30,13 +29,13 @@ impl EventDualityServer {
     pub async fn cas_store(
         &self,
         request: CasStoreRequest,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> ToolResult {
         let decoded_content = general_purpose::STANDARD.decode(&request.content_base64)
-            .map_err(|e| McpError::parse_error(format!("Failed to base64 decode content: {}", e)))?;
+            .map_err(|e| ToolError::invalid_params(format!("Failed to base64 decode content: {}", e)))?;
 
         let hash = self.local_models.store_cas_content(&decoded_content, &request.mime_type)
             .await
-            .map_err(|e| McpError::internal_error(format!("Failed to store content in CAS: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to store content in CAS: {}", e)))?;
 
         tracing::Span::current().record("cas.hash", &hash);
 
@@ -46,8 +45,10 @@ impl EventDualityServer {
             mime_type: request.mime_type.clone(),
         };
 
-        Ok(CallToolResult::success(vec![Content::text(format!("Stored {} bytes as {}", response.size_bytes, hash))])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(
+            format!("Stored {} bytes as {}", response.size_bytes, hash),
+            &response,
+        ))
     }
 
     #[tracing::instrument(
@@ -62,10 +63,10 @@ impl EventDualityServer {
     pub async fn cas_inspect(
         &self,
         request: CasInspectRequest,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> ToolResult {
         let cas_ref = self.local_models.inspect_cas_content(&request.hash)
             .await
-            .map_err(|e| McpError::internal_error(format!("Failed to inspect CAS: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to inspect CAS: {}", e)))?;
 
         let span = tracing::Span::current();
         span.record("cas.mime_type", &*cas_ref.mime_type);
@@ -79,11 +80,10 @@ impl EventDualityServer {
             local_path: cas_ref.local_path.clone(),
         };
 
-        let json = serde_json::to_string_pretty(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(
+            format!("CAS content: {} ({} bytes, {})", response.hash, response.size_bytes, response.mime_type),
+            &response,
+        ))
     }
 
     #[tracing::instrument(
@@ -99,19 +99,17 @@ impl EventDualityServer {
     pub async fn upload_file(
         &self,
         request: UploadFileRequest,
-    ) -> Result<CallToolResult, McpError> {
-        // Read file from disk
+    ) -> ToolResult {
         let file_bytes = tokio::fs::read(&request.file_path)
             .await
-            .map_err(|e| McpError::internal_error(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to read file: {}", e)))?;
 
         let span = tracing::Span::current();
         span.record("file.size", file_bytes.len());
 
-        // Store in CAS
         let hash = self.local_models.store_cas_content(&file_bytes, &request.mime_type)
             .await
-            .map_err(|e| McpError::internal_error(format!("Failed to store file in CAS: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to store file in CAS: {}", e)))?;
 
         span.record("cas.hash", &*hash);
 
@@ -122,11 +120,10 @@ impl EventDualityServer {
             source_path: request.file_path.clone(),
         };
 
-        let json = serde_json::to_string_pretty(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(
+            format!("Uploaded {} ({} bytes) as {}", request.file_path, response.size_bytes, hash),
+            &response,
+        ))
     }
 
     #[tracing::instrument(
@@ -143,26 +140,22 @@ impl EventDualityServer {
     pub async fn artifact_upload(
         &self,
         request: ArtifactUploadRequest,
-    ) -> Result<CallToolResult, McpError> {
-        // Read file from disk
+    ) -> ToolResult {
         let file_bytes = tokio::fs::read(&request.file_path)
             .await
-            .map_err(|e| McpError::internal_error(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to read file: {}", e)))?;
 
         let span = tracing::Span::current();
         span.record("file.size", file_bytes.len());
 
-        // Store in CAS
         let hash = self.local_models.store_cas_content(&file_bytes, &request.mime_type)
             .await
-            .map_err(|e| McpError::internal_error(format!("Failed to store file in CAS: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to store file in CAS: {}", e)))?;
 
         span.record("cas.hash", &*hash);
 
-        // Create artifact
         let mut tags = request.tags.clone();
         if !tags.iter().any(|t| t.starts_with("type:")) {
-            // Infer type tag from MIME type
             if request.mime_type.starts_with("audio/") {
                 tags.push(format!("type:{}", request.mime_type.strip_prefix("audio/").unwrap_or("audio")));
             }
@@ -188,7 +181,7 @@ impl EventDualityServer {
             metadata,
         ).with_tags(tags);
 
-        let store = self.artifact_store.write().map_err(|_| McpError::internal_error("Lock poisoned"))?;
+        let store = self.artifact_store.write().map_err(|_| ToolError::internal("Lock poisoned"))?;
         if let Some(set_id) = request.variation_set_id {
             let next_idx = store.next_variation_index(&set_id).unwrap_or(0);
             artifact = artifact.with_variation_set(VariationSetId::new(set_id), next_idx);
@@ -196,8 +189,8 @@ impl EventDualityServer {
         if let Some(parent_id) = request.parent_id {
             artifact = artifact.with_parent(ArtifactId::new(parent_id));
         }
-        store.put(artifact).map_err(|e| McpError::internal_error(format!("Failed to store artifact: {}", e)))?;
-        store.flush().map_err(|e| McpError::internal_error(format!("Failed to flush artifact store: {}", e)))?;
+        store.put(artifact).map_err(|e| ToolError::internal(format!("Failed to store artifact: {}", e)))?;
+        store.flush().map_err(|e| ToolError::internal(format!("Failed to flush artifact store: {}", e)))?;
 
         let response = ArtifactUploadResponse {
             artifact_id: artifact_id.as_str().to_string(),
@@ -207,11 +200,10 @@ impl EventDualityServer {
             source_path: request.file_path.clone(),
         };
 
-        let json = serde_json::to_string_pretty(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
-
-        Ok(CallToolResult::success(vec![Content::text(json)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(
+            format!("Created artifact {} from {}", response.artifact_id, request.file_path),
+            &response,
+        ))
     }
 
     #[tracing::instrument(
@@ -227,53 +219,43 @@ impl EventDualityServer {
     pub async fn midi_to_wav(
         &self,
         request: MidiToWavRequest,
-    ) -> Result<CallToolResult, McpError> {
-        // Create job
+    ) -> ToolResult {
         let job_id = self.job_store.create_job("convert_midi_to_wav".to_string());
         tracing::Span::current().record("job.id", job_id.as_str());
 
-        // Clone everything needed for the background task
         let local_models = Arc::clone(&self.local_models);
         let artifact_store = Arc::clone(&self.artifact_store);
         let job_store = self.job_store.clone();
         let job_id_clone = job_id.clone();
 
-        // Spawn background task
         let handle = tokio::spawn(async move {
             let _ = job_store.mark_running(&job_id_clone);
 
             let result: anyhow::Result<MidiToWavResponse> = (async {
                 let sample_rate = request.sample_rate.unwrap_or(44100);
 
-                // Fetch MIDI bytes from CAS
                 let midi_ref = local_models.inspect_cas_content(&request.input_hash).await?;
                 let midi_path = midi_ref.local_path.ok_or_else(|| anyhow::anyhow!("MIDI not found in local CAS"))?;
                 let midi_bytes = tokio::fs::read(&midi_path).await?;
 
-                // Fetch SoundFont bytes from CAS
                 let sf_ref = local_models.inspect_cas_content(&request.soundfont_hash).await?;
                 let sf_path = sf_ref.local_path.ok_or_else(|| anyhow::anyhow!("SoundFont not found in local CAS"))?;
                 let sf_bytes = tokio::fs::read(&sf_path).await?;
 
-                // Get SoundFont name for metadata
                 let soundfont_name = inspect_soundfont(&sf_bytes, false).map(|info| info.info.name).ok();
 
-                // Render MIDI to WAV
                 let wav_bytes = render_midi_to_wav(&midi_bytes, &sf_bytes, sample_rate)?;
 
                 let wav_size = wav_bytes.len();
                 let duration_secs = crate::mcp_tools::rustysynth::calculate_wav_duration(&wav_bytes, sample_rate);
 
-                // Store WAV in CAS
                 let wav_hash = local_models.store_cas_content(&wav_bytes, "audio/wav").await?;
 
-                // Look up source artifact IDs
                 let store = artifact_store.read().map_err(|_| anyhow::anyhow!("Lock poisoned"))?;
                 let midi_artifact_id = find_artifact_by_hash(&*store, &request.input_hash);
                 let soundfont_artifact_id = find_artifact_by_hash(&*store, &request.soundfont_hash);
                 drop(store);
 
-                // Create artifact
                 let mut tags = request.tags.clone();
                 tags.push("type:audio".to_string());
                 tags.push("format:wav".to_string());
@@ -336,8 +318,10 @@ impl EventDualityServer {
             message: Some("MIDI to WAV conversion started.".to_string()),
         };
 
-        Ok(CallToolResult::success(vec![Content::text(format!("Started job: {}", job_id.as_str()))])
-            .with_structured(serde_json::to_value(response).unwrap()))
+        Ok(ToolOutput::new(
+            format!("Started job: {}", job_id.as_str()),
+            &response,
+        ))
     }
 
     #[tracing::instrument(
@@ -352,26 +336,23 @@ impl EventDualityServer {
     pub async fn soundfont_inspect(
         &self,
         request: SoundfontInspectRequest,
-    ) -> Result<CallToolResult, McpError> {
-        // Fetch SoundFont bytes from CAS
+    ) -> ToolResult {
         let sf_ref = self.local_models.inspect_cas_content(&request.soundfont_hash)
             .await
-            .map_err(|e| McpError::internal_error(format!("Failed to get SoundFont from CAS: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to get SoundFont from CAS: {}", e)))?;
         let sf_path = sf_ref.local_path
-            .ok_or_else(|| McpError::internal_error("SoundFont not found in local CAS"))?;
+            .ok_or_else(|| ToolError::internal("SoundFont not found in local CAS"))?;
         let sf_bytes = tokio::fs::read(&sf_path)
             .await
-            .map_err(|e| McpError::internal_error(format!("Failed to read SoundFont file: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to read SoundFont file: {}", e)))?;
 
-        // Inspect the SoundFont
         let inspection = inspect_soundfont(&sf_bytes, request.include_drum_map)
-            .map_err(|e| McpError::internal_error(format!("Failed to inspect SoundFont: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to inspect SoundFont: {}", e)))?;
 
         let span = tracing::Span::current();
         span.record("soundfont.name", &*inspection.info.name);
         span.record("soundfont.preset_count", inspection.info.preset_count);
 
-        // Convert to response type
         let response = SoundfontInspectResponse {
             soundfont_hash: request.soundfont_hash.clone(),
             presets: inspection.presets.iter().map(|p| PresetInfo {
@@ -389,8 +370,7 @@ impl EventDualityServer {
             if response.has_drum_presets { "includes drums" } else { "melodic only" }
         );
 
-        Ok(CallToolResult::success(vec![Content::text(human_text)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(human_text, &response))
     }
 
     #[tracing::instrument(
@@ -405,28 +385,27 @@ impl EventDualityServer {
     pub async fn soundfont_preset_inspect(
         &self,
         request: SoundfontPresetInspectRequest,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> ToolResult {
         let sf_ref = self.local_models.inspect_cas_content(&request.soundfont_hash)
             .await
-            .map_err(|e| McpError::internal_error(format!("Failed to get SoundFont from CAS: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to get SoundFont from CAS: {}", e)))?;
         let sf_path = sf_ref.local_path
-            .ok_or_else(|| McpError::internal_error("SoundFont not found in local CAS"))?;
+            .ok_or_else(|| ToolError::internal("SoundFont not found in local CAS"))?;
         let sf_bytes = tokio::fs::read(&sf_path)
             .await
-            .map_err(|e| McpError::internal_error(format!("Failed to read SoundFont file: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to read SoundFont file: {}", e)))?;
 
         let inspection = inspect_preset(&sf_bytes, request.bank, request.program)
-            .map_err(|e| McpError::internal_error(format!("Failed to inspect preset: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to inspect preset: {}", e)))?;
 
-        // Convert to response type
         let response = SoundfontPresetResponse {
             soundfont_hash: request.soundfont_hash.clone(),
             bank: inspection.bank,
             program: inspection.program,
             preset_name: inspection.name.clone(),
             instruments: inspection.regions.iter().map(|region| InstrumentInfo {
-                name: region.keys.clone(), // Using key range as name since regions don't have names
-                key_range: None, // Regions don't expose key_range in the current structure
+                name: region.keys.clone(),
+                key_range: None,
                 velocity_range: None,
             }).collect(),
         };
@@ -439,17 +418,6 @@ impl EventDualityServer {
             inspection.regions.len()
         );
 
-        Ok(CallToolResult::success(vec![Content::text(human_text)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
-    }
-
-    /// MIDI to WAV conversion with progress notifications
-    pub async fn midi_to_wav_with_progress(
-        &self,
-        request: MidiToWavRequest,
-        _progress: Option<ProgressSender>,
-    ) -> Result<CallToolResult, McpError> {
-        // TODO: Add progress notifications for conversion stages
-        self.midi_to_wav(request).await
+        Ok(ToolOutput::new(human_text, &response))
     }
 }

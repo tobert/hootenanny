@@ -3,7 +3,7 @@ use crate::api::schema::YueGenerateRequest;
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
-use baton::{ErrorData as McpError, CallToolResult, Content};
+use hooteproto::{ToolOutput, ToolResult};
 use std::sync::Arc;
 use tracing;
 
@@ -20,12 +20,10 @@ impl EventDualityServer {
     pub async fn yue_generate(
         &self,
         request: YueGenerateRequest,
-    ) -> Result<CallToolResult, McpError> {
-        // Create job
+    ) -> ToolResult {
         let job_id = self.job_store.create_job("yue_generate".to_string());
         tracing::Span::current().record("job.id", job_id.as_str());
 
-        // Clone dependencies and request data for background task
         let local_models = Arc::clone(&self.local_models);
         let artifact_store = Arc::clone(&self.artifact_store);
         let job_store = self.job_store.clone();
@@ -39,13 +37,10 @@ impl EventDualityServer {
         let variation_set_id = request.variation_set_id.clone();
         let parent_id = request.parent_id.clone();
 
-        // Spawn background task
         let handle = tokio::spawn(async move {
-            // Mark as running
             let _ = job_store.mark_running(&job_id_clone);
 
             let result: anyhow::Result<JobSpawnResponse> = (async {
-                // Call YuE service
                 let response = local_models.run_yue_generate(
                     lyrics,
                     genre.unwrap_or_else(|| "Pop".to_string()),
@@ -55,22 +50,18 @@ impl EventDualityServer {
                     Some(job_id_clone.as_str().to_string()),
                 ).await?;
 
-                // Check for errors in response
                 if let Some(error) = response.get("error") {
                     let error_msg = error.as_str().unwrap_or("Unknown error");
                     return Err(anyhow::anyhow!("YuE generation failed: {}", error_msg));
                 }
 
-                // Extract audio from response
                 let audio_b64 = response.get("audio_base64")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow::anyhow!("No audio_base64 in YuE response"))?;
 
-                // Decode base64 audio
                 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
                 let audio_bytes = BASE64.decode(audio_b64)?;
 
-                // Determine MIME type from format
                 let format = response.get("format")
                     .and_then(|v| v.as_str())
                     .unwrap_or("wav");
@@ -80,10 +71,8 @@ impl EventDualityServer {
                     _ => "audio/wav",
                 };
 
-                // Store in CAS
                 let audio_hash = local_models.store_cas_content(&audio_bytes, mime_type).await?;
 
-                // Create artifact
                 let content_hash = ContentHash::new(&audio_hash);
                 let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
 
@@ -119,7 +108,6 @@ impl EventDualityServer {
                     "has:vocals",
                 ]);
 
-                // Add to variation set if specified
                 if let Some(set_id) = variation_set_id {
                     let next_idx = {
                         let store = artifact_store.write()
@@ -129,12 +117,10 @@ impl EventDualityServer {
                     artifact = artifact.with_variation_set(VariationSetId::new(set_id), next_idx);
                 }
 
-                // Set parent if specified
                 if let Some(parent_id) = parent_id {
                     artifact = artifact.with_parent(ArtifactId::new(parent_id));
                 }
 
-                // Persist artifact
                 {
                     let store = artifact_store.write()
                         .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
@@ -151,7 +137,6 @@ impl EventDualityServer {
                 })
             }).await;
 
-            // Mark job complete or failed
             match result {
                 Ok(response) => {
                     let _ = job_store.mark_complete(&job_id_clone, serde_json::to_value(response).unwrap());
@@ -163,10 +148,8 @@ impl EventDualityServer {
             }
         });
 
-        // Store handle for cancellation
         self.job_store.store_handle(&job_id, handle);
 
-        // Return immediate response
         let response = JobSpawnResponse {
             job_id: job_id.as_str().to_string(),
             status: JobStatus::Pending,
@@ -175,7 +158,6 @@ impl EventDualityServer {
             message: Some("YuE song generation started (this may take several minutes)...".to_string()),
         };
 
-        Ok(CallToolResult::success(vec![Content::text(format!("Started YuE job: {}", job_id.as_str()))])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(format!("Started YuE job: {}", job_id.as_str()), &response))
     }
 }

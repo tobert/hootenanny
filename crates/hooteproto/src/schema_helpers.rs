@@ -5,30 +5,6 @@
 //! as valid integer formats. For unsigned integers and other sizes, we use
 //! type: "integer" with min/max constraints instead of invalid format fields.
 
-use schemars::{self, JsonSchema};
-
-/// Generate JSON Schema for a type as serde_json::Value
-///
-/// Used by MCP servers to build tool input schemas from Rust types:
-///
-/// ```rust
-/// use schemars::JsonSchema;
-/// use serde::Deserialize;
-///
-/// #[derive(Deserialize, JsonSchema)]
-/// struct MyToolParams {
-///     name: String,
-///     count: Option<u32>,
-/// }
-///
-/// let schema = baton::schema_for::<MyToolParams>();
-/// // Use schema in ToolInfo { input_schema: schema, ... }
-/// ```
-pub fn schema_for<T: JsonSchema>() -> serde_json::Value {
-    let schema = schemars::schema_for!(T);
-    serde_json::to_value(schema).expect("schema serialization cannot fail")
-}
-
 /// Schema for unsigned 64-bit integers (u64)
 pub fn u64_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
     serde_json::from_value(serde_json::json!({
@@ -157,5 +133,19 @@ pub fn optional_i8_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Sch
         "type": ["integer", "null"],
         "minimum": -128,
         "maximum": 127
+    })).unwrap()
+}
+
+/// Schema for arbitrary JSON objects
+pub fn json_object_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    serde_json::from_value(serde_json::json!({
+        "type": "object"
+    })).unwrap()
+}
+
+/// Schema for JSON objects or null
+pub fn json_object_or_null_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    serde_json::from_value(serde_json::json!({
+        "type": ["object", "null"]
     })).unwrap()
 }

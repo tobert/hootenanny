@@ -185,7 +185,7 @@ impl HooteprotoServer {
 
     /// Dispatch via EventDualityServer for full tool functionality
     async fn dispatch_via_server(&self, server: &EventDualityServer, payload: Payload) -> Payload {
-        use crate::api::dispatch::{dispatch_tool, ToolError};
+        use crate::api::dispatch::{dispatch_tool, DispatchError};
 
         // Convert Payload to tool name and arguments
         let (tool_name, args) = match payload_to_tool_args(payload) {
@@ -202,7 +202,7 @@ impl HooteprotoServer {
         // Call the tool via dispatch
         match dispatch_tool(server, &tool_name, args).await {
             Ok(result) => Payload::Success { result },
-            Err(ToolError { code, message, details }) => Payload::Error {
+            Err(DispatchError { code, message, details }) => Payload::Error {
                 code,
                 message,
                 details,

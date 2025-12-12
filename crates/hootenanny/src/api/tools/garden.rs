@@ -4,7 +4,7 @@
 //! via the ZMQ connection to chaosgarden.
 
 use crate::api::service::EventDualityServer;
-use baton::{CallToolResult, Content, ErrorData as McpError};
+use hooteproto::{ToolOutput, ToolResult, ToolError};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -49,25 +49,22 @@ pub struct GardenQueryRequest {
 }
 
 impl EventDualityServer {
-    /// Check if garden connection is available
-    fn require_garden(&self) -> Result<(), McpError> {
+    fn require_garden(&self) -> Result<(), ToolError> {
         if self.garden_manager.is_none() {
-            return Err(McpError::invalid_request(
-                "Not connected to chaosgarden. Start hootenanny with --chaosgarden=local or --chaosgarden=tcp://host:port".to_string()
+            return Err(ToolError::invalid_params(
+                "Not connected to chaosgarden. Start hootenanny with --chaosgarden=local or --chaosgarden=tcp://host:port"
             ));
         }
         Ok(())
     }
 
-    /// garden_status - Get chaosgarden connection and transport state
     #[tracing::instrument(name = "mcp.tool.garden_status", skip(self))]
-    pub async fn garden_status(&self) -> Result<CallToolResult, McpError> {
+    pub async fn garden_status(&self) -> ToolResult {
         let response = match &self.garden_manager {
             Some(manager) => {
                 let connected = manager.is_connected().await;
 
                 if connected {
-                    // Try to get transport state
                     match manager.get_transport_state().await {
                         Ok(reply) => {
                             GardenResponse {
@@ -102,14 +99,13 @@ impl EventDualityServer {
         };
 
         let json = serde_json::to_string_pretty(&response)
-            .map_err(|e| McpError::internal_error(format!("Serialization error: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Serialization error: {}", e)))?;
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(ToolOutput::text_only(json))
     }
 
-    /// garden_play - Start playback
     #[tracing::instrument(name = "mcp.tool.garden_play", skip(self))]
-    pub async fn garden_play(&self) -> Result<CallToolResult, McpError> {
+    pub async fn garden_play(&self) -> ToolResult {
         self.require_garden()?;
         let manager = self.garden_manager.as_ref().unwrap();
 
@@ -121,18 +117,17 @@ impl EventDualityServer {
                     data: Some(serde_json::to_value(&reply).unwrap_or_default()),
                 };
                 let json = serde_json::to_string_pretty(&response)
-                    .map_err(|e| McpError::internal_error(e.to_string()))?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
             }
             Err(e) => {
-                Err(McpError::internal_error(format!("Play failed: {}", e)))
+                Err(ToolError::internal(format!("Play failed: {}", e)))
             }
         }
     }
 
-    /// garden_pause - Pause playback
     #[tracing::instrument(name = "mcp.tool.garden_pause", skip(self))]
-    pub async fn garden_pause(&self) -> Result<CallToolResult, McpError> {
+    pub async fn garden_pause(&self) -> ToolResult {
         self.require_garden()?;
         let manager = self.garden_manager.as_ref().unwrap();
 
@@ -144,18 +139,17 @@ impl EventDualityServer {
                     data: Some(serde_json::to_value(&reply).unwrap_or_default()),
                 };
                 let json = serde_json::to_string_pretty(&response)
-                    .map_err(|e| McpError::internal_error(e.to_string()))?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
             }
             Err(e) => {
-                Err(McpError::internal_error(format!("Pause failed: {}", e)))
+                Err(ToolError::internal(format!("Pause failed: {}", e)))
             }
         }
     }
 
-    /// garden_stop - Stop playback and reset position
     #[tracing::instrument(name = "mcp.tool.garden_stop", skip(self))]
-    pub async fn garden_stop(&self) -> Result<CallToolResult, McpError> {
+    pub async fn garden_stop(&self) -> ToolResult {
         self.require_garden()?;
         let manager = self.garden_manager.as_ref().unwrap();
 
@@ -167,18 +161,17 @@ impl EventDualityServer {
                     data: Some(serde_json::to_value(&reply).unwrap_or_default()),
                 };
                 let json = serde_json::to_string_pretty(&response)
-                    .map_err(|e| McpError::internal_error(e.to_string()))?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
             }
             Err(e) => {
-                Err(McpError::internal_error(format!("Stop failed: {}", e)))
+                Err(ToolError::internal(format!("Stop failed: {}", e)))
             }
         }
     }
 
-    /// garden_seek - Seek to beat position
     #[tracing::instrument(name = "mcp.tool.garden_seek", skip(self), fields(beat = request.beat))]
-    pub async fn garden_seek(&self, request: GardenSeekRequest) -> Result<CallToolResult, McpError> {
+    pub async fn garden_seek(&self, request: GardenSeekRequest) -> ToolResult {
         self.require_garden()?;
         let manager = self.garden_manager.as_ref().unwrap();
 
@@ -190,23 +183,22 @@ impl EventDualityServer {
                     data: Some(serde_json::to_value(&reply).unwrap_or_default()),
                 };
                 let json = serde_json::to_string_pretty(&response)
-                    .map_err(|e| McpError::internal_error(e.to_string()))?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
             }
             Err(e) => {
-                Err(McpError::internal_error(format!("Seek failed: {}", e)))
+                Err(ToolError::internal(format!("Seek failed: {}", e)))
             }
         }
     }
 
-    /// garden_set_tempo - Set tempo in BPM
     #[tracing::instrument(name = "mcp.tool.garden_set_tempo", skip(self), fields(bpm = request.bpm))]
-    pub async fn garden_set_tempo(&self, request: GardenSetTempoRequest) -> Result<CallToolResult, McpError> {
+    pub async fn garden_set_tempo(&self, request: GardenSetTempoRequest) -> ToolResult {
         self.require_garden()?;
         let manager = self.garden_manager.as_ref().unwrap();
 
         if request.bpm <= 0.0 || request.bpm > 999.0 {
-            return Err(McpError::invalid_params("BPM must be between 0 and 999".to_string()));
+            return Err(ToolError::invalid_params("BPM must be between 0 and 999"));
         }
 
         match manager.set_tempo(request.bpm).await {
@@ -217,26 +209,24 @@ impl EventDualityServer {
                     data: Some(serde_json::to_value(&reply).unwrap_or_default()),
                 };
                 let json = serde_json::to_string_pretty(&response)
-                    .map_err(|e| McpError::internal_error(e.to_string()))?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
             }
             Err(e) => {
-                Err(McpError::internal_error(format!("Set tempo failed: {}", e)))
+                Err(ToolError::internal(format!("Set tempo failed: {}", e)))
             }
         }
     }
 
-    /// garden_query - Execute a Trustfall query on chaosgarden's graph
     #[tracing::instrument(name = "mcp.tool.garden_query", skip(self, request))]
-    pub async fn garden_query(&self, request: GardenQueryRequest) -> Result<CallToolResult, McpError> {
+    pub async fn garden_query(&self, request: GardenQueryRequest) -> ToolResult {
         self.require_garden()?;
         let manager = self.garden_manager.as_ref().unwrap();
 
-        // Convert variables to HashMap
         let variables: std::collections::HashMap<String, serde_json::Value> = match request.variables {
             serde_json::Value::Object(map) => map.into_iter().collect(),
             serde_json::Value::Null => std::collections::HashMap::new(),
-            _ => return Err(McpError::invalid_params("variables must be a JSON object".to_string())),
+            _ => return Err(ToolError::invalid_params("variables must be a JSON object")),
         };
 
         match manager.query(&request.query, variables).await {
@@ -247,18 +237,17 @@ impl EventDualityServer {
                     data: Some(serde_json::to_value(&reply).unwrap_or_default()),
                 };
                 let json = serde_json::to_string_pretty(&response)
-                    .map_err(|e| McpError::internal_error(e.to_string()))?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
             }
             Err(e) => {
-                Err(McpError::internal_error(format!("Query failed: {}", e)))
+                Err(ToolError::internal(format!("Query failed: {}", e)))
             }
         }
     }
 
-    /// garden_emergency_pause - Emergency pause (priority channel)
     #[tracing::instrument(name = "mcp.tool.garden_emergency_pause", skip(self))]
-    pub async fn garden_emergency_pause(&self) -> Result<CallToolResult, McpError> {
+    pub async fn garden_emergency_pause(&self) -> ToolResult {
         self.require_garden()?;
         let manager = self.garden_manager.as_ref().unwrap();
 
@@ -270,11 +259,11 @@ impl EventDualityServer {
                     data: Some(serde_json::to_value(&reply).unwrap_or_default()),
                 };
                 let json = serde_json::to_string_pretty(&response)
-                    .map_err(|e| McpError::internal_error(e.to_string()))?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
             }
             Err(e) => {
-                Err(McpError::internal_error(format!("Emergency pause failed: {}", e)))
+                Err(ToolError::internal(format!("Emergency pause failed: {}", e)))
             }
         }
     }

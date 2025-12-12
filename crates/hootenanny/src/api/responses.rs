@@ -3,7 +3,7 @@
 //! These types define the structured content returned by tools per MCP 2025-06-18 spec.
 //! Each implements JsonSchema for output schema generation.
 
-use baton::schema_helpers::*;
+use hooteproto::schema_helpers::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

@@ -7,40 +7,29 @@ use crate::api::responses::{GraphContextResponse, ContextSummary, AddAnnotationR
 use crate::api::schema::{AddAnnotationRequest, GraphContextRequest};
 use crate::api::service::EventDualityServer;
 use audio_graph_mcp::sources::AnnotationData;
-use baton::{CallToolResult, Content, ErrorData as McpError};
+use hooteproto::{ToolOutput, ToolResult, ToolError};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use trustfall::{execute_query, FieldValue};
 
 impl EventDualityServer {
-    /// Generate a bounded context about artifacts for sub-agents
-    ///
-    /// Uses Trustfall queries to fetch artifacts based on filters.
-    /// Returns a JSON object with:
-    /// - Summary counts by type
-    /// - List of matching artifacts with optional metadata
-    /// - Suitable for injecting into agent prompts
     #[tracing::instrument(name = "mcp.tool.graph_context", skip(self, request))]
     pub async fn graph_context(
         &self,
         request: GraphContextRequest,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> ToolResult {
         let limit = request.limit.unwrap_or(20);
 
-        // Build Trustfall query based on filters
         let (query, variables) = build_artifact_query(&request);
 
-        // Execute via Trustfall
         let schema = self.graph_adapter.schema();
         let adapter_arc: Arc<_> = Arc::clone(&self.graph_adapter);
 
         let results_iter = execute_query(schema, adapter_arc, &query, variables)
-            .map_err(|e| McpError::internal_error(format!("Query failed: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Query failed: {}", e)))?;
 
-        // Collect results
         let results: Vec<_> = results_iter.take(limit).collect();
 
-        // Build summary counts by type
         let mut type_counts: HashMap<String, usize> = HashMap::new();
         for result in &results {
             if let Some(FieldValue::List(tags)) = result.get("tags" as &str) {
@@ -60,13 +49,11 @@ impl EventDualityServer {
             }
         }
 
-        // Convert results to JSON representation
         let artifacts: Vec<serde_json::Value> = results
             .into_iter()
             .map(|row| {
                 let mut obj = serde_json::Map::new();
 
-                // Required fields
                 if let Some(FieldValue::String(id)) = row.get("id" as &str) {
                     obj.insert("id".to_string(), serde_json::Value::String(id.to_string()));
                 }
@@ -89,7 +76,6 @@ impl EventDualityServer {
                     );
                 }
 
-                // Tags
                 if let Some(FieldValue::List(tags)) = row.get("tags" as &str) {
                     let tag_arr: Vec<serde_json::Value> = tags
                         .iter()
@@ -103,7 +89,6 @@ impl EventDualityServer {
                         .collect();
                     obj.insert("tags".to_string(), serde_json::Value::Array(tag_arr));
 
-                    // Extract type from tags
                     for t in tags.iter() {
                         if let FieldValue::String(s) = t {
                             if s.starts_with("type:") {
@@ -119,7 +104,6 @@ impl EventDualityServer {
                     }
                 }
 
-                // Optional fields
                 if let Some(FieldValue::String(v)) = row.get("variation_set_id" as &str) {
                     obj.insert(
                         "variation_set_id".to_string(),
@@ -133,7 +117,6 @@ impl EventDualityServer {
                     );
                 }
 
-                // Include metadata if requested
                 if request.include_metadata {
                     if let Some(FieldValue::String(m)) = row.get("metadata" as &str) {
                         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(m) {
@@ -146,7 +129,6 @@ impl EventDualityServer {
             })
             .collect();
 
-        // Build final context
         let total = artifacts.len();
         let response = GraphContextResponse {
             artifacts,
@@ -157,39 +139,33 @@ impl EventDualityServer {
         };
 
         let json = serde_json::to_string_pretty(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to serialize: {}", e)))?;
 
-        Ok(CallToolResult::success(vec![Content::text(json)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(json, &response))
     }
 
-    /// Add an annotation to an artifact
-    ///
-    /// Uses the proper annotation storage system via ArtifactSource trait.
     #[tracing::instrument(name = "mcp.tool.add_annotation", skip(self, request))]
     pub async fn add_annotation(
         &self,
         request: AddAnnotationRequest,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> ToolResult {
         use audio_graph_mcp::sources::ArtifactSource;
 
-        // Verify artifact exists
         let artifact_store = self.artifact_store.read().map_err(|e| {
-            McpError::internal_error(format!("Failed to read artifact store: {}", e))
+            ToolError::internal(format!("Failed to read artifact store: {}", e))
         })?;
 
         let artifact_exists = ArtifactSource::get(&*artifact_store, &request.artifact_id)
-            .map_err(|e| McpError::internal_error(format!("Failed to get artifact: {}", e)))?
+            .map_err(|e| ToolError::internal(format!("Failed to get artifact: {}", e)))?
             .is_some();
 
         if !artifact_exists {
-            return Err(McpError::invalid_params(format!(
+            return Err(ToolError::invalid_params(format!(
                 "Artifact not found: {}",
                 request.artifact_id
             )));
         }
 
-        // Create annotation
         let source = request.source.unwrap_or_else(|| "agent".to_string());
         let annotation = AnnotationData::new(
             request.artifact_id.clone(),
@@ -200,9 +176,8 @@ impl EventDualityServer {
 
         let annotation_id = annotation.id.clone();
 
-        // Store the annotation
         ArtifactSource::add_annotation(&*artifact_store, annotation).map_err(|e| {
-            McpError::internal_error(format!("Failed to store annotation: {}", e))
+            ToolError::internal(format!("Failed to store annotation: {}", e))
         })?;
 
         let response = AddAnnotationResponse {
@@ -212,20 +187,17 @@ impl EventDualityServer {
         };
 
         let json = serde_json::to_string_pretty(&response)
-            .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e)))?;
+            .map_err(|e| ToolError::internal(format!("Failed to serialize: {}", e)))?;
 
-        Ok(CallToolResult::success(vec![Content::text(json)])
-            .with_structured(serde_json::to_value(&response).unwrap()))
+        Ok(ToolOutput::new(json, &response))
     }
 }
 
-/// Build a Trustfall query for artifacts based on request filters
 fn build_artifact_query(
     request: &GraphContextRequest,
 ) -> (String, BTreeMap<Arc<str>, FieldValue>) {
     let mut variables: BTreeMap<Arc<str>, FieldValue> = BTreeMap::new();
 
-    // Build query parameters
     let query_params = if let Some(ref tag) = request.tag {
         variables.insert("tag".into(), FieldValue::String(tag.clone().into()));
         "tag: $tag"
@@ -236,8 +208,6 @@ fn build_artifact_query(
         ""
     };
 
-    // Build query - note: vibe_search would require annotation traversal
-    // For now we filter by tag or creator at the entry point
     let query = format!(
         r#"
         query {{
