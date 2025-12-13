@@ -341,10 +341,12 @@ async fn test_full_ipc_roundtrip() {
 - [x] `DeleteRegion` removes regions from state
 - [x] `MoveRegion` updates region position
 - [x] Query socket returns real Trustfall results
-- [ ] Latent state updates flow through latent_manager
-- [ ] IOPub broadcasts latent events
+- [x] Latent state updates flow through latent_manager
+- [x] Approval operations (ApproveLatent/RejectLatent) work
+- [x] GetPendingApprovals returns real pending approvals
+- [ ] IOPub broadcasts latent events (NoOpPublisher for now)
 - [x] Demo still works with real daemon
-- [x] All existing tests still pass (165 tests)
+- [x] All existing tests still pass (171 tests)
 
 ---
 
@@ -360,6 +362,11 @@ async fn test_full_ipc_roundtrip() {
   - Behavior conversion from IPC types to internal types
   - Range filtering in GetRegions
 - 11 new daemon tests covering region CRUD + tempo changes
+- **Latent lifecycle**: Full lifecycle wired through LatentManager
+  - UpdateLatentStarted/Progress/Resolved/Failed handlers
+  - ApproveLatent/RejectLatent handlers
+  - GetPendingApprovals returns real pending list
+  - 6 new tests covering latent lifecycle
 - MCP tools verified working:
   - `garden_status` → returns real transport state
   - `garden_play` → sets playing=true
@@ -369,9 +376,7 @@ async fn test_full_ipc_roundtrip() {
   - `garden_query` → executes Trustfall (regions now queryable!)
 
 ### Remaining
-- Latent lifecycle integration (UpdateLatentStarted/Progress/Resolved/Failed)
-- Approval operations (ApproveLatent/RejectLatent)
-- IOPub event broadcasting
+- IOPub event broadcasting (currently NoOpPublisher - will wire to actual ZMQ IOPub socket)
 
 ---
 

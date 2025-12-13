@@ -15,10 +15,11 @@ use uuid::Uuid;
 
 use crate::ipc::server::Handler;
 use crate::ipc::{
-    Beat as IpcBeat, ControlReply, ControlRequest, QueryReply,
-    QueryRequest, RegionSummary, ShellReply, ShellRequest,
+    Beat as IpcBeat, ContentType as IpcContentType, ControlReply, ControlRequest,
+    PendingApproval as IpcPendingApproval, QueryReply, QueryRequest, RegionSummary,
+    ShellReply, ShellRequest,
 };
-use crate::primitives::Behavior;
+use crate::primitives::{Behavior, ContentType};
 use crate::{
     Beat, ChaosgardenAdapter, Graph, LatentConfig, LatentManager, Region, TempoMap, Tick,
 };
@@ -62,8 +63,8 @@ pub struct GardenDaemon {
     // Graph (Arc<RwLock> for sharing with query adapter)
     graph: Arc<RwLock<Graph>>,
 
-    // Latent management
-    latent_manager: Arc<LatentManager>,
+    // Latent management (Arc<RwLock> for mutable access to handle lifecycle events)
+    latent_manager: Arc<RwLock<LatentManager>>,
 
     // Query adapter (pre-built, shares state refs)
     query_adapter: Option<Arc<ChaosgardenAdapter>>,
@@ -89,7 +90,7 @@ impl GardenDaemon {
 
         // Create a no-op IOPub publisher for now
         let publisher = Arc::new(NoOpPublisher);
-        let latent_manager = Arc::new(LatentManager::new(latent_config, publisher));
+        let latent_manager = Arc::new(RwLock::new(LatentManager::new(latent_config, publisher)));
 
         // Build query adapter
         let query_adapter = ChaosgardenAdapter::new(
@@ -221,6 +222,87 @@ impl GardenDaemon {
             .collect()
     }
 
+    // === Latent lifecycle operations ===
+
+    fn handle_latent_started(&self, region_id: Uuid, job_id: String) -> Result<(), String> {
+        let mut regions = self.regions.write().unwrap();
+        let mut latent_manager = self.latent_manager.write().unwrap();
+        latent_manager.handle_job_started(region_id, job_id.clone(), &mut regions);
+        info!("Latent job {} started for region {}", job_id, region_id);
+        Ok(())
+    }
+
+    fn handle_latent_progress(&self, region_id: Uuid, progress: f32) -> Result<(), String> {
+        let mut regions = self.regions.write().unwrap();
+        let mut latent_manager = self.latent_manager.write().unwrap();
+        latent_manager.handle_progress(region_id, progress, &mut regions);
+        debug!("Latent progress for region {}: {:.1}%", region_id, progress * 100.0);
+        Ok(())
+    }
+
+    fn handle_latent_resolved(
+        &self,
+        region_id: Uuid,
+        artifact_id: String,
+        content_hash: String,
+        content_type: ContentType,
+    ) -> Result<(), String> {
+        let mut regions = self.regions.write().unwrap();
+        let mut latent_manager = self.latent_manager.write().unwrap();
+        latent_manager.handle_resolved(
+            region_id,
+            artifact_id.clone(),
+            content_hash,
+            content_type,
+            &mut regions,
+        );
+        info!("Latent region {} resolved with artifact {}", region_id, artifact_id);
+        Ok(())
+    }
+
+    fn handle_latent_failed(&self, region_id: Uuid, error: String) -> Result<(), String> {
+        let mut regions = self.regions.write().unwrap();
+        let mut latent_manager = self.latent_manager.write().unwrap();
+        latent_manager.handle_failed(region_id, error.clone(), &mut regions);
+        warn!("Latent region {} failed: {}", region_id, error);
+        Ok(())
+    }
+
+    fn handle_approve(&self, region_id: Uuid, decided_by: Uuid) -> Result<(), String> {
+        let mut regions = self.regions.write().unwrap();
+        let mut latent_manager = self.latent_manager.write().unwrap();
+        latent_manager
+            .approve(region_id, decided_by, &mut regions)
+            .map_err(|e| e.to_string())?;
+        info!("Latent region {} approved by {}", region_id, decided_by);
+        Ok(())
+    }
+
+    fn handle_reject(&self, region_id: Uuid, decided_by: Uuid, reason: Option<String>) -> Result<(), String> {
+        let mut regions = self.regions.write().unwrap();
+        let mut latent_manager = self.latent_manager.write().unwrap();
+        latent_manager
+            .reject(region_id, decided_by, reason.clone(), &mut regions)
+            .map_err(|e| e.to_string())?;
+        info!("Latent region {} rejected by {}: {:?}", region_id, decided_by, reason);
+        Ok(())
+    }
+
+    fn get_pending_approvals(&self) -> Vec<IpcPendingApproval> {
+        let latent_manager = self.latent_manager.read().unwrap();
+        latent_manager
+            .pending_approvals()
+            .into_iter()
+            .map(|pa| IpcPendingApproval {
+                region_id: pa.region_id,
+                artifact_id: pa.artifact_id.clone(),
+                content_hash: pa.content_hash.clone(),
+                content_type: convert_content_type_to_ipc(pa.content_type),
+                resolved_at: chrono::Utc::now(), // TODO: Store actual resolved_at time
+            })
+            .collect()
+    }
+
     // === Query operations ===
 
     fn execute_query(&self, query: &str, variables: &HashMap<String, serde_json::Value>) -> QueryReply {
@@ -322,8 +404,8 @@ impl Handler for GardenDaemon {
                 ShellReply::Regions { regions }
             }
             ShellRequest::GetPendingApprovals => {
-                // TODO: Wire to latent_manager
-                ShellReply::PendingApprovals { approvals: vec![] }
+                let approvals = self.get_pending_approvals();
+                ShellReply::PendingApprovals { approvals }
             }
 
             // Region operations
@@ -356,14 +438,77 @@ impl Handler for GardenDaemon {
                 }
             }
 
+            // Latent lifecycle operations
+            ShellRequest::UpdateLatentStarted { region_id, job_id } => {
+                match self.handle_latent_started(region_id, job_id) {
+                    Ok(()) => ShellReply::Ok {
+                        result: serde_json::json!({"status": "started"}),
+                    },
+                    Err(e) => ShellReply::Error {
+                        error: e,
+                        traceback: None,
+                    },
+                }
+            }
+            ShellRequest::UpdateLatentProgress { region_id, progress } => {
+                match self.handle_latent_progress(region_id, progress) {
+                    Ok(()) => ShellReply::Ok {
+                        result: serde_json::json!({"progress": progress}),
+                    },
+                    Err(e) => ShellReply::Error {
+                        error: e,
+                        traceback: None,
+                    },
+                }
+            }
+            ShellRequest::UpdateLatentResolved { region_id, artifact_id, content_hash, content_type } => {
+                let internal_type = convert_ipc_content_type_to_internal(&content_type);
+                match self.handle_latent_resolved(region_id, artifact_id.clone(), content_hash, internal_type) {
+                    Ok(()) => ShellReply::Ok {
+                        result: serde_json::json!({"status": "resolved", "artifact_id": artifact_id}),
+                    },
+                    Err(e) => ShellReply::Error {
+                        error: e,
+                        traceback: None,
+                    },
+                }
+            }
+            ShellRequest::UpdateLatentFailed { region_id, error } => {
+                match self.handle_latent_failed(region_id, error.clone()) {
+                    Ok(()) => ShellReply::Ok {
+                        result: serde_json::json!({"status": "failed", "error": error}),
+                    },
+                    Err(e) => ShellReply::Error {
+                        error: e,
+                        traceback: None,
+                    },
+                }
+            }
+            ShellRequest::ApproveLatent { region_id, decided_by } => {
+                match self.handle_approve(region_id, decided_by) {
+                    Ok(()) => ShellReply::Ok {
+                        result: serde_json::json!({"status": "approved"}),
+                    },
+                    Err(e) => ShellReply::Error {
+                        error: e,
+                        traceback: None,
+                    },
+                }
+            }
+            ShellRequest::RejectLatent { region_id, decided_by, reason } => {
+                match self.handle_reject(region_id, decided_by, reason.clone()) {
+                    Ok(()) => ShellReply::Ok {
+                        result: serde_json::json!({"status": "rejected", "reason": reason}),
+                    },
+                    Err(e) => ShellReply::Error {
+                        error: e,
+                        traceback: None,
+                    },
+                }
+            }
+
             // Not yet implemented
-            ShellRequest::UpdateLatentStarted { .. }
-            | ShellRequest::UpdateLatentProgress { .. }
-            | ShellRequest::UpdateLatentResolved { .. }
-            | ShellRequest::UpdateLatentFailed { .. }
-            | ShellRequest::ApproveLatent { .. }
-            | ShellRequest::RejectLatent { .. }
-            | ShellRequest::AddNode { .. }
+            ShellRequest::AddNode { .. }
             | ShellRequest::RemoveNode { .. }
             | ShellRequest::Connect { .. }
             | ShellRequest::Disconnect { .. }
@@ -451,6 +596,23 @@ fn convert_ipc_behavior_to_internal(ipc: &crate::ipc::Behavior) -> Behavior {
             kind: crate::primitives::TriggerKind::Custom(event_type.clone()),
             data: None,
         },
+    }
+}
+
+/// Convert IPC ContentType to internal ContentType
+fn convert_ipc_content_type_to_internal(ipc: &IpcContentType) -> ContentType {
+    match ipc {
+        IpcContentType::Audio => ContentType::Audio,
+        IpcContentType::Midi => ContentType::Midi,
+        IpcContentType::Control => ContentType::Audio, // Default to Audio for Control
+    }
+}
+
+/// Convert internal ContentType to IPC ContentType
+fn convert_content_type_to_ipc(internal: ContentType) -> IpcContentType {
+    match internal {
+        ContentType::Audio => IpcContentType::Audio,
+        ContentType::Midi => IpcContentType::Midi,
     }
 }
 
@@ -776,6 +938,199 @@ mod tests {
                 assert_eq!(regions[0].position.0, 2.0);
             }
             other => panic!("expected Regions, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_latent_lifecycle_started() {
+        let daemon = GardenDaemon::new();
+
+        // Create a latent region
+        let behavior = crate::ipc::Behavior::Latent {
+            job_id: "job_test".to_string(),
+        };
+        let reply = daemon.handle_shell(ShellRequest::CreateRegion {
+            position: IpcBeat(0.0),
+            duration: IpcBeat(8.0),
+            behavior,
+        });
+        let region_id = match reply {
+            ShellReply::RegionCreated { region_id } => region_id,
+            _ => panic!("expected RegionCreated"),
+        };
+
+        // Send started notification
+        let reply = daemon.handle_shell(ShellRequest::UpdateLatentStarted {
+            region_id,
+            job_id: "job_abc123".to_string(),
+        });
+        assert!(matches!(reply, ShellReply::Ok { .. }));
+    }
+
+    #[test]
+    fn test_latent_lifecycle_progress() {
+        let daemon = GardenDaemon::new();
+
+        // Create a latent region
+        let behavior = crate::ipc::Behavior::Latent {
+            job_id: "job_prog".to_string(),
+        };
+        let reply = daemon.handle_shell(ShellRequest::CreateRegion {
+            position: IpcBeat(0.0),
+            duration: IpcBeat(8.0),
+            behavior,
+        });
+        let region_id = match reply {
+            ShellReply::RegionCreated { region_id } => region_id,
+            _ => panic!("expected RegionCreated"),
+        };
+
+        // Start job first
+        daemon.handle_shell(ShellRequest::UpdateLatentStarted {
+            region_id,
+            job_id: "job_prog".to_string(),
+        });
+
+        // Send progress updates
+        let reply = daemon.handle_shell(ShellRequest::UpdateLatentProgress {
+            region_id,
+            progress: 0.5,
+        });
+        assert!(matches!(reply, ShellReply::Ok { .. }));
+    }
+
+    #[test]
+    fn test_latent_lifecycle_resolved_and_approve() {
+        let daemon = GardenDaemon::new();
+
+        // Create a latent region
+        let behavior = crate::ipc::Behavior::Latent {
+            job_id: "job_resolve".to_string(),
+        };
+        let reply = daemon.handle_shell(ShellRequest::CreateRegion {
+            position: IpcBeat(0.0),
+            duration: IpcBeat(8.0),
+            behavior,
+        });
+        let region_id = match reply {
+            ShellReply::RegionCreated { region_id } => region_id,
+            _ => panic!("expected RegionCreated"),
+        };
+
+        // Start job
+        daemon.handle_shell(ShellRequest::UpdateLatentStarted {
+            region_id,
+            job_id: "job_resolve".to_string(),
+        });
+
+        // Resolve with artifact
+        let reply = daemon.handle_shell(ShellRequest::UpdateLatentResolved {
+            region_id,
+            artifact_id: "artifact_xyz".to_string(),
+            content_hash: "hash_xyz".to_string(),
+            content_type: IpcContentType::Audio,
+        });
+        assert!(matches!(reply, ShellReply::Ok { .. }));
+
+        // Should have pending approval now
+        let approvals = daemon.get_pending_approvals();
+        assert_eq!(approvals.len(), 1);
+        assert_eq!(approvals[0].region_id, region_id);
+
+        // Approve it
+        let decider = Uuid::new_v4();
+        let reply = daemon.handle_shell(ShellRequest::ApproveLatent {
+            region_id,
+            decided_by: decider,
+        });
+        assert!(matches!(reply, ShellReply::Ok { .. }));
+
+        // No more pending approvals
+        let approvals = daemon.get_pending_approvals();
+        assert!(approvals.is_empty());
+    }
+
+    #[test]
+    fn test_latent_lifecycle_failed() {
+        let daemon = GardenDaemon::new();
+
+        // Create a latent region
+        let behavior = crate::ipc::Behavior::Latent {
+            job_id: "job_fail".to_string(),
+        };
+        let reply = daemon.handle_shell(ShellRequest::CreateRegion {
+            position: IpcBeat(0.0),
+            duration: IpcBeat(8.0),
+            behavior,
+        });
+        let region_id = match reply {
+            ShellReply::RegionCreated { region_id } => region_id,
+            _ => panic!("expected RegionCreated"),
+        };
+
+        // Start job
+        daemon.handle_shell(ShellRequest::UpdateLatentStarted {
+            region_id,
+            job_id: "job_fail".to_string(),
+        });
+
+        // Mark as failed
+        let reply = daemon.handle_shell(ShellRequest::UpdateLatentFailed {
+            region_id,
+            error: "Generation failed".to_string(),
+        });
+        assert!(matches!(reply, ShellReply::Ok { .. }));
+    }
+
+    #[test]
+    fn test_latent_reject() {
+        let daemon = GardenDaemon::new();
+
+        // Create and resolve a latent region
+        let behavior = crate::ipc::Behavior::Latent {
+            job_id: "job_reject".to_string(),
+        };
+        let reply = daemon.handle_shell(ShellRequest::CreateRegion {
+            position: IpcBeat(0.0),
+            duration: IpcBeat(8.0),
+            behavior,
+        });
+        let region_id = match reply {
+            ShellReply::RegionCreated { region_id } => region_id,
+            _ => panic!("expected RegionCreated"),
+        };
+
+        daemon.handle_shell(ShellRequest::UpdateLatentStarted {
+            region_id,
+            job_id: "job_reject".to_string(),
+        });
+
+        daemon.handle_shell(ShellRequest::UpdateLatentResolved {
+            region_id,
+            artifact_id: "artifact_rej".to_string(),
+            content_hash: "hash_rej".to_string(),
+            content_type: IpcContentType::Midi,
+        });
+
+        // Reject it
+        let decider = Uuid::new_v4();
+        let reply = daemon.handle_shell(ShellRequest::RejectLatent {
+            region_id,
+            decided_by: decider,
+            reason: Some("Not what I wanted".to_string()),
+        });
+        assert!(matches!(reply, ShellReply::Ok { .. }));
+    }
+
+    #[test]
+    fn test_get_pending_approvals_empty() {
+        let daemon = GardenDaemon::new();
+        let reply = daemon.handle_shell(ShellRequest::GetPendingApprovals);
+        match reply {
+            ShellReply::PendingApprovals { approvals } => {
+                assert!(approvals.is_empty());
+            }
+            other => panic!("expected PendingApprovals, got {:?}", other),
         }
     }
 }
