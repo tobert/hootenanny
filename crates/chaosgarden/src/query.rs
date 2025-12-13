@@ -118,7 +118,7 @@ pub struct ChaosgardenAdapter {
     regions: Arc<RwLock<Vec<Region>>>,
     graph: Arc<RwLock<Graph>>,
     io_manager: Option<Arc<RwLock<ExternalIOManager>>>,
-    tempo_map: Arc<TempoMap>,
+    tempo_map: Arc<RwLock<TempoMap>>,
     schema: Arc<Schema>,
 }
 
@@ -127,7 +127,7 @@ impl ChaosgardenAdapter {
     pub fn new(
         regions: Arc<RwLock<Vec<Region>>>,
         graph: Arc<RwLock<Graph>>,
-        tempo_map: Arc<TempoMap>,
+        tempo_map: Arc<RwLock<TempoMap>>,
     ) -> anyhow::Result<Self> {
         let schema_text = include_str!("schema.graphql");
         let schema = Arc::new(Schema::parse(schema_text)?);
@@ -144,7 +144,7 @@ impl ChaosgardenAdapter {
     pub fn with_io_manager(
         regions: Arc<RwLock<Vec<Region>>>,
         graph: Arc<RwLock<Graph>>,
-        tempo_map: Arc<TempoMap>,
+        tempo_map: Arc<RwLock<TempoMap>>,
         io_manager: Arc<RwLock<ExternalIOManager>>,
     ) -> anyhow::Result<Self> {
         let schema_text = include_str!("schema.graphql");
@@ -389,8 +389,9 @@ impl<'a> trustfall::provider::BasicAdapter<'a> for ChaosgardenAdapter {
                     .get("beat")
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0);
-                let tick = self.tempo_map.beat_to_tick(Beat(beat));
-                let bpm = self.tempo_map.tempo_at(tick);
+                let tempo_map = self.tempo_map.read().unwrap();
+                let tick = tempo_map.beat_to_tick(Beat(beat));
+                let bpm = tempo_map.tempo_at(tick);
 
                 Box::new(std::iter::once(Vertex::TempoResult(bpm)))
             }
@@ -399,8 +400,9 @@ impl<'a> trustfall::provider::BasicAdapter<'a> for ChaosgardenAdapter {
                     .get("beat")
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0);
-                let tick = self.tempo_map.beat_to_tick(Beat(beat));
-                let second = self.tempo_map.tick_to_second(tick);
+                let tempo_map = self.tempo_map.read().unwrap();
+                let tick = tempo_map.beat_to_tick(Beat(beat));
+                let second = tempo_map.tick_to_second(tick);
 
                 Box::new(std::iter::once(Vertex::TimeResult(second.0)))
             }
@@ -409,8 +411,9 @@ impl<'a> trustfall::provider::BasicAdapter<'a> for ChaosgardenAdapter {
                     .get("second")
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0);
-                let tick = self.tempo_map.second_to_tick(Second(second));
-                let beat = self.tempo_map.tick_to_beat(tick);
+                let tempo_map = self.tempo_map.read().unwrap();
+                let tick = tempo_map.second_to_tick(Second(second));
+                let beat = tempo_map.tick_to_beat(tick);
 
                 Box::new(std::iter::once(Vertex::TimeResult(beat.0)))
             }
@@ -1146,7 +1149,7 @@ mod tests {
         let adapter = ChaosgardenAdapter::new(
             Arc::new(RwLock::new(regions)),
             Arc::new(RwLock::new(graph)),
-            Arc::new(TempoMap::new(120.0, Default::default())),
+            Arc::new(RwLock::new(TempoMap::new(120.0, Default::default()))),
         )
         .unwrap();
 

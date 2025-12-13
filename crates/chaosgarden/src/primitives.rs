@@ -169,6 +169,18 @@ impl TempoMap {
         }
     }
 
+    /// Set the base tempo (at tick 0)
+    /// This replaces the initial tempo, leaving any later tempo changes intact
+    pub fn set_base_tempo(&mut self, bpm: f64) {
+        if let Some(first) = self.tempo_changes.first_mut() {
+            if first.tick == Tick::zero() {
+                first.bpm = bpm;
+                return;
+            }
+        }
+        self.tempo_changes.insert(0, TempoChange { tick: Tick::zero(), bpm });
+    }
+
     /// Get tempo at a given tick
     pub fn tempo_at(&self, tick: Tick) -> f64 {
         self.tempo_changes

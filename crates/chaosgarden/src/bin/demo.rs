@@ -600,7 +600,7 @@ async fn main() -> Result<()> {
     let adapter = ChaosgardenAdapter::new(
         Arc::new(RwLock::new(regions.clone())),
         Arc::new(RwLock::new(query_graph)),
-        Arc::new(TempoMap::new(120.0, Default::default())),
+        Arc::new(RwLock::new(TempoMap::new(120.0, Default::default()))),
     )?;
     let adapter = Arc::new(adapter);
 

@@ -336,13 +336,15 @@ async fn test_full_ipc_roundtrip() {
 - [x] `GardenDaemon` struct holds all state
 - [x] `GetTransportState` returns real engine state
 - [x] `Play`/`Pause`/`Stop`/`Seek` control playback
-- [ ] `SetTempo` updates tempo map (currently logs warning, needs Arc<RwLock<TempoMap>>)
-- [ ] `AddRegion` creates regions in state
+- [x] `SetTempo` updates tempo map (Arc<RwLock<TempoMap>> implemented)
+- [x] `CreateRegion` creates regions in state
+- [x] `DeleteRegion` removes regions from state
+- [x] `MoveRegion` updates region position
 - [x] Query socket returns real Trustfall results
 - [ ] Latent state updates flow through latent_manager
 - [ ] IOPub broadcasts latent events
 - [x] Demo still works with real daemon
-- [x] All existing tests still pass
+- [x] All existing tests still pass (165 tests)
 
 ---
 
@@ -353,17 +355,22 @@ async fn test_full_ipc_roundtrip() {
 - Wired transport: Play/Pause/Stop/Seek work via MCP
 - Wired Trustfall queries via `ChaosgardenAdapter`
 - Updated `src/bin/chaosgarden.rs` to use `GardenDaemon`
+- **SetTempo**: Changed `TempoMap` to `Arc<RwLock<TempoMap>>`, added `set_base_tempo()` method
+- **Region operations**: CreateRegion, DeleteRegion, MoveRegion all implemented
+  - Behavior conversion from IPC types to internal types
+  - Range filtering in GetRegions
+- 11 new daemon tests covering region CRUD + tempo changes
 - MCP tools verified working:
   - `garden_status` → returns real transport state
   - `garden_play` → sets playing=true
   - `garden_seek` → updates position
   - `garden_stop` → resets to position=0
-  - `garden_query` → executes Trustfall (empty results, no regions yet)
+  - `garden_set_tempo` → updates base tempo
+  - `garden_query` → executes Trustfall (regions now queryable!)
 
 ### Remaining
-- `SetTempo` - needs Arc<RwLock<TempoMap>> to support dynamic changes
-- `AddRegion` / region management
-- Latent lifecycle integration
+- Latent lifecycle integration (UpdateLatentStarted/Progress/Resolved/Failed)
+- Approval operations (ApproveLatent/RejectLatent)
 - IOPub event broadcasting
 
 ---
