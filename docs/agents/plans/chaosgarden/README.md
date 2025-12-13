@@ -1,7 +1,7 @@
 # Chaosgarden: Realtime Audio Daemon
 
 **Location:** `crates/chaosgarden`
-**Status:** 04-playback Complete, 05-external-io Next
+**Status:** Core modules complete, 13-wire-daemon Next
 
 ---
 
@@ -175,7 +175,7 @@ crates/chaosgarden/
 
 - **Completed**: Core modules (00-10) + job type consolidation 🎉
 - **In Progress**: None
-- **Next Up**: 11-holler-baton (migrate holler to baton)
+- **Next Up**: 13-wire-daemon (replace StubHandler with real state)
 - **Blocked**: None
 
 ### Demo Showcase
@@ -467,9 +467,10 @@ These tasks come AFTER chaosgarden is working. Don't rip up working code until w
 | 10-hootenanny-zmq | ✅ complete | ZMQ client + garden_* MCP tools |
 | 11-holler-baton | 📋 planning | Migrate holler to use baton MCP library |
 | 12-luanette-blocking | 📋 planning | Lua scripts block on hootenanny jobs |
-| 13-hrmcp-proxy | future | Strip MCP server to thin ZMQ proxy |
-| 14-integration | future | End-to-end: hrmcp → hootenanny → chaosgarden → audio |
-| 15-midir | future | Direct MIDI via midir (ALSA seq/CoreMIDI/WinMM) - avoids PipeWire MIDI jitter |
+| 13-wire-daemon | 📋 planning | Replace StubHandler with real state management |
+| 14-hrmcp-proxy | future | Strip MCP server to thin ZMQ proxy |
+| 15-integration | future | End-to-end: hrmcp → hootenanny → chaosgarden → audio |
+| 16-midir | future | Direct MIDI via midir (ALSA seq/CoreMIDI/WinMM) - avoids PipeWire MIDI jitter |
 
 ### 10-hootenanny-zmq (Complete)
 
@@ -482,6 +483,16 @@ Added ZMQ infrastructure to hootenanny:
 
 Migrate holler from custom MCP implementation to baton library:
 - See `docs/agents/plans/hollerbaton/README.md`
+
+### 13-wire-daemon (Next)
+
+Replace StubHandler with real state management:
+- Create `GardenDaemon` struct holding all state (regions, graph, tempo_map, etc.)
+- Wire shell commands to real implementations (Play/Pause/Stop/Seek work)
+- Wire query handler to Trustfall adapter (queries return real data)
+- Wire latent state updates to LatentManager
+- Wire IOPub to broadcast latent events
+- See `docs/agents/plans/chaosgarden/13-wire-daemon.md`
 
 ### 12-luanette-blocking
 

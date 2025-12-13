@@ -13,6 +13,7 @@
 //! - **Query** (REP/REQ): Trustfall queries about graph state
 
 pub mod capabilities;
+pub mod daemon;
 pub mod external_io;
 pub mod graph;
 pub mod ipc;
@@ -48,3 +49,4 @@ pub use nodes::{
 pub use playback::{CompiledGraph, PlaybackEngine, PlaybackPosition};
 pub use primitives::*;
 pub use query::ChaosgardenAdapter;
+pub use daemon::{DaemonConfig, GardenDaemon};
