@@ -1,7 +1,7 @@
 # Tech Debt Cleanup
 
 **Location:** `docs/agents/plans/tech-debt/`
-**Status:** In Progress
+**Status:** ✅ Complete
 
 ---
 
@@ -14,8 +14,8 @@
 | 03-error-discards | ✅ done | A | Fixed 20 `let _ =` patterns |
 | 04-abc-key-parsing | ✅ done | B | Highland bagpipe + explicit accidentals, 9 new tests |
 | 05-dead-code-cleanup | ✅ done | B | Deleted ~65 lines, 8 annotations removed |
-| 06-unwrap-triage | pending | C | Final polish |
-| 07-split-chonkers | pending | C | Refactor large files |
+| 06-unwrap-triage | ✅ done | C | 20 production unwraps replaced with proper error handling |
+| 07-split-chonkers | ✅ done | C | Code organization cleanup, Region module extracted |
 
 ## Success Metrics
 
