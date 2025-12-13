@@ -9,7 +9,7 @@ Restart=always
 RestartSec=5
 
 Environment=RUST_LOG=info
-Environment=OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 
 [Install]
 WantedBy=default.target
