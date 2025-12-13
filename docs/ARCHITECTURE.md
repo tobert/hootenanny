@@ -1,8 +1,8 @@
-# halfremembered-mcp Architecture
+# Hootenanny Architecture
 
 ## Overview
 
-`halfremembered-mcp` is a Rust workspace composed of two main crates:
+Hootenanny is a Rust workspace composed of two main crates:
 1.  **`hootenanny`**: The main application server. It runs the MCP transport (e.g., SSE, WebSockets), manages client connections, and orchestrates the overall state using an event-sourcing persistence layer.
 2.  **`resonode`**: The core music generation engine. It implements the "Alchemical Codex" to translate emotional states (`EmotionalVector`) into musical expression. It is a pure, stateless library.
 

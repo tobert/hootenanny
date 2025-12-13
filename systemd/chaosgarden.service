@@ -3,9 +3,9 @@ Description=Chaosgarden Generative System
 
 [Service]
 Type=simple
-WorkingDirectory=%h/src/halfremembered-mcp
+WorkingDirectory=%h/src/hootenanny
 ExecStartPre=/bin/rm -f /tmp/chaosgarden-control /tmp/chaosgarden-shell /tmp/chaosgarden-iopub /tmp/chaosgarden-hb /tmp/chaosgarden-query
-ExecStart=%h/src/halfremembered-mcp/target/release/chaosgarden
+ExecStart=%h/src/hootenanny/target/release/chaosgarden
 Restart=always
 RestartSec=5
 

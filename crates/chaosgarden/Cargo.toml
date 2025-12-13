@@ -2,7 +2,7 @@
 name = "chaosgarden"
 version = "0.1.0"
 edition = "2021"
-description = "Realtime audio daemon for halfremembered - RT priority playback, graph state, PipeWire I/O"
+description = "Realtime audio daemon for Hootenanny - RT priority playback, graph state, PipeWire I/O"
 
 [dependencies]
 # IPC

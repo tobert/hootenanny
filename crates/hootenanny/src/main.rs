@@ -73,9 +73,9 @@ async fn main() -> Result<()> {
     // Determine state directory - default to persistent location
     let state_dir = cli.state_dir.unwrap_or_else(|| {
         if let Ok(home) = std::env::var("HOME") {
-            PathBuf::from(home).join(".local/share/hrmcp")
+            PathBuf::from(home).join(".local/share/hootenanny")
         } else {
-            PathBuf::from("/tank/halfremembered/hrmcp/default")
+            PathBuf::from("/tank/hootenanny/state/default")
         }
     });
 

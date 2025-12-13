@@ -1,6 +1,6 @@
 //! Chaosgarden: Realtime Audio Daemon
 //!
-//! The realtime audio component of the halfremembered system. A standalone daemon
+//! The realtime audio component of the Hootenanny system. A standalone daemon
 //! with RT priority that handles playback, graph state, and PipeWire I/O.
 //!
 //! Chaosgarden communicates with hootenanny (the control plane) via ZeroMQ using

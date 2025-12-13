@@ -1,10 +1,10 @@
 //! CAS configuration with environment variable and file-based loading.
 //!
 //! Environment variables:
-//! - `HALFREMEMBERED_CAS_PATH`: Base path for CAS storage
-//! - `HALFREMEMBERED_CAS_READONLY`: Set to "true" for read-only mode
+//! - `HOOTENANNY_CAS_PATH`: Base path for CAS storage
+//! - `HOOTENANNY_CAS_READONLY`: Set to "true" for read-only mode
 //!
-//! Default path: `~/.halfremembered/cas`
+//! Default path: `~/.hootenanny/cas`
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -43,25 +43,25 @@ impl Default for CasConfig {
     }
 }
 
-/// Get the default CAS path (~/.halfremembered/cas).
+/// Get the default CAS path (~/.hootenanny/cas).
 fn default_cas_path() -> PathBuf {
     directories::BaseDirs::new()
-        .map(|dirs| dirs.home_dir().join(".halfremembered").join("cas"))
-        .unwrap_or_else(|| PathBuf::from(".halfremembered/cas"))
+        .map(|dirs| dirs.home_dir().join(".hootenanny").join("cas"))
+        .unwrap_or_else(|| PathBuf::from(".hootenanny/cas"))
 }
 
 impl CasConfig {
     /// Load configuration from environment variables, falling back to defaults.
     ///
     /// Environment variables:
-    /// - `HALFREMEMBERED_CAS_PATH`: Override the base path
-    /// - `HALFREMEMBERED_CAS_READONLY`: Set to "true" for read-only mode
+    /// - `HOOTENANNY_CAS_PATH`: Override the base path
+    /// - `HOOTENANNY_CAS_READONLY`: Set to "true" for read-only mode
     pub fn from_env() -> Result<Self> {
-        let base_path = env::var("HALFREMEMBERED_CAS_PATH")
+        let base_path = env::var("HOOTENANNY_CAS_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| default_cas_path());
 
-        let read_only = env::var("HALFREMEMBERED_CAS_READONLY")
+        let read_only = env::var("HOOTENANNY_CAS_READONLY")
             .map(|v| v.to_lowercase() == "true" || v == "1")
             .unwrap_or(false);
 
@@ -77,7 +77,7 @@ impl CasConfig {
     /// The file should contain a `[cas]` section:
     /// ```toml
     /// [cas]
-    /// base_path = "/tank/halfremembered/cas"
+    /// base_path = "/tank/hootenanny/cas"
     /// store_metadata = true
     /// read_only = false
     /// ```
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = CasConfig::default();
-        assert!(config.base_path.to_string_lossy().contains(".halfremembered"));
+        assert!(config.base_path.to_string_lossy().contains(".hootenanny"));
         assert!(config.store_metadata);
         assert!(!config.read_only);
     }
@@ -183,11 +183,11 @@ mod tests {
     #[test]
     fn test_from_env_uses_defaults() {
         // Clear any existing env vars for predictable test
-        env::remove_var("HALFREMEMBERED_CAS_PATH");
-        env::remove_var("HALFREMEMBERED_CAS_READONLY");
+        env::remove_var("HOOTENANNY_CAS_PATH");
+        env::remove_var("HOOTENANNY_CAS_READONLY");
 
         let config = CasConfig::from_env().unwrap();
-        assert!(config.base_path.to_string_lossy().contains(".halfremembered"));
+        assert!(config.base_path.to_string_lossy().contains(".hootenanny"));
         assert!(!config.read_only);
     }
 }

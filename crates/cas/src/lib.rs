@@ -1,4 +1,4 @@
-//! Content Addressable Storage (CAS) for halfremembered.
+//! Content Addressable Storage (CAS) for Hootenanny.
 //!
 //! A shared crate providing content-addressed storage that can be used by:
 //! - **hootenanny** (control plane): writes artifacts, stores metadata
@@ -10,12 +10,12 @@
 //! ```rust,no_run
 //! use cas::{FileStore, ContentStore, CasConfig};
 //!
-//! // Create from environment (reads HALFREMEMBERED_CAS_PATH)
+//! // Create from environment (reads HOOTENANNY_CAS_PATH)
 //! let config = CasConfig::from_env().unwrap();
 //! let store = FileStore::new(config).unwrap();
 //!
 //! // Or at a specific path
-//! let store = FileStore::at_path("/tank/halfremembered/cas").unwrap();
+//! let store = FileStore::at_path("/tank/hootenanny/cas").unwrap();
 //!
 //! // Store content
 //! let hash = store.store(b"Hello, World!", "text/plain").unwrap();
@@ -35,8 +35,8 @@
 //! # Configuration
 //!
 //! Environment variables:
-//! - `HALFREMEMBERED_CAS_PATH`: Base path for storage (default: `~/.halfremembered/cas`)
-//! - `HALFREMEMBERED_CAS_READONLY`: Set to "true" for read-only mode
+//! - `HOOTENANNY_CAS_PATH`: Base path for storage (default: `~/.hootenanny/cas`)
+//! - `HOOTENANNY_CAS_READONLY`: Set to "true" for read-only mode
 //!
 //! # NFS / Shared Storage
 //!

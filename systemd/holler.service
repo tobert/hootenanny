@@ -3,8 +3,8 @@ Description=Holler MCP Gateway
 
 [Service]
 Type=simple
-WorkingDirectory=%h/src/halfremembered-mcp
-ExecStart=%h/src/halfremembered-mcp/target/release/holler serve --port 8080 --hootenanny tcp://localhost:5580 --hootenanny-pub tcp://localhost:5581
+WorkingDirectory=%h/src/hootenanny
+ExecStart=%h/src/hootenanny/target/release/holler serve --port 8080 --hootenanny tcp://localhost:5580 --hootenanny-pub tcp://localhost:5581
 Restart=always
 RestartSec=5
 
