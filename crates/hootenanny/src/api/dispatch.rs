@@ -297,6 +297,13 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Emergency pause".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
         },
+        // Config Tools
+        ToolInfo {
+            name: "config_get".to_string(),
+            description: "Get configuration values (read-only)".to_string(),
+            input_schema: schema_for::<super::tools::config::ConfigGetRequest>(),
+        },
+
         // Garden region operations
         ToolInfo {
             name: "garden_create_region".to_string(),
@@ -503,6 +510,13 @@ pub async fn dispatch_tool(
         "garden_emergency_pause" => {
             tool_to_json(server.garden_emergency_pause().await)
         }
+
+        // Config tools
+        "config_get" => {
+            let request: super::tools::config::ConfigGetRequest = parse_args(args)?;
+            tool_to_json(server.config_get(request).await)
+        }
+
         "garden_create_region" => {
             let request: super::tools::garden::GardenCreateRegionRequest = parse_args(args)?;
             tool_to_json(server.garden_create_region(request).await)

@@ -1,0 +1,16 @@
+[package]
+name = "hoot-config"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal configuration loading for Hootenanny"
+license = "MIT"
+
+# KEEP DEPS MINIMAL - this crate is imported everywhere
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+directories = "5"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1517,6 +1517,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hoot-config"
+version = "0.1.0"
+dependencies = [
+ "directories",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.17",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "hootenanny"
 version = "0.1.0"
 dependencies = [
@@ -1537,6 +1548,7 @@ dependencies = [
  "dashmap 6.1.0",
  "futures",
  "hex",
+ "hoot-config",
  "hooteproto",
  "hound",
  "opentelemetry",

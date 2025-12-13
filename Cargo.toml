@@ -5,12 +5,12 @@ members = [
     "crates/cas",
     "crates/chaosgarden",
     "crates/holler",
+    "crates/hoot-config",
     "crates/hootenanny",
     "crates/hooteproto",
     "crates/hrcli",
     "crates/audio-graph-mcp",
     "crates/llmchat",
-
     "crates/luanette",
 ]
 resolver = "2"
