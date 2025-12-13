@@ -336,36 +336,21 @@ fn garden_reply_to_payload(reply: garden::ShellReply) -> Result<Payload> {
 }
 
 /// Pool of backend connections
+///
+/// Simplified to only connect to hootenanny, which proxies to luanette and chaosgarden.
 pub struct BackendPool {
-    pub luanette: Option<Arc<Backend>>,
     pub hootenanny: Option<Arc<Backend>>,
-    pub chaosgarden: Option<Arc<Backend>>,
 }
 
 impl BackendPool {
     /// Create a new empty pool
     pub fn new() -> Self {
         Self {
-            luanette: None,
             hootenanny: None,
-            chaosgarden: None,
         }
     }
 
-    /// Connect to Luanette
-    pub async fn connect_luanette(&mut self, endpoint: &str, timeout_ms: u64) -> Result<()> {
-        let backend = Backend::connect(BackendConfig {
-            name: "luanette".to_string(),
-            endpoint: endpoint.to_string(),
-            timeout_ms,
-            protocol: Protocol::Hootenanny,
-        })
-        .await?;
-        self.luanette = Some(Arc::new(backend));
-        Ok(())
-    }
-
-    /// Connect to Hootenanny
+    /// Connect to Hootenanny (the unified backend)
     pub async fn connect_hootenanny(&mut self, endpoint: &str, timeout_ms: u64) -> Result<()> {
         let backend = Backend::connect(BackendConfig {
             name: "hootenanny".to_string(),
@@ -378,82 +363,29 @@ impl BackendPool {
         Ok(())
     }
 
-    /// Connect to Chaosgarden
-    pub async fn connect_chaosgarden(&mut self, endpoint: &str, timeout_ms: u64) -> Result<()> {
-        let backend = Backend::connect(BackendConfig {
-            name: "chaosgarden".to_string(),
-            endpoint: endpoint.to_string(),
-            timeout_ms,
-            protocol: Protocol::Chaosgarden,
-        })
-        .await?;
-        self.chaosgarden = Some(Arc::new(backend));
-        Ok(())
+    /// Route all tool calls to hootenanny
+    ///
+    /// Hootenanny handles everything directly or proxies to:
+    /// - luanette: lua_*, script_*, job_*
+    /// - chaosgarden: garden_*, transport_*, timeline_*
+    pub fn route_tool(&self, _tool_name: &str) -> Option<Arc<Backend>> {
+        self.hootenanny.clone()
     }
 
-    /// Route a tool call to the appropriate backend based on prefix
-    pub fn route_tool(&self, tool_name: &str) -> Option<Arc<Backend>> {
-        // Route by prefix - Luanette handles Lua scripts and job orchestration
-        if tool_name.starts_with("lua_")
-            || tool_name.starts_with("script_")
-        {
-            return self.luanette.clone();
-        }
-
-        // Hootenanny handles everything else: CAS, artifacts, graph, orpheus, musicgen,
-        // soundfont, ABC, analysis, generation, garden proxy, jobs, etc.
-        if tool_name.starts_with("cas_")
-            || tool_name.starts_with("artifact_")
-            || tool_name.starts_with("graph_")
-            || tool_name.starts_with("add_annotation")
-            || tool_name.starts_with("orpheus_")
-            || tool_name.starts_with("musicgen_")
-            || tool_name.starts_with("yue_")
-            || tool_name.starts_with("convert_")
-            || tool_name.starts_with("soundfont_")
-            || tool_name.starts_with("abc_")
-            || tool_name.starts_with("beatthis_")
-            || tool_name.starts_with("clap_")
-            || tool_name.starts_with("garden_")
-            || tool_name.starts_with("job_")
-            || tool_name.starts_with("sample_llm")
-        {
-            return self.hootenanny.clone();
-        }
-
-        // Chaosgarden handles transport and timeline
-        if tool_name.starts_with("transport_") || tool_name.starts_with("timeline_") {
-            return self.chaosgarden.clone();
-        }
-
-        None
-    }
-
-    /// Get health status of all backends (uses health tracker, no network call)
+    /// Get health status of hootenanny
     pub async fn health(&self) -> serde_json::Value {
         let mut backends = serde_json::Map::new();
-
-        if let Some(ref b) = self.luanette {
-            backends.insert("luanette".to_string(), b.health.health_summary().await);
-        }
 
         if let Some(ref b) = self.hootenanny {
             backends.insert("hootenanny".to_string(), b.health.health_summary().await);
         }
 
-        if let Some(ref b) = self.chaosgarden {
-            backends.insert("chaosgarden".to_string(), b.health.health_summary().await);
-        }
-
         serde_json::Value::Object(backends)
     }
 
-    /// Check if all connected backends are alive
+    /// Check if hootenanny is alive
     pub fn all_alive(&self) -> bool {
-        let luanette_ok = self.luanette.as_ref().is_none_or(|b| b.is_alive());
-        let hootenanny_ok = self.hootenanny.as_ref().is_none_or(|b| b.is_alive());
-        let chaosgarden_ok = self.chaosgarden.as_ref().is_none_or(|b| b.is_alive());
-        luanette_ok && hootenanny_ok && chaosgarden_ok
+        self.hootenanny.as_ref().is_none_or(|b| b.is_alive())
     }
 }
 

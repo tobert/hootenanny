@@ -15,16 +15,14 @@ use crate::heartbeat::{BackendState, HeartbeatConfig, HeartbeatResult};
 use crate::subscriber::spawn_subscribers;
 
 /// Server configuration
+///
+/// Holler now connects only to hootenanny, which proxies to luanette and chaosgarden.
 pub struct ServeConfig {
     pub port: u16,
-    /// ROUTER endpoints for request/response
-    pub luanette: Option<String>,
-    pub hootenanny: Option<String>,
-    pub chaosgarden: Option<String>,
-    /// PUB endpoints for broadcasts
-    pub luanette_pub: Option<String>,
+    /// Hootenanny ZMQ ROUTER endpoint (required - handles all tools)
+    pub hootenanny: String,
+    /// Hootenanny ZMQ PUB endpoint (optional - for broadcasts/SSE)
     pub hootenanny_pub: Option<String>,
-    pub chaosgarden_pub: Option<String>,
 }
 
 /// Server state for health endpoint
@@ -55,70 +53,33 @@ pub async fn run(config: ServeConfig) -> Result<()> {
     info!("🎺 Holler MCP gateway starting");
     info!("   Port: {}", config.port);
 
-    // Create backend pool
+    // Connect to hootenanny (the unified backend that proxies to luanette and chaosgarden)
+    info!("   Connecting to Hootenanny at {}", config.hootenanny);
     let mut backends = BackendPool::new();
-
-    // Connect to backends - Luanette is optional (may not be running yet due to circular dep)
-    if let Some(ref endpoint) = config.luanette {
-        info!("   Connecting to Luanette at {}", endpoint);
-        match backends.connect_luanette(endpoint, 30000).await {
-            Ok(()) => info!("   ✅ Connected to Luanette"),
-            Err(e) => {
-                tracing::warn!("   ⚠️  Luanette not available (will work without Lua scripting): {}", e);
-            }
-        }
-    }
-
-    if let Some(ref endpoint) = config.hootenanny {
-        info!("   Connecting to Hootenanny at {}", endpoint);
-        backends
-            .connect_hootenanny(endpoint, 5000)
-            .await
-            .context("Failed to connect to Hootenanny")?;
-    }
-
-    if let Some(ref endpoint) = config.chaosgarden {
-        info!("   Connecting to Chaosgarden at {}", endpoint);
-        backends
-            .connect_chaosgarden(endpoint, 1000)
-            .await
-            .context("Failed to connect to Chaosgarden")?;
-    }
+    backends
+        .connect_hootenanny(&config.hootenanny, 5000)
+        .await
+        .context("Failed to connect to Hootenanny")?;
+    info!("   ✅ Connected to Hootenanny");
 
     let backends = Arc::new(backends);
 
     // Create shutdown channel for heartbeat tasks
     let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
 
-    // Spawn heartbeat tasks for connected backends
+    // Spawn heartbeat task for hootenanny
     let heartbeat_config = HeartbeatConfig::default();
     spawn_heartbeat_tasks(&backends, heartbeat_config, shutdown_tx.subscribe());
 
-    // Spawn ZMQ SUB subscribers for backend broadcasts (TODO: wire to baton notifications)
-    let has_subs = config.luanette_pub.is_some()
-        || config.hootenanny_pub.is_some()
-        || config.chaosgarden_pub.is_some();
-
-    if has_subs {
-        info!("   Subscribing to backend broadcasts...");
-        if let Some(ref ep) = config.luanette_pub {
-            info!("      Luanette PUB: {}", ep);
-        }
-        if let Some(ref ep) = config.hootenanny_pub {
-            info!("      Hootenanny PUB: {}", ep);
-        }
-        if let Some(ref ep) = config.chaosgarden_pub {
-            info!("      Chaosgarden PUB: {}", ep);
-        }
-
-        // Create a dummy broadcast channel for now - subscribers will be updated
-        // to use baton's notification system in a future iteration
+    // Spawn ZMQ SUB subscriber for hootenanny broadcasts
+    if let Some(ref hootenanny_pub) = config.hootenanny_pub {
+        info!("   Subscribing to Hootenanny broadcasts at {}", hootenanny_pub);
         let (broadcast_tx, _) = tokio::sync::broadcast::channel::<hooteproto::Broadcast>(256);
         spawn_subscribers(
             broadcast_tx,
-            config.luanette_pub,
-            config.hootenanny_pub,
-            config.chaosgarden_pub,
+            None, // luanette_pub - removed
+            Some(hootenanny_pub.clone()),
+            None, // chaosgarden_pub - removed
         );
     }
 
@@ -199,25 +160,15 @@ async fn shutdown_signal() {
     }
 }
 
-/// Spawn heartbeat monitoring tasks for all connected backends
+/// Spawn heartbeat monitoring task for hootenanny
 fn spawn_heartbeat_tasks(
     backends: &Arc<BackendPool>,
     config: HeartbeatConfig,
     shutdown: tokio::sync::broadcast::Receiver<()>,
 ) {
-    // Spawn heartbeat for hootenanny (primary backend)
+    // Spawn heartbeat for hootenanny (the only backend)
     if let Some(ref backend) = backends.hootenanny {
-        spawn_backend_heartbeat("hootenanny", Arc::clone(backend), config.clone(), shutdown.resubscribe());
-    }
-
-    // Spawn heartbeat for luanette
-    if let Some(ref backend) = backends.luanette {
-        spawn_backend_heartbeat("luanette", Arc::clone(backend), config.clone(), shutdown.resubscribe());
-    }
-
-    // Note: chaosgarden uses a different protocol, heartbeat not yet supported
-    if backends.chaosgarden.is_some() {
-        debug!("Chaosgarden connected but heartbeat not yet implemented for its protocol");
+        spawn_backend_heartbeat("hootenanny", Arc::clone(backend), config, shutdown);
     }
 }
 

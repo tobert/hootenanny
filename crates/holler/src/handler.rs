@@ -8,7 +8,7 @@ use baton::{CallToolResult, Content, ErrorData, Handler, Implementation, Tool, T
 use hooteproto::{Payload, ToolInfo};
 use serde_json::Value;
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{debug, info, warn};
 
 use crate::backend::BackendPool;
 
@@ -122,29 +122,22 @@ impl Handler for ZmqHandler {
     }
 }
 
-/// Async helper to collect tools from backends.
+/// Async helper to collect tools from hootenanny.
 async fn collect_tools_async(backends: &BackendPool) -> Vec<Tool> {
     let mut all_tools = Vec::new();
 
-    // Query each backend dynamically - skip those that don't support ListTools
-    for (name, backend_opt) in [
-        ("luanette", &backends.luanette),
-        ("hootenanny", &backends.hootenanny),
-        ("chaosgarden", &backends.chaosgarden),
-    ] {
-        if let Some(ref backend) = backend_opt {
-            match backend.request(Payload::ListTools).await {
-                Ok(Payload::ToolList { tools }) => {
-                    debug!("Got {} tools from {}", tools.len(), name);
-                    all_tools.extend(tools.into_iter().map(tool_info_to_baton));
-                }
-                Ok(other) => {
-                    debug!("{} returned non-tool response to ListTools: {:?}", name, other);
-                }
-                Err(e) => {
-                    // Backend doesn't support ListTools or isn't available - skip silently
-                    debug!("Skipping {} for tool discovery: {}", name, e);
-                }
+    // Query hootenanny for all tools (it proxies to luanette and chaosgarden)
+    if let Some(ref backend) = backends.hootenanny {
+        match backend.request(Payload::ListTools).await {
+            Ok(Payload::ToolList { tools }) => {
+                debug!("Got {} tools from hootenanny", tools.len());
+                all_tools.extend(tools.into_iter().map(tool_info_to_baton));
+            }
+            Ok(other) => {
+                debug!("hootenanny returned non-tool response to ListTools: {:?}", other);
+            }
+            Err(e) => {
+                warn!("Failed to get tools from hootenanny: {}", e);
             }
         }
     }

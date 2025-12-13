@@ -139,13 +139,15 @@ Update this section as work completes. Check off items, note blockers, add commi
 - [x] Add luanette + chaosgarden status to `/health` endpoint
 - [ ] Commit: _________________
 
-### Phase 5: Holler Simplification
-- [ ] Remove luanette backend config
-- [ ] Remove chaosgarden backend config
-- [ ] Simplify `AppState` to single backend
-- [ ] Remove multi-backend dispatch logic
-- [ ] Update systemd units if needed
-- [ ] Verify: single backend in `/health`
+### Phase 5: Holler Simplification ✅
+- [x] Remove `--luanette` and `--chaosgarden` CLI options from main.rs
+- [x] Simplify `ServeConfig` to only have `hootenanny` and `hootenanny_pub`
+- [x] Simplify `BackendPool` to single `hootenanny` field
+- [x] Simplify `route_tool()` to always return hootenanny
+- [x] Simplify `collect_tools_async()` to query only hootenanny
+- [x] Update `spawn_heartbeat_tasks()` to only monitor hootenanny
+- [x] Update systemd unit to remove luanette/chaosgarden options
+- [x] Verify: single backend in `/health` ✅
 - [ ] Commit: _________________
 
 ### Phase 6: Tool Refresh
