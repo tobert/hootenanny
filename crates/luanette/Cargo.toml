@@ -21,6 +21,9 @@ hooteproto = { path = "../hooteproto" }
 # MCP Framework (kept for now during transition)
 baton = { path = "../baton", features = ["client"] }
 
+# Content Addressable Storage
+cas = { path = "../cas" }
+
 # Lua Runtime
 mlua = { version = "0.10", features = ["lua54", "async", "send", "serialize"] }
 

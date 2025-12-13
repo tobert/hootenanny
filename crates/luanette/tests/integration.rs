@@ -12,6 +12,7 @@ mod common {
         Arc<luanette::runtime::LuaRuntime>,
         Arc<luanette::clients::ClientManager>,
         Arc<luanette::job_system::JobStore>,
+        Arc<cas::FileStore>,
     ) {
         use luanette::clients::ClientManager;
         use luanette::job_system::JobStore;
@@ -24,7 +25,16 @@ mod common {
         let runtime = Arc::new(LuaRuntime::with_mcp_bridge(config, clients.clone()));
         let jobs = Arc::new(JobStore::new());
 
-        (runtime, clients, jobs)
+        // Create a temporary CAS for testing
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let cas = Arc::new(
+            cas::FileStore::at_path(temp_dir.path())
+                .expect("Failed to create test CAS")
+        );
+        // Keep temp_dir alive by leaking it (test-only)
+        std::mem::forget(temp_dir);
+
+        (runtime, clients, jobs, cas)
     }
 }
 
@@ -34,7 +44,7 @@ mod common {
 
 #[tokio::test]
 async fn test_hello_world() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function main(params)
@@ -52,7 +62,7 @@ async fn test_hello_world() {
 
 #[tokio::test]
 async fn test_simple_math() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function main(params)
@@ -70,7 +80,7 @@ async fn test_simple_math() {
 
 #[tokio::test]
 async fn test_table_manipulation() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function main(params)
@@ -92,7 +102,7 @@ async fn test_table_manipulation() {
 
 #[tokio::test]
 async fn test_nested_tables() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function main(params)
@@ -127,7 +137,7 @@ async fn test_nested_tables() {
 
 #[tokio::test]
 async fn test_syntax_error() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function main(params
@@ -145,7 +155,7 @@ async fn test_syntax_error() {
 
 #[tokio::test]
 async fn test_runtime_error() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function main(params)
@@ -167,7 +177,7 @@ async fn test_runtime_error() {
 
 #[tokio::test]
 async fn test_missing_main() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function helper(x)
@@ -188,7 +198,7 @@ async fn test_missing_main() {
 
 #[tokio::test]
 async fn test_type_error() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function main(params)
@@ -206,7 +216,7 @@ async fn test_type_error() {
 
 #[tokio::test]
 async fn test_sandbox_blocks_os_execute() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function main(params)
@@ -221,7 +231,7 @@ async fn test_sandbox_blocks_os_execute() {
 
 #[tokio::test]
 async fn test_sandbox_blocks_dofile() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function main(params)
@@ -236,7 +246,7 @@ async fn test_sandbox_blocks_dofile() {
 
 #[tokio::test]
 async fn test_sandbox_allows_math() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function main(params)
@@ -262,7 +272,7 @@ async fn test_sandbox_allows_math() {
 
 #[tokio::test]
 async fn test_sandbox_allows_string() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function main(params)
@@ -293,7 +303,7 @@ async fn test_sandbox_allows_string() {
 
 #[tokio::test]
 async fn test_logging() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function main(params)
@@ -314,7 +324,7 @@ async fn test_logging() {
 
 #[tokio::test]
 async fn test_describe_function() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function describe()
@@ -413,7 +423,7 @@ async fn test_job_cancellation() {
 
 #[tokio::test]
 async fn test_recursive_function() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function factorial(n)
@@ -439,7 +449,7 @@ async fn test_recursive_function() {
 
 #[tokio::test]
 async fn test_closures() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function make_counter(start)
@@ -473,7 +483,7 @@ async fn test_closures() {
 
 #[tokio::test]
 async fn test_error_handling_pcall() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function risky_operation()
@@ -505,7 +515,7 @@ async fn test_error_handling_pcall() {
 
 #[tokio::test]
 async fn test_midi_transpose_available() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function main(params)
@@ -543,7 +553,7 @@ async fn test_midi_transpose_available() {
 
 #[tokio::test]
 async fn test_temp_path_available() {
-    let (runtime, _, _) = common::create_test_runtime();
+    let (runtime, _, _, _) = common::create_test_runtime();
 
     let code = r#"
         function main(params)

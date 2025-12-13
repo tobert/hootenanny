@@ -3,8 +3,10 @@
 //! This module bridges hooteproto messages to the existing Luanette
 //! implementation, handling conversion between protocol types and internal types.
 
+use cas::{ContentHash, ContentStore, FileStore};
 use hooteproto::{JobId, JobStatus, Payload, PollMode, ToolInfo};
 use serde_json::Value;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, instrument};
@@ -17,11 +19,12 @@ use crate::runtime::LuaRuntime;
 pub struct Dispatcher {
     runtime: Arc<LuaRuntime>,
     jobs: Arc<JobStore>,
+    cas: Arc<FileStore>,
 }
 
 impl Dispatcher {
-    pub fn new(runtime: Arc<LuaRuntime>, jobs: Arc<JobStore>) -> Self {
-        Self { runtime, jobs }
+    pub fn new(runtime: Arc<LuaRuntime>, jobs: Arc<JobStore>, cas: Arc<FileStore>) -> Self {
+        Self { runtime, jobs, cas }
     }
 
     /// Evaluate Lua code directly
@@ -110,25 +113,86 @@ impl Dispatcher {
     }
 
     /// Execute a script from CAS asynchronously
-    #[instrument(skip(self, _params, _tags))]
+    #[instrument(skip(self, params, _tags))]
     pub async fn job_execute(
         &self,
         script_hash: &str,
-        _params: Value,
+        params: Value,
         _tags: Option<Vec<String>>,
     ) -> Payload {
-        // TODO: Fetch script from CAS and execute
-        // For now, create a job but don't actually run it
-        debug!("job_execute not fully implemented yet - needs CAS integration");
+        // 1. Parse and validate hash
+        let hash = match ContentHash::from_str(script_hash) {
+            Ok(h) => h,
+            Err(e) => {
+                return Payload::Error {
+                    code: "invalid_hash".to_string(),
+                    message: format!("Invalid content hash: {}", e),
+                    details: None,
+                }
+            }
+        };
 
+        // 2. Fetch script from CAS
+        let script_content = match self.cas.retrieve(&hash) {
+            Ok(Some(bytes)) => match String::from_utf8(bytes) {
+                Ok(s) => s,
+                Err(e) => {
+                    return Payload::Error {
+                        code: "invalid_script".to_string(),
+                        message: format!("Script is not valid UTF-8: {}", e),
+                        details: None,
+                    }
+                }
+            },
+            Ok(None) => {
+                return Payload::Error {
+                    code: "script_not_found".to_string(),
+                    message: format!("Script not found in CAS: {}", script_hash),
+                    details: None,
+                }
+            }
+            Err(e) => {
+                return Payload::Error {
+                    code: "cas_fetch_failed".to_string(),
+                    message: e.to_string(),
+                    details: None,
+                }
+            }
+        };
+
+        // 3. Create job
         let job_id = self.jobs.create_job(script_hash.to_string());
+
+        // 4. Spawn async execution
+        let runtime = self.runtime.clone();
+        let jobs = self.jobs.clone();
+        let job_id_clone = job_id.clone();
+        tokio::spawn(async move {
+            if let Err(e) = jobs.mark_running(&job_id_clone) {
+                tracing::warn!(job_id = %job_id_clone, error = %e, "Failed to mark job running");
+            }
+
+            match runtime.execute(&script_content, params).await {
+                Ok(exec_result) => {
+                    if let Err(e) = jobs.mark_complete(
+                        &job_id_clone,
+                        serde_json::to_value(exec_result.result).unwrap_or_default(),
+                    ) {
+                        tracing::warn!(job_id = %job_id_clone, error = %e, "Failed to mark job complete");
+                    }
+                }
+                Err(e) => {
+                    if let Err(e2) = jobs.mark_failed(&job_id_clone, format_lua_error(&e)) {
+                        tracing::warn!(job_id = %job_id_clone, error = %e2, "Failed to mark job failed");
+                    }
+                }
+            }
+        });
 
         Payload::Success {
             result: serde_json::json!({
                 "job_id": job_id.to_string(),
-                "script_hash": script_hash,
-                "status": "pending",
-                "note": "CAS integration not yet implemented"
+                "script_hash": script_hash
             }),
         }
     }

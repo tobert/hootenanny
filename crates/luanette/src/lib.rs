@@ -20,7 +20,6 @@
 pub mod clients;
 pub mod dispatch;
 pub mod error;
-pub mod handler;
 pub mod job_system;
 pub mod otel_bridge;
 pub mod runtime;
@@ -32,7 +31,6 @@ pub mod zmq_server;
 
 // Re-export key types for library users
 pub use dispatch::Dispatcher;
-pub use handler::LuanetteHandler;
 pub use hooteproto::{JobId, JobInfo, JobStatus};
 pub use job_system::JobStore;
 pub use zmq_server::{Server as ZmqServer, ServerConfig as ZmqServerConfig};

@@ -12,6 +12,7 @@ mod tool_bridge;
 mod zmq_server;
 
 use anyhow::{Context, Result};
+use cas::{CasConfig, FileStore};
 use clap::{Parser, Subcommand};
 use dispatch::Dispatcher;
 use job_system::JobStore;
@@ -114,8 +115,13 @@ async fn run_zmq_server(bind: &str, name: &str, timeout_secs: u64, hootenanny_en
     // Create job store
     let job_store = Arc::new(JobStore::new());
 
+    // Create CAS client
+    let cas_config = CasConfig::from_env().context("Failed to load CAS configuration")?;
+    let cas = Arc::new(FileStore::new(cas_config).context("Failed to create CAS client")?);
+    tracing::info!("CAS initialized at {:?}", cas.config().base_path);
+
     // Create dispatcher
-    let dispatcher = Dispatcher::new(runtime, job_store);
+    let dispatcher = Dispatcher::new(runtime, job_store, cas);
 
     // Create server config
     let config = ServerConfig {
