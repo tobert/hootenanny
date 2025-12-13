@@ -605,6 +605,23 @@ pub enum Payload {
         variables: Option<serde_json::Value>,
     },
     GardenEmergencyPause,
+    GardenCreateRegion {
+        position: f64,
+        duration: f64,
+        behavior_type: String,
+        content_id: String,
+    },
+    GardenDeleteRegion {
+        region_id: String,
+    },
+    GardenMoveRegion {
+        region_id: String,
+        new_position: f64,
+    },
+    GardenGetRegions {
+        start: Option<f64>,
+        end: Option<f64>,
+    },
 
     // === Misc Tools ===
     // Aligned with hootenanny api::schema types

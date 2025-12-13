@@ -633,6 +633,52 @@ pub fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
             variables: args.get("variables").cloned(),
         }),
 
+        "garden_create_region" => Ok(Payload::GardenCreateRegion {
+            position: args
+                .get("position")
+                .and_then(|v| v.as_f64())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'position' argument"))?,
+            duration: args
+                .get("duration")
+                .and_then(|v| v.as_f64())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'duration' argument"))?,
+            behavior_type: args
+                .get("behavior_type")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'behavior_type' argument"))?
+                .to_string(),
+            content_id: args
+                .get("content_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'content_id' argument"))?
+                .to_string(),
+        }),
+
+        "garden_delete_region" => Ok(Payload::GardenDeleteRegion {
+            region_id: args
+                .get("region_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'region_id' argument"))?
+                .to_string(),
+        }),
+
+        "garden_move_region" => Ok(Payload::GardenMoveRegion {
+            region_id: args
+                .get("region_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'region_id' argument"))?
+                .to_string(),
+            new_position: args
+                .get("new_position")
+                .and_then(|v| v.as_f64())
+                .ok_or_else(|| anyhow::anyhow!("Missing 'new_position' argument"))?,
+        }),
+
+        "garden_get_regions" => Ok(Payload::GardenGetRegions {
+            start: args.get("start").and_then(|v| v.as_f64()),
+            end: args.get("end").and_then(|v| v.as_f64()),
+        }),
+
         // === LLM Tools ===
         "sample_llm" => Ok(Payload::SampleLlm {
             prompt: args

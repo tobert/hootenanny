@@ -6,8 +6,9 @@
 use crate::api::schema::*;
 use crate::api::service::EventDualityServer;
 use audio_graph_mcp::{graph_bind, graph_connect, graph_find, graph_tag, HintKind};
-use hooteproto::{ToolResult, ToolError};
+use hooteproto::{ToolResult, ToolError, ToolInfo};
 use serde_json::Value;
+use schemars::JsonSchema;
 
 /// Result of tool dispatch - either success with JSON or error with details
 pub type DispatchResult = Result<Value, DispatchError>;
@@ -54,6 +55,270 @@ impl DispatchError {
             details: None,
         }
     }
+}
+
+/// Helper to generate JSON schema for a type
+fn schema_for<T: JsonSchema>() -> Value {
+    let settings = schemars::generate::SchemaSettings::draft07().with(|s| {
+        s.inline_subschemas = true;
+    });
+    let gen = settings.into_generator();
+    let schema = gen.into_root_schema_for::<T>();
+    serde_json::to_value(schema).unwrap_or_default()
+}
+
+/// List all tools supported by the dispatcher
+pub fn list_tools() -> Vec<ToolInfo> {
+    vec![
+        // CAS Tools
+        ToolInfo {
+            name: "cas_store".to_string(),
+            description: "Store raw content in CAS".to_string(),
+            input_schema: schema_for::<CasStoreRequest>(),
+        },
+        ToolInfo {
+            name: "cas_inspect".to_string(),
+            description: "Inspect content in CAS".to_string(),
+            input_schema: schema_for::<CasInspectRequest>(),
+        },
+        ToolInfo {
+            name: "cas_upload_file".to_string(),
+            description: "Upload file from disk to CAS".to_string(),
+            input_schema: schema_for::<UploadFileRequest>(),
+        },
+        ToolInfo {
+            name: "artifact_upload".to_string(),
+            description: "Upload file and create artifact".to_string(),
+            input_schema: schema_for::<ArtifactUploadRequest>(),
+        },
+
+        // Conversion Tools
+        ToolInfo {
+            name: "convert_midi_to_wav".to_string(),
+            description: "Render MIDI to WAV using SoundFont".to_string(),
+            input_schema: schema_for::<MidiToWavRequest>(),
+        },
+        ToolInfo {
+            name: "soundfont_inspect".to_string(),
+            description: "Inspect SoundFont presets".to_string(),
+            input_schema: schema_for::<SoundfontInspectRequest>(),
+        },
+        ToolInfo {
+            name: "soundfont_preset_inspect".to_string(),
+            description: "Inspect specific SoundFont preset".to_string(),
+            input_schema: schema_for::<SoundfontPresetInspectRequest>(),
+        },
+
+        // Orpheus Tools
+        ToolInfo {
+            name: "orpheus_generate".to_string(),
+            description: "Generate MIDI from scratch".to_string(),
+            input_schema: schema_for::<OrpheusGenerateRequest>(),
+        },
+        ToolInfo {
+            name: "orpheus_generate_seeded".to_string(),
+            description: "Generate MIDI from seed".to_string(),
+            input_schema: schema_for::<OrpheusGenerateSeededRequest>(),
+        },
+        ToolInfo {
+            name: "orpheus_continue".to_string(),
+            description: "Continue existing MIDI".to_string(),
+            input_schema: schema_for::<OrpheusContinueRequest>(),
+        },
+        ToolInfo {
+            name: "orpheus_bridge".to_string(),
+            description: "Create bridge between two MIDI sections".to_string(),
+            input_schema: schema_for::<OrpheusBridgeRequest>(),
+        },
+        ToolInfo {
+            name: "orpheus_loops".to_string(),
+            description: "Generate loopable MIDI".to_string(),
+            input_schema: schema_for::<OrpheusLoopsRequest>(),
+        },
+        ToolInfo {
+            name: "orpheus_classify".to_string(),
+            description: "Classify MIDI content".to_string(),
+            input_schema: schema_for::<OrpheusClassifyRequest>(),
+        },
+
+        // Job Tools
+        ToolInfo {
+            name: "job_status".to_string(),
+            description: "Get status of a job".to_string(),
+            input_schema: schema_for::<GetJobStatusRequest>(),
+        },
+        ToolInfo {
+            name: "job_list".to_string(),
+            description: "List all jobs".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "status": { "type": "string" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "job_cancel".to_string(),
+            description: "Cancel a running job".to_string(),
+            input_schema: schema_for::<CancelJobRequest>(),
+        },
+        ToolInfo {
+            name: "job_poll".to_string(),
+            description: "Poll for job completion".to_string(),
+            input_schema: schema_for::<PollRequest>(),
+        },
+        ToolInfo {
+            name: "job_sleep".to_string(),
+            description: "Sleep for a duration".to_string(),
+            input_schema: schema_for::<SleepRequest>(),
+        },
+
+        // Graph Tools
+        ToolInfo {
+            name: "graph_bind".to_string(),
+            description: "Bind an identity to a device".to_string(),
+            input_schema: schema_for::<GraphBindRequest>(),
+        },
+        ToolInfo {
+            name: "graph_tag".to_string(),
+            description: "Tag an identity".to_string(),
+            input_schema: schema_for::<GraphTagRequest>(),
+        },
+        ToolInfo {
+            name: "graph_connect".to_string(),
+            description: "Connect two identities".to_string(),
+            input_schema: schema_for::<GraphConnectRequest>(),
+        },
+        ToolInfo {
+            name: "graph_find".to_string(),
+            description: "Find identities".to_string(),
+            input_schema: schema_for::<GraphFindRequest>(),
+        },
+        ToolInfo {
+            name: "graph_context".to_string(),
+            description: "Get graph context for LLM".to_string(),
+            input_schema: schema_for::<GraphContextRequest>(),
+        },
+        ToolInfo {
+            name: "graph_query".to_string(),
+            description: "Execute Trustfall query on graph".to_string(),
+            input_schema: schema_for::<GraphQueryRequest>(),
+        },
+        ToolInfo {
+            name: "add_annotation".to_string(),
+            description: "Add annotation to artifact".to_string(),
+            input_schema: schema_for::<AddAnnotationRequest>(),
+        },
+
+        // ABC Tools
+        ToolInfo {
+            name: "abc_parse".to_string(),
+            description: "Parse ABC notation".to_string(),
+            input_schema: schema_for::<AbcParseRequest>(),
+        },
+        ToolInfo {
+            name: "abc_to_midi".to_string(),
+            description: "Convert ABC to MIDI".to_string(),
+            input_schema: schema_for::<AbcToMidiRequest>(),
+        },
+        ToolInfo {
+            name: "abc_validate".to_string(),
+            description: "Validate ABC notation".to_string(),
+            input_schema: schema_for::<AbcValidateRequest>(),
+        },
+        ToolInfo {
+            name: "abc_transpose".to_string(),
+            description: "Transpose ABC notation".to_string(),
+            input_schema: schema_for::<AbcTransposeRequest>(),
+        },
+
+        // Analysis Tools
+        ToolInfo {
+            name: "beatthis_analyze".to_string(),
+            description: "Analyze beats in audio".to_string(),
+            input_schema: schema_for::<AnalyzeBeatsRequest>(),
+        },
+        ToolInfo {
+            name: "clap_analyze".to_string(),
+            description: "Analyze audio with CLAP".to_string(),
+            input_schema: schema_for::<ClapAnalyzeRequest>(),
+        },
+
+        // Generation Tools
+        ToolInfo {
+            name: "musicgen_generate".to_string(),
+            description: "Generate audio with MusicGen".to_string(),
+            input_schema: schema_for::<MusicgenGenerateRequest>(),
+        },
+        ToolInfo {
+            name: "yue_generate".to_string(),
+            description: "Generate song with YuE".to_string(),
+            input_schema: schema_for::<YueGenerateRequest>(),
+        },
+
+        // Garden Tools
+        ToolInfo {
+            name: "garden_status".to_string(),
+            description: "Get chaosgarden status".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        },
+        ToolInfo {
+            name: "garden_play".to_string(),
+            description: "Start playback".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        },
+        ToolInfo {
+            name: "garden_pause".to_string(),
+            description: "Pause playback".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        },
+        ToolInfo {
+            name: "garden_stop".to_string(),
+            description: "Stop playback".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        },
+        ToolInfo {
+            name: "garden_seek".to_string(),
+            description: "Seek to position".to_string(),
+            input_schema: schema_for::<super::tools::garden::GardenSeekRequest>(),
+        },
+        ToolInfo {
+            name: "garden_set_tempo".to_string(),
+            description: "Set tempo".to_string(),
+            input_schema: schema_for::<super::tools::garden::GardenSetTempoRequest>(),
+        },
+        ToolInfo {
+            name: "garden_query".to_string(),
+            description: "Query garden state".to_string(),
+            input_schema: schema_for::<super::tools::garden::GardenQueryRequest>(),
+        },
+        ToolInfo {
+            name: "garden_emergency_pause".to_string(),
+            description: "Emergency pause".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        },
+        // Garden region operations
+        ToolInfo {
+            name: "garden_create_region".to_string(),
+            description: "Create a region on the timeline".to_string(),
+            input_schema: schema_for::<super::tools::garden::GardenCreateRegionRequest>(),
+        },
+        ToolInfo {
+            name: "garden_delete_region".to_string(),
+            description: "Delete a region from the timeline".to_string(),
+            input_schema: schema_for::<super::tools::garden::GardenDeleteRegionRequest>(),
+        },
+        ToolInfo {
+            name: "garden_move_region".to_string(),
+            description: "Move a region to a new position".to_string(),
+            input_schema: schema_for::<super::tools::garden::GardenMoveRegionRequest>(),
+        },
+        ToolInfo {
+            name: "garden_get_regions".to_string(),
+            description: "Get regions from the timeline".to_string(),
+            input_schema: schema_for::<super::tools::garden::GardenGetRegionsRequest>(),
+        },
+    ]
 }
 
 /// Dispatch a tool call to the appropriate handler
@@ -237,6 +502,22 @@ pub async fn dispatch_tool(
         }
         "garden_emergency_pause" => {
             tool_to_json(server.garden_emergency_pause().await)
+        }
+        "garden_create_region" => {
+            let request: super::tools::garden::GardenCreateRegionRequest = parse_args(args)?;
+            tool_to_json(server.garden_create_region(request).await)
+        }
+        "garden_delete_region" => {
+            let request: super::tools::garden::GardenDeleteRegionRequest = parse_args(args)?;
+            tool_to_json(server.garden_delete_region(request).await)
+        }
+        "garden_move_region" => {
+            let request: super::tools::garden::GardenMoveRegionRequest = parse_args(args)?;
+            tool_to_json(server.garden_move_region(request).await)
+        }
+        "garden_get_regions" => {
+            let request: super::tools::garden::GardenGetRegionsRequest = parse_args(args)?;
+            tool_to_json(server.garden_get_regions(request).await)
         }
 
         _ => Err(DispatchError::not_found(name)),

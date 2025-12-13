@@ -48,6 +48,44 @@ pub struct GardenQueryRequest {
     pub variables: serde_json::Value,
 }
 
+/// Request to create a region on the timeline
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GardenCreateRegionRequest {
+    /// Position in beats
+    pub position: f64,
+    /// Duration in beats
+    pub duration: f64,
+    /// Behavior type: "play_content" or "latent"
+    pub behavior_type: String,
+    /// For play_content: artifact_id. For latent: job_id
+    pub content_id: String,
+}
+
+/// Request to delete a region
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GardenDeleteRegionRequest {
+    /// Region UUID
+    pub region_id: String,
+}
+
+/// Request to move a region
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GardenMoveRegionRequest {
+    /// Region UUID
+    pub region_id: String,
+    /// New position in beats
+    pub new_position: f64,
+}
+
+/// Request to get regions (optionally in a range)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GardenGetRegionsRequest {
+    /// Optional start beat (inclusive)
+    pub start: Option<f64>,
+    /// Optional end beat (exclusive)
+    pub end: Option<f64>,
+}
+
 impl EventDualityServer {
     fn require_garden(&self) -> Result<(), ToolError> {
         if self.garden_manager.is_none() {
@@ -265,6 +303,156 @@ impl EventDualityServer {
             Err(e) => {
                 Err(ToolError::internal(format!("Emergency pause failed: {}", e)))
             }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Region Operations
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[tracing::instrument(name = "mcp.tool.garden_create_region", skip(self, request))]
+    pub async fn garden_create_region(&self, request: GardenCreateRegionRequest) -> ToolResult {
+        self.require_garden()?;
+        let manager = self.garden_manager.as_ref().unwrap();
+
+        use chaosgarden::ipc::{Beat, Behavior, ShellRequest};
+
+        let behavior = match request.behavior_type.as_str() {
+            "play_content" => Behavior::PlayContent { artifact_id: request.content_id },
+            "latent" => Behavior::Latent { job_id: request.content_id },
+            other => return Err(ToolError::invalid_params(format!("Unknown behavior_type: {}. Use 'play_content' or 'latent'", other))),
+        };
+
+        let shell_req = ShellRequest::CreateRegion {
+            position: Beat(request.position),
+            duration: Beat(request.duration),
+            behavior,
+        };
+
+        match manager.request(shell_req).await {
+            Ok(chaosgarden::ipc::ShellReply::RegionCreated { region_id }) => {
+                let response = GardenResponse {
+                    success: true,
+                    message: format!("Region created: {}", region_id),
+                    data: Some(serde_json::json!({
+                        "region_id": region_id.to_string(),
+                        "position": request.position,
+                        "duration": request.duration,
+                    })),
+                };
+                let json = serde_json::to_string_pretty(&response)
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
+            }
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Create region failed: {}", e))),
+        }
+    }
+
+    #[tracing::instrument(name = "mcp.tool.garden_delete_region", skip(self))]
+    pub async fn garden_delete_region(&self, request: GardenDeleteRegionRequest) -> ToolResult {
+        self.require_garden()?;
+        let manager = self.garden_manager.as_ref().unwrap();
+
+        use chaosgarden::ipc::ShellRequest;
+        use uuid::Uuid;
+
+        let region_id = Uuid::parse_str(&request.region_id)
+            .map_err(|e| ToolError::invalid_params(format!("Invalid region_id: {}", e)))?;
+
+        match manager.request(ShellRequest::DeleteRegion { region_id }).await {
+            Ok(chaosgarden::ipc::ShellReply::Ok { .. }) => {
+                let response = GardenResponse {
+                    success: true,
+                    message: format!("Region {} deleted", region_id),
+                    data: Some(serde_json::json!({"deleted": region_id.to_string()})),
+                };
+                let json = serde_json::to_string_pretty(&response)
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
+            }
+            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
+                Err(ToolError::internal(error))
+            }
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Delete region failed: {}", e))),
+        }
+    }
+
+    #[tracing::instrument(name = "mcp.tool.garden_move_region", skip(self))]
+    pub async fn garden_move_region(&self, request: GardenMoveRegionRequest) -> ToolResult {
+        self.require_garden()?;
+        let manager = self.garden_manager.as_ref().unwrap();
+
+        use chaosgarden::ipc::{Beat, ShellRequest};
+        use uuid::Uuid;
+
+        let region_id = Uuid::parse_str(&request.region_id)
+            .map_err(|e| ToolError::invalid_params(format!("Invalid region_id: {}", e)))?;
+
+        match manager.request(ShellRequest::MoveRegion {
+            region_id,
+            new_position: Beat(request.new_position),
+        }).await {
+            Ok(chaosgarden::ipc::ShellReply::Ok { .. }) => {
+                let response = GardenResponse {
+                    success: true,
+                    message: format!("Region {} moved to beat {}", region_id, request.new_position),
+                    data: Some(serde_json::json!({
+                        "region_id": region_id.to_string(),
+                        "new_position": request.new_position,
+                    })),
+                };
+                let json = serde_json::to_string_pretty(&response)
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
+            }
+            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
+                Err(ToolError::internal(error))
+            }
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Move region failed: {}", e))),
+        }
+    }
+
+    #[tracing::instrument(name = "mcp.tool.garden_get_regions", skip(self))]
+    pub async fn garden_get_regions(&self, request: GardenGetRegionsRequest) -> ToolResult {
+        self.require_garden()?;
+        let manager = self.garden_manager.as_ref().unwrap();
+
+        use chaosgarden::ipc::{Beat, ShellRequest};
+
+        let range = match (request.start, request.end) {
+            (Some(s), Some(e)) => Some((Beat(s), Beat(e))),
+            _ => None,
+        };
+
+        match manager.request(ShellRequest::GetRegions { range }).await {
+            Ok(chaosgarden::ipc::ShellReply::Regions { regions }) => {
+                let regions_json: Vec<serde_json::Value> = regions.iter().map(|r| {
+                    serde_json::json!({
+                        "region_id": r.region_id.to_string(),
+                        "position": r.position.0,
+                        "duration": r.duration.0,
+                        "is_latent": r.is_latent,
+                        "artifact_id": r.artifact_id,
+                    })
+                }).collect();
+
+                let response = GardenResponse {
+                    success: true,
+                    message: format!("Found {} regions", regions.len()),
+                    data: Some(serde_json::json!({
+                        "count": regions.len(),
+                        "regions": regions_json,
+                    })),
+                };
+                let json = serde_json::to_string_pretty(&response)
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
+            }
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Get regions failed: {}", e))),
         }
     }
 }
