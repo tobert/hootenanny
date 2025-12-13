@@ -31,6 +31,7 @@ audio-graph-mcp = { path = "../audio-graph-mcp" }
 hooteproto = { path = "../hooteproto" }
 
 # ZMQ for internal IPC
+bytes = "1.9"
 zeromq = "0.4"
 rmp-serde = "1"
 trustfall = "0.8"

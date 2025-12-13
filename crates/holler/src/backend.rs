@@ -2,15 +2,21 @@
 //!
 //! Manages connections to Luanette, Hootenanny, and Chaosgarden backends.
 //! Supports both standard Hootenanny protocol (MsgPack Envelope) and Chaosgarden protocol (MsgPack Message).
+//!
+//! Health tracking via the HealthTracker struct enables the Paranoid Pirate pattern
+//! for detecting backend failures and triggering reconnection.
 
 use anyhow::{Context, Result};
-use hooteproto::{garden, Envelope, Payload};
+use bytes::Bytes;
+use hooteproto::{garden, Command, Envelope, HootFrame, Payload, PROTOCOL_VERSION};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 use zeromq::{DealerSocket, Socket, SocketRecv, SocketSend, ZmqMessage};
+
+use crate::heartbeat::{BackendState, HeartbeatResult, HealthTracker};
 
 /// Protocol used by the backend
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -34,6 +40,8 @@ pub struct BackendConfig {
 pub struct Backend {
     pub config: BackendConfig,
     socket: RwLock<DealerSocket>,
+    /// Health tracking for heartbeat monitoring
+    pub health: Arc<HealthTracker>,
 }
 
 impl Backend {
@@ -51,10 +59,78 @@ impl Backend {
 
         info!("Connected to {} at {} ({:?})", config.name, config.endpoint, config.protocol);
 
+        let health = Arc::new(HealthTracker::new());
+        health.set_state(BackendState::Ready);
+
         Ok(Self {
             config,
             socket: RwLock::new(socket),
+            health,
         })
+    }
+
+    /// Get current backend state
+    pub fn state(&self) -> BackendState {
+        self.health.get_state()
+    }
+
+    /// Check if backend is alive (Ready or Busy)
+    pub fn is_alive(&self) -> bool {
+        self.health.is_alive()
+    }
+
+    /// Send a HOOT01 heartbeat and wait for response
+    ///
+    /// This uses the new frame protocol for efficient heartbeating without
+    /// MsgPack serialization overhead.
+    pub async fn send_heartbeat(&self, timeout: Duration) -> HeartbeatResult {
+        let frame = HootFrame::heartbeat(&self.config.name);
+        let frames = frame.to_frames();
+        let msg = frames_to_zmq_message(&frames);
+
+        let mut socket = self.socket.write().await;
+
+        // Send heartbeat
+        match tokio::time::timeout(timeout, socket.send(msg)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return HeartbeatResult::Error(format!("Send failed: {}", e)),
+            Err(_) => return HeartbeatResult::Timeout,
+        }
+
+        // Wait for response
+        let response = match tokio::time::timeout(timeout, socket.recv()).await {
+            Ok(Ok(msg)) => msg,
+            Ok(Err(e)) => return HeartbeatResult::Error(format!("Recv failed: {}", e)),
+            Err(_) => return HeartbeatResult::Timeout,
+        };
+
+        // Parse response - check for HOOT01 heartbeat reply
+        let response_frames: Vec<Bytes> = response
+            .iter()
+            .map(|f| Bytes::copy_from_slice(f))
+            .collect();
+
+        // Check if it's a HOOT01 frame
+        if response_frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
+            match HootFrame::from_frames(&response_frames) {
+                Ok(resp_frame) if resp_frame.command == Command::Heartbeat => {
+                    HeartbeatResult::Success
+                }
+                Ok(resp_frame) => {
+                    // Got a different command - still alive, but unexpected
+                    debug!(
+                        "Heartbeat got {:?} instead of Heartbeat, treating as success",
+                        resp_frame.command
+                    );
+                    HeartbeatResult::Success
+                }
+                Err(e) => HeartbeatResult::Error(format!("Parse error: {}", e)),
+            }
+        } else {
+            // Legacy response - still indicates liveness
+            debug!("Got legacy response to heartbeat, treating as success");
+            HeartbeatResult::Success
+        }
     }
 
     /// Send a request and wait for response
@@ -353,41 +429,31 @@ impl BackendPool {
         None
     }
 
-    /// Get health status of all backends
-    #[allow(dead_code)]
+    /// Get health status of all backends (uses health tracker, no network call)
     pub async fn health(&self) -> serde_json::Value {
-        let luanette_ok = if let Some(ref b) = self.luanette {
-            b.health_check().await
-        } else {
-            false
-        };
+        let mut backends = serde_json::Map::new();
 
-        let hootenanny_ok = if let Some(ref b) = self.hootenanny {
-            b.health_check().await
-        } else {
-            false
-        };
+        if let Some(ref b) = self.luanette {
+            backends.insert("luanette".to_string(), b.health.health_summary().await);
+        }
 
-        let chaosgarden_ok = if let Some(ref b) = self.chaosgarden {
-            b.health_check().await
-        } else {
-            false
-        };
+        if let Some(ref b) = self.hootenanny {
+            backends.insert("hootenanny".to_string(), b.health.health_summary().await);
+        }
 
-        serde_json::json!({
-            "luanette": {
-                "connected": self.luanette.is_some(),
-                "healthy": luanette_ok,
-            },
-            "hootenanny": {
-                "connected": self.hootenanny.is_some(),
-                "healthy": hootenanny_ok,
-            },
-            "chaosgarden": {
-                "connected": self.chaosgarden.is_some(),
-                "healthy": chaosgarden_ok,
-            },
-        })
+        if let Some(ref b) = self.chaosgarden {
+            backends.insert("chaosgarden".to_string(), b.health.health_summary().await);
+        }
+
+        serde_json::Value::Object(backends)
+    }
+
+    /// Check if all connected backends are alive
+    pub fn all_alive(&self) -> bool {
+        let luanette_ok = self.luanette.as_ref().is_none_or(|b| b.is_alive());
+        let hootenanny_ok = self.hootenanny.as_ref().is_none_or(|b| b.is_alive());
+        let chaosgarden_ok = self.chaosgarden.as_ref().is_none_or(|b| b.is_alive());
+        luanette_ok && hootenanny_ok && chaosgarden_ok
     }
 }
 
@@ -395,4 +461,17 @@ impl Default for BackendPool {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Convert a Vec<Bytes> to a ZmqMessage for sending
+fn frames_to_zmq_message(frames: &[Bytes]) -> ZmqMessage {
+    if frames.is_empty() {
+        return ZmqMessage::from(Vec::<u8>::new());
+    }
+
+    let mut msg = ZmqMessage::from(frames[0].to_vec());
+    for frame in frames.iter().skip(1) {
+        msg.push_back(frame.to_vec().into());
+    }
+    msg
 }

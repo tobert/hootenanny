@@ -13,6 +13,7 @@ mod backend;
 mod client;
 mod commands;
 mod handler;
+mod heartbeat;
 mod serve;
 mod subscriber;
 mod telemetry;

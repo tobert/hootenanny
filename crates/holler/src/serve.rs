@@ -7,10 +7,11 @@ use axum::{routing::get, Router};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{debug, info, warn};
 
-use crate::backend::BackendPool;
+use crate::backend::{Backend, BackendPool};
 use crate::handler::ZmqHandler;
+use crate::heartbeat::{BackendState, HeartbeatConfig, HeartbeatResult};
 use crate::subscriber::spawn_subscribers;
 
 /// Server configuration
@@ -38,16 +39,14 @@ pub async fn handle_health(
     axum::extract::State(state): axum::extract::State<HealthState>,
 ) -> axum::Json<serde_json::Value> {
     let uptime = state.start_time.elapsed();
+    let backends_health = state.backends.health().await;
+    let all_alive = state.backends.all_alive();
 
     axum::Json(serde_json::json!({
-        "status": "healthy",
+        "status": if all_alive { "healthy" } else { "degraded" },
         "uptime_secs": uptime.as_secs(),
         "version": env!("CARGO_PKG_VERSION"),
-        "backends": {
-            "luanette": state.backends.luanette.is_some(),
-            "hootenanny": state.backends.hootenanny.is_some(),
-            "chaosgarden": state.backends.chaosgarden.is_some(),
-        }
+        "backends": backends_health,
     }))
 }
 
@@ -87,6 +86,13 @@ pub async fn run(config: ServeConfig) -> Result<()> {
     }
 
     let backends = Arc::new(backends);
+
+    // Create shutdown channel for heartbeat tasks
+    let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+
+    // Spawn heartbeat tasks for connected backends
+    let heartbeat_config = HeartbeatConfig::default();
+    spawn_heartbeat_tasks(&backends, heartbeat_config, shutdown_tx.subscribe());
 
     // Spawn ZMQ SUB subscribers for backend broadcasts (TODO: wire to baton notifications)
     let has_subs = config.luanette_pub.is_some()
@@ -191,4 +197,82 @@ async fn shutdown_signal() {
             info!("Received SIGTERM, shutting down...");
         }
     }
+}
+
+/// Spawn heartbeat monitoring tasks for all connected backends
+fn spawn_heartbeat_tasks(
+    backends: &Arc<BackendPool>,
+    config: HeartbeatConfig,
+    shutdown: tokio::sync::broadcast::Receiver<()>,
+) {
+    // Spawn heartbeat for hootenanny (primary backend)
+    if let Some(ref backend) = backends.hootenanny {
+        spawn_backend_heartbeat("hootenanny", Arc::clone(backend), config.clone(), shutdown.resubscribe());
+    }
+
+    // Spawn heartbeat for luanette
+    if let Some(ref backend) = backends.luanette {
+        spawn_backend_heartbeat("luanette", Arc::clone(backend), config.clone(), shutdown.resubscribe());
+    }
+
+    // Note: chaosgarden uses a different protocol, heartbeat not yet supported
+    if backends.chaosgarden.is_some() {
+        debug!("Chaosgarden connected but heartbeat not yet implemented for its protocol");
+    }
+}
+
+/// Spawn a heartbeat task for a single backend
+fn spawn_backend_heartbeat(
+    name: &'static str,
+    backend: Arc<Backend>,
+    config: HeartbeatConfig,
+    mut shutdown: tokio::sync::broadcast::Receiver<()>,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(config.interval);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        info!("💓 Heartbeat monitoring started for {}", name);
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let result = backend.send_heartbeat(config.timeout).await;
+
+                    match result {
+                        HeartbeatResult::Success => {
+                            backend.health.record_message_received().await;
+                            debug!("{}: heartbeat OK", name);
+                        }
+                        HeartbeatResult::Timeout => {
+                            let failures = backend.health.record_failure();
+                            warn!("{}: heartbeat timeout ({}/{})", name, failures, config.max_failures);
+
+                            if failures >= config.max_failures {
+                                let prev = backend.health.set_state(BackendState::Dead);
+                                if prev != BackendState::Dead {
+                                    warn!("{}: marked as DEAD after {} consecutive failures", name, failures);
+                                }
+                            }
+                        }
+                        HeartbeatResult::Error(e) => {
+                            let failures = backend.health.record_failure();
+                            warn!("{}: heartbeat error: {} ({}/{})", name, e, failures, config.max_failures);
+
+                            if failures >= config.max_failures {
+                                let prev = backend.health.set_state(BackendState::Dead);
+                                if prev != BackendState::Dead {
+                                    warn!("{}: marked as DEAD after {} consecutive failures", name, failures);
+                                }
+                            }
+                        }
+                    }
+                }
+                _ = shutdown.recv() => {
+                    info!("{}: heartbeat task shutting down", name);
+                    break;
+                }
+            }
+        }
+    });
 }

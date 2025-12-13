@@ -1483,6 +1483,7 @@ dependencies = [
  "axum 0.8.7",
  "base64",
  "baton",
+ "bytes",
  "clap",
  "futures",
  "hooteproto",
@@ -1567,12 +1568,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64",
+ "bytes",
  "chrono",
  "pretty_assertions",
+ "rmp-serde",
  "schemars",
  "serde",
  "serde_bytes",
  "serde_json",
+ "thiserror 2.0.17",
  "uuid",
 ]
 

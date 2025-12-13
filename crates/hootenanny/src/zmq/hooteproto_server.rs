@@ -3,10 +3,17 @@
 //! Exposes all hootenanny tools over ZMQ for Holler to route to.
 //! This is the primary interface for the MCP-over-ZMQ architecture where
 //! holler acts as the MCP gateway and hootenanny handles the actual tool execution.
+//!
+//! Supports both legacy MsgPack envelope format and new HOOT01 frame protocol.
+//! The HOOT01 protocol enables:
+//! - Routing without deserialization (fixed-width header fields)
+//! - Efficient heartbeats (no MsgPack overhead)
+//! - Native binary payloads (no base64 encoding)
 
 use anyhow::{Context, Result};
+use bytes::Bytes;
 use cas::ContentStore;
-use hooteproto::{Envelope, Payload, ToolInfo};
+use hooteproto::{Command, ContentType, Envelope, HootFrame, Payload, ReadyPayload, ToolInfo, PROTOCOL_VERSION};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tracing::{debug, error, info, warn, Instrument};
@@ -23,7 +30,7 @@ use crate::telemetry;
 ///
 /// Can operate in two modes:
 /// 1. Standalone - with direct CAS/artifact access (legacy, for basic operations)
-/// 2. Full - with EventDualityServer for complete tool dispatch
+/// 2. Full - with EventDualityServer for full tool dispatch
 pub struct HooteprotoServer {
     bind_address: String,
     cas: Arc<FileStore>,
@@ -100,11 +107,135 @@ impl HooteprotoServer {
     }
 
     async fn handle_message(&self, socket: &mut RouterSocket, msg: ZmqMessage) -> Result<()> {
-        let identity = msg.get(0).context("Missing identity frame")?.to_vec();
-        let payload_bytes = msg.get(1).context("Missing payload frame")?;
-        
-        // Debug log size instead of content for binary protocols
-        debug!("Received {} bytes", payload_bytes.len());
+        // Convert ZmqMessage frames to Bytes for parsing
+        let frames: Vec<Bytes> = msg.iter().map(|f| Bytes::copy_from_slice(f)).collect();
+
+        // Try HOOT01 frame protocol first (scan for protocol marker)
+        if frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
+            return self.handle_hoot_frame(socket, &frames).await;
+        }
+
+        // Fall back to legacy MsgPack envelope
+        self.handle_legacy_envelope(socket, &frames).await
+    }
+
+    /// Handle HOOT01 frame protocol message
+    async fn handle_hoot_frame(&self, socket: &mut RouterSocket, frames: &[Bytes]) -> Result<()> {
+        let (identity, frame) = HootFrame::from_frames_with_identity(frames)
+            .with_context(|| "Failed to parse HOOT01 frame")?;
+
+        debug!(
+            "HOOT01 {:?} from service={} request_id={}",
+            frame.command, frame.service, frame.request_id
+        );
+
+        match frame.command {
+            Command::Heartbeat => {
+                // Respond immediately with heartbeat
+                let response = HootFrame::heartbeat("hootenanny");
+                let reply_frames = response.to_frames_with_identity(&identity);
+                let reply = frames_to_zmq_message(&reply_frames);
+                socket.send(reply).await?;
+                debug!("Heartbeat response sent");
+            }
+
+            Command::Request => {
+                // Create span with traceparent
+                let span = tracing::info_span!(
+                    "hoot_request",
+                    otel.name = "hoot_request",
+                    request_id = %frame.request_id,
+                    service = %frame.service,
+                );
+
+                if let Some(ref tp) = frame.traceparent {
+                    if let Some(parent_ctx) = telemetry::parse_traceparent(Some(tp.as_str())) {
+                        span.set_parent(parent_ctx);
+                    }
+                }
+
+                // Dispatch based on content type
+                let response = match frame.content_type {
+                    ContentType::MsgPack => {
+                        // Deserialize payload and dispatch
+                        match frame.payload::<Payload>() {
+                            Ok(payload) => {
+                                let result = self.dispatch(payload).instrument(span).await;
+                                HootFrame::reply(frame.request_id, &result)
+                                    .unwrap_or_else(|e| {
+                                        let error_payload = Payload::Error {
+                                            code: "serialize_error".to_string(),
+                                            message: e.to_string(),
+                                            details: None,
+                                        };
+                                        HootFrame::reply(frame.request_id, &error_payload).unwrap()
+                                    })
+                            }
+                            Err(e) => {
+                                let error_payload = Payload::Error {
+                                    code: "parse_error".to_string(),
+                                    message: e.to_string(),
+                                    details: None,
+                                };
+                                HootFrame::reply(frame.request_id, &error_payload)?
+                            }
+                        }
+                    }
+                    ContentType::RawBinary => {
+                        // For now, we don't support raw binary requests
+                        let error_payload = Payload::Error {
+                            code: "unsupported".to_string(),
+                            message: "Raw binary requests not yet implemented".to_string(),
+                            details: None,
+                        };
+                        HootFrame::reply(frame.request_id, &error_payload)?
+                    }
+                    ContentType::Empty | ContentType::Json => {
+                        let error_payload = Payload::Error {
+                            code: "invalid_content_type".to_string(),
+                            message: format!("Unexpected content type: {:?}", frame.content_type),
+                            details: None,
+                        };
+                        HootFrame::reply(frame.request_id, &error_payload)?
+                    }
+                };
+
+                let reply_frames = response.to_frames_with_identity(&identity);
+                let reply = frames_to_zmq_message(&reply_frames);
+                socket.send(reply).await?;
+            }
+
+            Command::Ready => {
+                // Log worker registration (we're the server, so this is informational)
+                if let Ok(caps) = frame.payload::<ReadyPayload>() {
+                    info!(
+                        "Worker registered: service={} tools={:?} binary={}",
+                        frame.service, caps.tools, caps.accepts_binary
+                    );
+                } else {
+                    info!("Worker registered: service={}", frame.service);
+                }
+            }
+
+            Command::Disconnect => {
+                info!("Worker disconnected: service={}", frame.service);
+            }
+
+            Command::Reply => {
+                // Unexpected - we're the server, we shouldn't receive replies
+                warn!("Unexpected Reply command received at server");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle legacy MsgPack envelope format
+    async fn handle_legacy_envelope(&self, socket: &mut RouterSocket, frames: &[Bytes]) -> Result<()> {
+        let identity = frames.first().context("Missing identity frame")?.clone();
+        let payload_bytes = frames.get(1).context("Missing payload frame")?;
+
+        debug!("Legacy envelope: {} bytes", payload_bytes.len());
 
         let envelope: Envelope = rmp_serde::from_slice(payload_bytes)
             .with_context(|| "Failed to parse MsgPack envelope")?;
@@ -133,7 +264,7 @@ impl HooteprotoServer {
         let response_bytes = rmp_serde::to_vec(&response)?;
         debug!("Sending {} bytes", response_bytes.len());
 
-        let mut reply = ZmqMessage::from(identity);
+        let mut reply = ZmqMessage::from(identity.to_vec());
         reply.push_back(response_bytes.into());
         socket.send(reply).await?;
 
@@ -155,6 +286,15 @@ impl HooteprotoServer {
             _ => {}
         }
 
+        // Intercept tools that HooteprotoServer handles directly
+        // This ensures they work even if dispatch_tool doesn't implement them
+        match &payload {
+            Payload::CasGet { hash } => return self.cas_get(hash).await,
+            Payload::ArtifactList { tag, creator } => return self.artifact_list(tag.clone(), creator.clone()).await,
+            Payload::ArtifactGet { id } => return self.artifact_get(id).await,
+            _ => {}
+        }
+
         // If we have an EventDualityServer, route through it for full functionality
         if let Some(ref server) = self.event_server {
             return self.dispatch_via_server(server, payload).await;
@@ -164,8 +304,8 @@ impl HooteprotoServer {
         match payload {
             Payload::CasStore { data, mime_type } => self.cas_store(data, Some(mime_type)).await,
             Payload::CasInspect { hash } => self.cas_inspect(&hash).await,
+            // (Intercepted above, but here for completeness/fallback if interception logic changes)
             Payload::CasGet { hash } => self.cas_get(&hash).await,
-
             Payload::ArtifactList { tag, creator } => self.artifact_list(tag, creator).await,
             Payload::ArtifactGet { id } => self.artifact_get(&id).await,
 
@@ -356,7 +496,15 @@ impl HooteprotoServer {
     }
 
     fn list_tools(&self) -> Payload {
-        let tools = vec![
+        // Start with tools from dispatch if available
+        let mut tools = if self.event_server.is_some() {
+            crate::api::dispatch::list_tools()
+        } else {
+            vec![]
+        };
+
+        // Define basic tools that HooteprotoServer handles directly
+        let basic_tools = vec![
             ToolInfo {
                 name: "cas_store".to_string(),
                 description: "Store content in CAS".to_string(),
@@ -414,6 +562,13 @@ impl HooteprotoServer {
                 }),
             },
         ];
+
+        // Merge basic tools, avoiding duplicates (prefer dispatch schemas if present)
+        for tool in basic_tools {
+            if !tools.iter().any(|t| t.name == tool.name) {
+                tools.push(tool);
+            }
+        }
 
         Payload::ToolList { tools }
     }
@@ -511,4 +666,18 @@ fn payload_to_tool_args(payload: Payload) -> anyhow::Result<(String, serde_json:
     args.remove("type");  // Remove the discriminator tag
 
     Ok((tool_name, serde_json::Value::Object(args)))
+}
+
+/// Convert a Vec<Bytes> to a ZmqMessage
+fn frames_to_zmq_message(frames: &[Bytes]) -> ZmqMessage {
+    // ZmqMessage doesn't implement Default, so we build from first frame
+    if frames.is_empty() {
+        return ZmqMessage::from(Vec::<u8>::new());
+    }
+
+    let mut msg = ZmqMessage::from(frames[0].to_vec());
+    for frame in frames.iter().skip(1) {
+        msg.push_back(frame.to_vec().into());
+    }
+    msg
 }

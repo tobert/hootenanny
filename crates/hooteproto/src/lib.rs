@@ -3,6 +3,14 @@
 //! This crate defines the message types exchanged between Hootenanny services
 //! over ZMQ. All messages are wrapped in an Envelope for tracing and routing.
 //!
+//! ## HOOT01 Frame Protocol
+//!
+//! The `frame` module implements the HOOT01 wire protocol - a hybrid frame-based
+//! format inspired by MDP (Majordomo Protocol). This enables:
+//! - Routing without deserialization (fixed-width routing fields)
+//! - Efficient heartbeats (no MsgPack overhead)
+//! - Native binary payloads (no base64 encoding)
+//!
 //! ## Job System Types
 //!
 //! The canonical job types live here and are used by both hootenanny and luanette:
@@ -16,12 +24,14 @@
 //! The `params` module contains types with JsonSchema derives for functionality generation.
 //! Use with `baton::schema_for::<ParamType>()` to generate tool input schemas.
 
+pub mod conversion;
+pub mod frame;
+pub mod garden;
 pub mod params;
 pub mod schema_helpers;
-pub mod garden;
-pub mod conversion;
 
 pub use conversion::tool_to_payload;
+pub use frame::{Command, ContentType, FrameError, HootFrame, ReadyPayload, PROTOCOL_VERSION};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

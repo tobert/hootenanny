@@ -15,6 +15,7 @@ hooteproto = { path = "../hooteproto" }
 anyhow = "1.0"
 async-trait = "0.1"
 base64 = "0.22"
+bytes = "1.9"
 axum = "0.8"
 clap = { version = "4.0", features = ["derive"] }
 futures = "0.3"
