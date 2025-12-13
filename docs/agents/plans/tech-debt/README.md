@@ -9,11 +9,11 @@
 
 | Task | Status | Parallel Group | Notes |
 |------|--------|----------------|-------|
-| 01-abc-stubs | pending | A | No dependencies |
-| 02-luanette-cas | pending | A | No dependencies |
-| 03-error-discards | pending | A | No dependencies |
-| 04-abc-key-parsing | pending | B | Depends on 01 |
-| 05-dead-code-cleanup | pending | B | After 01-03 reviewed |
+| 01-abc-stubs | ✅ done | A | Implemented transpose, to_abc, semitones_to_key |
+| 02-luanette-cas | ✅ done | A | CAS fetch/execute + 5 new tests |
+| 03-error-discards | ✅ done | A | Fixed 20 `let _ =` patterns |
+| 04-abc-key-parsing | ✅ done | B | Highland bagpipe + explicit accidentals, 9 new tests |
+| 05-dead-code-cleanup | ✅ done | B | Deleted ~65 lines, 8 annotations removed |
 | 06-unwrap-triage | pending | C | Final polish |
 | 07-split-chonkers | pending | C | Refactor large files |
 

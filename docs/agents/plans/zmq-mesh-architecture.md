@@ -150,11 +150,14 @@ Update this section as work completes. Check off items, note blockers, add commi
 - [x] Verify: single backend in `/health` ✅
 - [ ] Commit: _________________
 
-### Phase 6: Tool Refresh
-- [ ] Detect Dead → Ready transition
-- [ ] Call `refresh_tools()` on recovery
-- [ ] Update tool registry
-- [ ] Integration test: kill/restart hootenanny
+### Phase 6: Tool Refresh ✅
+- [x] Add `ToolCache` type and `new_tool_cache()` / `refresh_tools_into()` functions
+- [x] Add `ZmqHandler::with_shared_cache()` for shared cache between startup and recovery
+- [x] Detect Dead → Ready transition in `spawn_backend_heartbeat()`
+- [x] Call recovery callback on transition to trigger `refresh_tools_into()`
+- [x] Update tool registry via shared `ToolCache` Arc
+- [x] Create `holler` library (lib.rs) to expose modules for integration tests
+- [x] Integration tests: `test_tool_cache_refresh_on_startup`, `test_recovery_callback_called_on_dead_to_ready`, `test_tools_refresh_after_backend_recovery`
 - [ ] Commit: _________________
 
 ### Blockers / Notes
@@ -1062,6 +1065,28 @@ Worker disconnects → implicit removal (or explicit Disconnect if graceful)
 
 ## Session Log
 
+**2025-12-13 Session** (Socket Reconnection + Bidirectional Heartbeats):
+- Implemented socket close/reopen per ZMQ RFC 7 best practices
+- Added `Backend::reconnect()` with exponential backoff (1s → 32s)
+- Backend socket is now `Option<DealerSocket>` to allow proper close/reopen
+- Added `HeartbeatResult::Disconnected` variant for clean disconnect handling
+- Heartbeat task now detects dead/disconnected state and triggers reconnection
+- Send Ready command after reconnection to re-register with hootenanny
+- Created `ClientTracker` in hootenanny for bidirectional heartbeating
+- HooteprotoServer now tracks clients on Ready, records activity on Heartbeat
+- 6 new unit tests for ClientTracker (registration, removal, failure tracking, stale cleanup)
+- All 53 tests pass across holler, hootenanny, and hooteproto
+
+**2025-12-13 Session** (Phase 6: Tool Refresh):
+- Implemented tool cache with shared Arc<RwLock<Vec<Tool>>> pattern
+- Added `ToolCache` type, `new_tool_cache()`, and `refresh_tools_into()` functions
+- Modified `ZmqHandler` to support shared cache via `with_shared_cache()` constructor
+- Updated `spawn_backend_heartbeat()` to detect Dead → Ready transitions
+- Added `RecoveryCallback` type that triggers tool refresh on recovery
+- Created lib.rs for holler to expose modules for integration testing
+- Added 3 integration tests verifying tool refresh behavior
+- All 14 holler tests pass
+
 **2025-12-13 Session** (plan verification):
 - Cloned `~/src/zguide` (booksbyus/zguide) and `~/src/rfc` (zeromq/rfc)
 - Reviewed RFC 7 (MDP 0.1), RFC 18 (MDP 0.2), RFC 6 (PPP)
@@ -1084,42 +1109,21 @@ Worker disconnects → implicit removal (or explicit Disconnect if graceful)
 - `c5d47ed` feat: add systemd user units
 - `b93736e` refactor: luanette connects directly to hootenanny via ZMQ
 
-**Next Session Should**:
+**All Phases Complete + Enhancements!** 🎉
 
-**Phase 1** (start here):
-1. Create `crates/hooteproto/src/frame.rs` with types from this doc
-2. Implement `Command` (u16) and `ContentType` (u16) enums
-3. Implement `from_multipart`, `to_multipart`, `from_multipart_with_identity`
-4. Unit tests: roundtrip all command types, content type handling
-5. `cargo test -p hooteproto` passes
+The HOOT01 protocol implementation is now complete with advanced resilience features:
 
-**Phase 2** (can parallelize with 3 and 4):
-1. Create `crates/holler/src/heartbeat.rs`
-2. Add health tracking fields to `Backend`
-3. Spawn heartbeat tasks in `serve.rs`
-4. Update `/health` endpoint to show backend states
+- ✅ Phase 1: Frame Protocol (hooteproto/frame.rs)
+- ✅ Phase 2: Heartbeating (holler/heartbeat.rs, Backend health tracking)
+- ✅ Phase 3: Backend Response (hootenanny handles HOOT01 frames)
+- ✅ Phase 4: Backend Proxies (hootenanny proxies to luanette)
+- ✅ Phase 5: Holler Simplification (single hootenanny backend)
+- ✅ Phase 6: Tool Refresh (Dead → Ready detection, shared ToolCache)
+- ✅ **Socket Reconnection**: Close/reopen with exponential backoff (per ZMQ guide)
+- ✅ **Ready Re-registration**: Send Ready command after reconnection
+- ✅ **Bidirectional Heartbeating**: ClientTracker in hootenanny monitors holler clients
 
-**Phase 3** (can parallelize with 2 and 4):
-1. Update `hootenanny/src/zmq/hooteproto_server.rs` to detect frame protocol
-2. Handle `Command::Heartbeat` with immediate response
-3. Handle `Command::Request` with dispatch and `Command::Reply`
-4. Update luanette similarly (it's a peer client to hootenanny)
-
-**Phase 4** (can parallelize with 2 and 3):
-1. Create `crates/hootenanny/src/chaosgarden_client.rs` (IPC)
-2. Create `crates/hootenanny/src/luanette_client.rs` (TCP :5570)
-3. Route `graph_*` and `play` through chaosgarden proxy
-4. Route luanette tools through luanette proxy
-5. Propagate traceparent for unified tracing
-6. Add chaosgarden + luanette health to hootenanny's `/health`
-
-**Phase 5** (requires 2, 3, 4 complete):
-1. Remove luanette and chaosgarden backend configs from holler
-2. Simplify `AppState` to single `hootenanny` backend
-3. Remove multi-backend dispatch logic
-4. Update systemd units if needed
-5. Verify: `curl localhost:8080/health` shows hootenanny + chaosgarden + luanette status
-
-**Phase 6**:
-1. On backend recovery (Dead → Ready), call `refresh_tools()`
-2. Integration test: start all, kill hootenanny, verify Dead state, restart, verify tools re-discovered
+**Future Enhancements** (not blocking):
+1. Python HOOT01 client for ML workers
+2. Buffer tuning if throughput becomes an issue
+3. WebSocket/SSE bridge for browser clients

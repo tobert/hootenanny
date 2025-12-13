@@ -130,6 +130,18 @@ artifacts://by-tag/{tag}  → Filter by tag
 artifacts://lineage/{id}  → Parent chain
 ```
 
+## 📚 ZeroMQ Reference Material
+
+Local clones of authoritative ZeroMQ documentation (for protocol work):
+
+| Repo | Path | Key Files |
+|------|------|-----------|
+| ZeroMQ Guide | `~/src/zguide/` | `site/content/docs/chapter4.md` (Paranoid Pirate, Majordomo, heartbeating) |
+| ZeroMQ RFCs | `~/src/rfc/` | `content/docs/rfcs/7/README.md` (MDP 0.1), `content/docs/rfcs/18/README.md` (MDP 0.2) |
+
+Our protocol (`HOOT01`) is inspired by MDP but simplified for our use case. See
+`docs/agents/plans/zmq-mesh-architecture.md` for the full design.
+
 ### Async Pattern
 
 Most tools are async and return `job_id` immediately:
