@@ -197,21 +197,32 @@ fn build_artifact_query(
     request: &GraphContextRequest,
 ) -> (String, BTreeMap<Arc<str>, FieldValue>) {
     let mut variables: BTreeMap<Arc<str>, FieldValue> = BTreeMap::new();
+    let mut params = Vec::new();
 
-    let query_params = if let Some(ref tag) = request.tag {
+    if let Some(ref tag) = request.tag {
         variables.insert("tag".into(), FieldValue::String(tag.clone().into()));
-        "tag: $tag"
-    } else if let Some(ref creator) = request.creator {
+        params.push("tag: $tag");
+    }
+    if let Some(ref creator) = request.creator {
         variables.insert("creator".into(), FieldValue::String(creator.clone().into()));
-        "creator: $creator"
+        params.push("creator: $creator");
+    }
+    if let Some(minutes) = request.within_minutes {
+        variables.insert("within_minutes".into(), FieldValue::Int64(minutes));
+        params.push("within_minutes: $within_minutes");
+    }
+
+    let entry_point = if params.is_empty() {
+        // Default: uses adapter's DEFAULT_RECENT_WINDOW (10 minutes)
+        "Artifact".to_string()
     } else {
-        ""
+        format!("Artifact({})", params.join(", "))
     };
 
     let query = format!(
         r#"
         query {{
-            Artifact({}) {{
+            {} {{
                 id @output
                 content_hash @output
                 created_at @output
@@ -223,7 +234,7 @@ fn build_artifact_query(
             }}
         }}
         "#,
-        query_params
+        entry_point
     );
 
     (query, variables)

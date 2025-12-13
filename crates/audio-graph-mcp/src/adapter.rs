@@ -10,7 +10,7 @@ use trustfall::{
 
 use crate::{
     Database, Identity, IdentityHint, Tag,
-    sources::{AnnotationData, ArtifactData, ArtifactSource, PipeWireNode, PipeWirePort, PipeWireSnapshot},
+    sources::{AnnotationData, ArtifactData, ArtifactSource, PipeWireNode, PipeWirePort, PipeWireSnapshot, DEFAULT_RECENT_WINDOW},
 };
 
 #[derive(Debug, Clone)]
@@ -147,13 +147,32 @@ impl<'a> trustfall::provider::BasicAdapter<'a> for AudioGraphAdapter {
                 let id_filter = parameters.get("id").and_then(|v| v.as_str());
                 let tag_filter = parameters.get("tag").and_then(|v| v.as_str());
                 let creator_filter = parameters.get("creator").and_then(|v| v.as_str());
+                let within_minutes = parameters.get("within_minutes").and_then(|v| v.as_i64());
 
-                let artifacts = match (id_filter, tag_filter, creator_filter) {
-                    (Some(id), _, _) => source.get(id).unwrap_or(None).into_iter().collect(),
-                    (_, Some(tag), _) => source.by_tag(tag).unwrap_or_default(),
-                    (_, _, Some(creator)) => source.by_creator(creator).unwrap_or_default(),
-                    _ => source.all().unwrap_or_default(),
+                // ID lookup is always exclusive - return just that artifact
+                if let Some(id) = id_filter {
+                    let artifacts: Vec<_> = source.get(id).unwrap_or(None).into_iter().collect();
+                    return Box::new(artifacts.into_iter().map(|a| Vertex::Artifact(Arc::new(a))));
+                }
+
+                // Start with time-filtered or all artifacts
+                let window = within_minutes
+                    .map(|m| std::time::Duration::from_secs(m.max(1) as u64 * 60));
+
+                let base_artifacts = if window.is_some() || (tag_filter.is_none() && creator_filter.is_none()) {
+                    // Use recent() if within_minutes specified OR no other filters
+                    source.recent(window.unwrap_or(DEFAULT_RECENT_WINDOW)).unwrap_or_default()
+                } else {
+                    // Tag or creator specified without within_minutes - get all
+                    source.all().unwrap_or_default()
                 };
+
+                // Apply tag and creator filters
+                let artifacts: Vec<_> = base_artifacts
+                    .into_iter()
+                    .filter(|a| tag_filter.is_none_or(|t| a.tags.iter().any(|at| at == t)))
+                    .filter(|a| creator_filter.is_none_or(|c| a.creator == c))
+                    .collect();
 
                 Box::new(artifacts.into_iter().map(|a| Vertex::Artifact(Arc::new(a))))
             }

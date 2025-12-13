@@ -458,6 +458,20 @@ impl ArtifactSource for FileStore {
         annotations.push(annotation);
         Ok(())
     }
+
+    fn recent(&self, within: std::time::Duration) -> anyhow::Result<Vec<ArtifactData>> {
+        let cutoff = chrono::Utc::now() - chrono::Duration::from_std(within)?;
+        let mut artifacts: Vec<_> = self
+            .store
+            .all()?
+            .iter()
+            .filter(|a| a.created_at >= cutoff)
+            .map(artifact_to_data)
+            .collect();
+        // Sort newest first
+        artifacts.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(artifacts)
+    }
 }
 
 /// Convert internal Artifact to ArtifactData for Trustfall
@@ -531,6 +545,11 @@ impl ArtifactSource for FileStoreSource {
     fn add_annotation(&self, annotation: AnnotationData) -> anyhow::Result<()> {
         let store = self.store.read().unwrap();
         ArtifactSource::add_annotation(&*store, annotation)
+    }
+
+    fn recent(&self, within: std::time::Duration) -> anyhow::Result<Vec<ArtifactData>> {
+        let store = self.store.read().unwrap();
+        ArtifactSource::recent(&*store, within)
     }
 }
 

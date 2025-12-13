@@ -4,7 +4,12 @@
 //! on a specific storage implementation. This enables swapping local
 //! storage for network-based storage while keeping GraphQL queries stable.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
+
+/// Default time window for recent artifacts (10 minutes).
+pub const DEFAULT_RECENT_WINDOW: Duration = Duration::from_secs(10 * 60);
 
 /// Trait for artifact data sources.
 ///
@@ -34,6 +39,10 @@ pub trait ArtifactSource: Send + Sync {
 
     /// Add an annotation to an artifact.
     fn add_annotation(&self, annotation: AnnotationData) -> anyhow::Result<()>;
+
+    /// Get artifacts created within the given duration from now.
+    /// Returns artifacts sorted by created_at descending (newest first).
+    fn recent(&self, within: Duration) -> anyhow::Result<Vec<ArtifactData>>;
 }
 
 /// Artifact data transfer object.

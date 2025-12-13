@@ -706,6 +706,9 @@ pub struct GraphContextRequest {
     #[schemars(description = "Include annotations (default: true). Disable to reduce context size.")]
     #[serde(default = "default_true")]
     pub include_annotations: bool,
+
+    #[schemars(description = "Time window in minutes for recent artifacts (default: 10). Only applies when no tag/creator filter is set.")]
+    pub within_minutes: Option<i64>,
 }
 
 fn default_true() -> bool {

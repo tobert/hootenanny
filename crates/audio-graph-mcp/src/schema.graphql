@@ -5,7 +5,7 @@ schema {
 type Query {
     Identity(id: String, name: String): [Identity!]!
     PipeWireNode(media_class: String): [PipeWireNode!]!
-    Artifact(id: String, tag: String, creator: String): [Artifact!]!
+    Artifact(id: String, tag: String, creator: String, within_minutes: Int): [Artifact!]!
 }
 
 type Identity {
