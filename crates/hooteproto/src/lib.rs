@@ -196,6 +196,22 @@ pub struct JobStoreStats {
 }
 
 // ============================================================================
+// Artifact Lineage Types (shared across tools)
+// ============================================================================
+
+/// Common artifact lineage tracking fields.
+///
+/// Embed this in tool variants that create artifacts to maintain lineage.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ArtifactMetadata {
+    pub variation_set_id: Option<String>,
+    pub parent_id: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub creator: Option<String>,
+}
+
+// ============================================================================
 // Tool Result Types (used by hootenanny, returned over ZMQ)
 // ============================================================================
 
@@ -327,6 +343,18 @@ impl Envelope {
 }
 
 /// All message types in the Hootenanny system.
+///
+/// Organized by domain:
+/// - **Core Protocol**: Worker lifecycle, job management, responses
+/// - **Content Ops**: CAS, artifacts, graph queries
+/// - **Music Generation**: AI models (Orpheus, Musicgen, YuE)
+/// - **Music Processing**: ABC, MIDI conversion, soundfonts
+/// - **Analysis**: Audio analysis (BeatThis, CLAP)
+/// - **Playback**: Chaosgarden timeline and transport
+/// - **MCP Compatibility**: Resources, prompts, completions
+/// - **Lua**: Script execution and storage
+///
+/// Many variants include artifact tracking fields. See `ArtifactMetadata`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Payload {

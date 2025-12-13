@@ -51,8 +51,6 @@ impl Default for DaemonConfig {
 
 /// The main daemon state
 pub struct GardenDaemon {
-    config: DaemonConfig,
-
     // Transport
     transport: RwLock<TransportState>,
     tempo_map: Arc<RwLock<TempoMap>>,
@@ -100,7 +98,6 @@ impl GardenDaemon {
         ).ok().map(Arc::new);
 
         Self {
-            config,
             transport: RwLock::new(TransportState::default()),
             tempo_map,
             regions,
@@ -109,8 +106,6 @@ impl GardenDaemon {
             query_adapter,
         }
     }
-
-    // === Transport operations ===
 
     fn play(&self) {
         let mut transport = self.transport.write().unwrap();
@@ -147,8 +142,6 @@ impl GardenDaemon {
         let tempo = self.tempo_map.read().unwrap().tempo_at(Tick(0));
         (transport.playing, transport.position, tempo)
     }
-
-    // === Region operations ===
 
     fn create_region(&self, position: Beat, duration: Beat, behavior: &crate::ipc::Behavior) -> Uuid {
         let internal_behavior = convert_ipc_behavior_to_internal(behavior);
@@ -221,8 +214,6 @@ impl GardenDaemon {
             })
             .collect()
     }
-
-    // === Latent lifecycle operations ===
 
     fn handle_latent_started(&self, region_id: Uuid, job_id: String) -> Result<(), String> {
         let mut regions = self.regions.write().unwrap();
@@ -298,12 +289,11 @@ impl GardenDaemon {
                 artifact_id: pa.artifact_id.clone(),
                 content_hash: pa.content_hash.clone(),
                 content_type: convert_content_type_to_ipc(pa.content_type),
-                resolved_at: chrono::Utc::now(), // TODO: Store actual resolved_at time
+                // NOTE: Using current time as approximation - PendingApproval doesn't track resolution timestamp yet
+                resolved_at: chrono::Utc::now(),
             })
             .collect()
     }
-
-    // === Query operations ===
 
     fn execute_query(&self, query: &str, variables: &HashMap<String, serde_json::Value>) -> QueryReply {
         let adapter = match &self.query_adapter {
@@ -567,8 +557,6 @@ impl Handler for GardenDaemon {
         self.execute_query(&req.query, &req.variables)
     }
 }
-
-// === Helper types ===
 
 /// Convert IPC Behavior to internal Behavior
 fn convert_ipc_behavior_to_internal(ipc: &crate::ipc::Behavior) -> Behavior {

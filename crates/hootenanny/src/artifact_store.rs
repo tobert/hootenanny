@@ -457,6 +457,36 @@ impl ArtifactSource for FileStore {
     }
 }
 
+impl ArtifactStore for FileStore {
+    fn get(&self, id: &str) -> Result<Option<Artifact>> {
+        self.store.get(id)
+    }
+
+    fn put(&self, artifact: Artifact) -> Result<()> {
+        self.store.put(artifact)
+    }
+
+    fn delete(&self, id: &str) -> Result<bool> {
+        self.store.delete(id)
+    }
+
+    fn all(&self) -> Result<Vec<Artifact>> {
+        self.store.all()
+    }
+
+    fn count(&self) -> Result<usize> {
+        self.store.count()
+    }
+
+    fn exists(&self, id: &str) -> Result<bool> {
+        self.store.exists(id)
+    }
+
+    fn flush(&self) -> Result<()> {
+        self.save()
+    }
+}
+
 /// Convert internal Artifact to ArtifactData for Trustfall
 fn artifact_to_data(a: &Artifact) -> ArtifactData {
     ArtifactData {
@@ -542,36 +572,6 @@ impl ArtifactSource for FileStoreSource {
         let store = self.store.read()
             .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store_source.recent: {}", e))?;
         ArtifactSource::recent(&*store, within)
-    }
-}
-
-impl ArtifactStore for FileStore {
-    fn get(&self, id: &str) -> Result<Option<Artifact>> {
-        self.store.get(id)
-    }
-
-    fn put(&self, artifact: Artifact) -> Result<()> {
-        self.store.put(artifact)
-    }
-
-    fn delete(&self, id: &str) -> Result<bool> {
-        self.store.delete(id)
-    }
-
-    fn all(&self) -> Result<Vec<Artifact>> {
-        self.store.all()
-    }
-
-    fn count(&self) -> Result<usize> {
-        self.store.count()
-    }
-
-    fn exists(&self, id: &str) -> Result<bool> {
-        self.store.exists(id)
-    }
-
-    fn flush(&self) -> Result<()> {
-        self.save()
     }
 }
 
