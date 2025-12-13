@@ -162,7 +162,6 @@ impl Artifact {
     }
 
     /// Builder: add tag
-    #[allow(dead_code)]
     pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
         self.tags.push(tag.into());
         self
@@ -185,18 +184,6 @@ impl Artifact {
         self.tags.iter().any(|t| t == tag)
     }
 
-    /// Check if artifact has any of these tags
-    #[allow(dead_code)]
-    pub fn has_any_tag(&self, tags: &[&str]) -> bool {
-        self.tags.iter().any(|t| tags.contains(&t.as_str()))
-    }
-
-    /// Check if artifact has all of these tags
-    #[allow(dead_code)]
-    pub fn has_all_tags(&self, tags: &[&str]) -> bool {
-        tags.iter().all(|tag| self.has_tag(tag))
-    }
-
     /// Get tags with a specific prefix (e.g., "role:")
     pub fn tags_with_prefix(&self, prefix: &str) -> Vec<&str> {
         self.tags
@@ -206,18 +193,6 @@ impl Artifact {
             .collect()
     }
 
-    /// Helper: get the role tag (first "role:*" tag)
-    #[allow(dead_code)]
-    pub fn role(&self) -> Option<&str> {
-        self.tags_with_prefix("role:").first().copied()
-    }
-
-    /// Helper: get the type tag (first "type:*" tag)
-    #[allow(dead_code)]
-    pub fn artifact_type(&self) -> Option<&str> {
-        self.tags_with_prefix("type:").first().copied()
-    }
-
     /// Helper: get the phase tag (first "phase:*" tag)
     pub fn phase(&self) -> Option<&str> {
         self.tags_with_prefix("phase:").first().copied()
@@ -225,7 +200,6 @@ impl Artifact {
 }
 
 /// Trait for artifact storage backends
-#[allow(dead_code)]
 pub trait ArtifactStore: Send + Sync {
     /// Get artifact by ID
     fn get(&self, id: &str) -> Result<Option<Artifact>>;
@@ -651,11 +625,17 @@ mod tests {
         .with_tags(vec!["type:midi", "role:melody_specialist", "phase:initial"]);
 
         assert!(artifact.has_tag("type:midi"));
-        assert!(artifact.has_any_tag(&["type:midi", "type:audio"]));
-        assert!(artifact.has_all_tags(&["type:midi", "phase:initial"]));
-        assert_eq!(artifact.artifact_type(), Some("type:midi"));
-        assert_eq!(artifact.role(), Some("role:melody_specialist"));
+        assert!(artifact.has_tag("phase:initial"));
         assert_eq!(artifact.phase(), Some("phase:initial"));
+
+        // Test tags_with_prefix
+        let type_tags = artifact.tags_with_prefix("type:");
+        assert_eq!(type_tags.len(), 1);
+        assert_eq!(type_tags[0], "type:midi");
+
+        let role_tags = artifact.tags_with_prefix("role:");
+        assert_eq!(role_tags.len(), 1);
+        assert_eq!(role_tags[0], "role:melody_specialist");
     }
 
     #[test]

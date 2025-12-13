@@ -26,26 +26,14 @@ pub struct CompiledGraph {
     order: Vec<usize>,
     buffers: Vec<SignalBuffer>,
     buffer_map: Vec<BufferSlot>,
-    #[allow(dead_code)]
-    routes: Vec<Route>,
     failed_nodes: HashSet<usize>,
 }
 
 #[derive(Clone, Copy)]
 struct BufferSlot {
     buffer_idx: usize,
-    #[allow(dead_code)]
-    signal_type: SignalType,
 }
 
-#[derive(Clone, Copy)]
-#[allow(dead_code)]
-struct Route {
-    src_buffer: usize,
-    dest_node: usize,
-    dest_port: usize,
-    gain: f32,
-}
 
 impl CompiledGraph {
     /// Compile graph for realtime execution
@@ -89,15 +77,9 @@ impl CompiledGraph {
                     }
                 };
                 buffers.push(buffer);
-                buffer_map.push(BufferSlot {
-                    buffer_idx,
-                    signal_type: output.signal_type,
-                });
+                buffer_map.push(BufferSlot { buffer_idx });
             } else {
-                buffer_map.push(BufferSlot {
-                    buffer_idx: 0,
-                    signal_type: SignalType::Audio,
-                });
+                buffer_map.push(BufferSlot { buffer_idx: 0 });
             }
         }
 
@@ -108,7 +90,6 @@ impl CompiledGraph {
             order,
             buffers,
             buffer_map,
-            routes: Vec::new(),
             failed_nodes: HashSet::new(),
         })
     }
@@ -164,8 +145,8 @@ pub struct PlaybackPosition {
 }
 
 /// Tracks an in-progress crossfade
+// TODO(routing): Implement actual crossfade mixing when audio routing is added
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct ActiveCrossfade {
     old_region_id: Option<Uuid>,
     new_region_id: Uuid,
