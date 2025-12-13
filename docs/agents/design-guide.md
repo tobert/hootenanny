@@ -45,84 +45,59 @@ docs/agents/plans/{feature}/
 
 ## Progress Tracking
 
-| Task | Status | Assignee | Notes |
-|------|--------|----------|-------|
-| 01-primitives | complete | Claude | - |
-| 02-graph | in_progress | - | blocked on X |
-| 03-resolution | pending | - | - |
-
-## Current Status
-
-- **Completed**: ✅ 01-primitives
-- **In Progress**: 🔄 02-graph
-- **Next Up**: 03-resolution
-- **Blocked**: None
+| Task | Status | Parallel Group | Notes |
+|------|--------|----------------|-------|
+| 01-primitives | pending | A | No dependencies |
+| 02-types | pending | A | No dependencies |
+| 03-core | pending | B | Depends on 01, 02 |
 
 ## Success Metrics
 
-We'll know we've succeeded when:
-- [ ] Graph compiles and renders a simple timeline
-- [ ] Offline rendering produces valid WAV
-- [ ] Trustfall queries return correct results
+- [ ] All tests pass
+- [ ] Feature works end-to-end
+- [ ] No new warnings
 
-## Signoffs & Decisions
+## Execution Flow
 
-| Date | Decision | Rationale |
-|------|----------|-----------|
-| 2025-12-08 | Use petgraph | StableGraph handles node removal |
-| - | - | - |
+\`\`\`mermaid
+graph TD
+    subgraph A[Group A - parallel]
+        A1[01-primitives]
+        A2[02-types]
+    end
+    subgraph B[Group B]
+        B1[03-core]
+    end
+    A1 --> B1
+    A2 --> B1
+\`\`\`
 
-## Session Notes
+## Agent Dispatch
 
-_Context for future sessions._
+### Group A (2 agents, parallel)
+\`\`\`
+Agent 1: "Read 01-primitives.md and implement."
+Agent 2: "Read 02-types.md and implement."
+\`\`\`
 
-- Started with 7 task files
-- Task 03 may need splitting
-
-## Open Questions
-
-- [ ] Should regions support overlapping?
-- [ ] How to handle tempo changes mid-render?
-
----
-
-## What This Is
-
-[2-3 sentences explaining the feature]
-
-## Architecture
-
-```
-[ASCII box diagram showing layers/components]
-```
-
-## Crate Structure
-
-```
-crates/feature/
-├── src/
-│   ├── lib.rs
-│   ├── module1.rs    # 01: description
-│   └── module2.rs    # 02: description
-└── Cargo.toml
-```
-
-## Dependencies
-
-```toml
-[dependencies]
-# list with versions
-```
+### Output Format
+When complete, report:
+- Files modified (paths)
+- Tests added/passing
+- Blockers or follow-up discovered
+- Key context the orchestrator should know
 
 ## Documents
 
 | Document | Focus | Read When |
 |----------|-------|-----------|
-| [DETAIL.md](./DETAIL.md) | Design rationale | Revisions |
-| [01-task](./01-task.md) | Module 1 | Implementing module1.rs |
-```
+| [01-primitives.md](./01-primitives.md) | Core types | Implementing primitives |
+| [02-types.md](./02-types.md) | Type definitions | Implementing types |
 
-**Target: ~100 lines**
+## Open Questions
+
+- [ ] Unresolved design question?
+```
 
 ---
 
@@ -177,7 +152,8 @@ crates/feature/
 
 **File:** `src/module.rs`
 **Focus:** [One domain only]
-**Dependencies:** `crate1`, `crate2`
+**Dependencies:** 01-other-task, 02-another-task
+**Unblocks:** 04-dependent-task
 
 ---
 
@@ -279,8 +255,8 @@ pub trait MyTrait: Send + Sync {
 | Design rationale | DETAIL.md | "We chose X because Y" |
 | Rejected alternatives | DETAIL.md | "We didn't use Z because..." |
 | Cross-cutting concerns | DETAIL.md | "Error handling affects all modules" |
-| Progress tracking | README.md | Status table |
-| Architecture overview | README.md | ASCII diagram |
+| Progress tracking | README.md | Status table with parallel groups |
+| Execution flow | README.md | Mermaid DAG |
 
 ---
 
@@ -307,10 +283,10 @@ Every task file needs a "Do not" section:
 When task 04 depends on task 01's types:
 
 ```markdown
-**Dependencies:** `primitives` (task 01)
+**Dependencies:** 01-primitives
 ```
 
-Don't re-explain the types. The agent will read task 01 if needed.
+Don't re-explain the types. The agent can read the dependency's task file if needed.
 
 ---
 
@@ -376,43 +352,124 @@ These are *what* must work. Definition of Done is *how* to verify the code is re
 
 ---
 
-## Token Budget Guidelines
+## Parallel Execution
 
-| Document | Target Lines | Why |
-|----------|--------------|-----|
-| README.md | ~100 | Read every session |
-| DETAIL.md | Unlimited | Only for revisions |
-| Task files | 100-200 each | One per implementation session |
-| Total plan | ~1500 lines | Full context in one read |
+Plans should enable a coordinating agent to dispatch parallel workers and synthesize results efficiently.
 
-If a task file exceeds 200 lines, consider:
-1. Are you including implementations? Remove them.
-2. Are you explaining other domains? Stop.
-3. Is this actually two tasks? Split it.
+### Dependency Graph
+
+Use Mermaid in README.md to visualize the execution DAG:
+
+```markdown
+## Execution Flow
+
+\`\`\`mermaid
+graph TD
+    subgraph A[Group A]
+        A1[01-primitives]
+        A2[02-types]
+        A3[03-helpers]
+    end
+    subgraph B[Group B]
+        B1[04-core]
+        B2[05-io]
+    end
+    subgraph C[Group C]
+        C1[06-integration]
+    end
+    A1 --> B1
+    A2 --> B1
+    A2 --> B2
+    A3 --> B2
+    B1 --> C1
+    B2 --> C1
+\`\`\`
+```
+
+Mermaid is parseable by future agents, renders on GitHub, and makes dependencies explicit.
+
+### Task Dependencies
+
+Each task file declares what it needs and what it unblocks:
+
+```markdown
+**Dependencies:** 01-primitives, 02-types
+**Unblocks:** 05-io, 06-integration
+```
+
+### Agent Dispatch Section
+
+Include ready-to-use prompts in README.md:
+
+```markdown
+## Agent Dispatch
+
+### Group A (3 agents, parallel)
+\`\`\`
+Agent 1: "Read 01-primitives.md and implement."
+Agent 2: "Read 02-types.md and implement."
+Agent 3: "Read 03-helpers.md and implement."
+\`\`\`
+```
+
+### Output Discipline
+
+Instruct workers on efficient reporting. The orchestrator synthesizes multiple outputs — structured reports reduce overhead.
+
+Add to agent prompts:
+```
+When complete, report:
+- Files modified (paths)
+- Tests added/passing
+- Blockers or follow-up discovered
+- Key context the orchestrator should know
+```
+
+### Rich Context for Workers
+
+Give workers everything they need to work confidently:
+- Full type signatures and examples
+- Links to related files
+- Design rationale where helpful
+
+### Ask Early, Ask Often
+
+**Asking clarifying questions saves everyone time.** Don't guess — ask.
+
+Subagents can ask you questions directly via AskUserQuestion. Your answers go to their context, not the orchestrator's. This means:
+- You can make decisions at implementation time
+- Clarifications stay with the worker who needs them
+- The orchestrator stays lean — just dispatching and synthesizing
+
+Good reasons to ask:
+- Multiple valid approaches — which do you prefer?
+- Ambiguous requirement — what's the actual intent?
+- Discovered complexity — should we simplify scope?
+- Found related issues — fix now or note for later?
+
+A 30-second question beats a 30-minute wrong implementation.
 
 ---
 
 ## Checklist Before Finalizing Plan
 
 **README.md:**
-- [ ] Progress tracking table
-- [ ] Current status section
+- [ ] Progress tracking table with parallel groups
+- [ ] Mermaid execution DAG
+- [ ] Agent dispatch prompts
 - [ ] Success metrics (checkboxes)
-- [ ] Signoffs & decisions table
 - [ ] Open questions (checkboxes)
-- [ ] Architecture diagram
 
 **DETAIL.md:**
 - [ ] Explains *why* for key decisions
 - [ ] Documents rejected alternatives
 
 **Task Files:**
+- [ ] Dependencies and Unblocks declared
 - [ ] Task section with clear prompt
-- [ ] "Why this first?" rationale
 - [ ] Definition of Done (fmt/clippy/check/test)
-- [ ] Out of Scope section
 - [ ] Acceptance Criteria checkboxes
-- [ ] External crate patterns embedded
+- [ ] Rich context (types, examples, rationale)
 
 **Overall:**
 - [ ] No full implementations anywhere
