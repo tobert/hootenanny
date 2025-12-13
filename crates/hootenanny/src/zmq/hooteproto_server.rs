@@ -9,6 +9,11 @@
 //! - Routing without deserialization (fixed-width header fields)
 //! - Efficient heartbeats (no MsgPack overhead)
 //! - Native binary payloads (no base64 encoding)
+//!
+//! Bidirectional heartbeating:
+//! - Tracks connected clients via ClientTracker
+//! - Sends heartbeats to clients (holler → hootenanny and hootenanny → holler)
+//! - Cleans up stale clients automatically
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
@@ -25,6 +30,7 @@ use crate::api::service::EventDualityServer;
 use crate::artifact_store::{self, ArtifactStore as _};
 use crate::cas::FileStore;
 use crate::telemetry;
+use crate::zmq::client_tracker::ClientTracker;
 use crate::zmq::LuanetteClient;
 
 /// ZMQ server for hooteproto messages
@@ -34,6 +40,7 @@ use crate::zmq::LuanetteClient;
 /// 2. Full - with EventDualityServer for full tool dispatch
 ///
 /// Optionally proxies lua_* payloads to luanette if configured.
+/// Tracks connected clients for bidirectional heartbeating.
 pub struct HooteprotoServer {
     bind_address: String,
     cas: Arc<FileStore>,
@@ -43,6 +50,8 @@ pub struct HooteprotoServer {
     event_server: Option<Arc<EventDualityServer>>,
     /// Optional luanette client for Lua scripting proxy
     luanette: Option<Arc<LuanetteClient>>,
+    /// Connected client tracker for bidirectional heartbeats
+    client_tracker: Arc<ClientTracker>,
 }
 
 impl HooteprotoServer {
@@ -59,6 +68,7 @@ impl HooteprotoServer {
             start_time: Instant::now(),
             event_server: None,
             luanette: None,
+            client_tracker: Arc::new(ClientTracker::new()),
         }
     }
 
@@ -76,6 +86,7 @@ impl HooteprotoServer {
             start_time: Instant::now(),
             event_server: Some(event_server),
             luanette: None,
+            client_tracker: Arc::new(ClientTracker::new()),
         }
     }
 
@@ -83,6 +94,11 @@ impl HooteprotoServer {
     pub fn with_luanette(mut self, luanette: Option<Arc<LuanetteClient>>) -> Self {
         self.luanette = luanette;
         self
+    }
+
+    /// Get the client tracker for monitoring connected clients
+    pub fn client_tracker(&self) -> Arc<ClientTracker> {
+        Arc::clone(&self.client_tracker)
     }
 
     /// Run the server until shutdown signal
@@ -144,6 +160,11 @@ impl HooteprotoServer {
 
         match frame.command {
             Command::Heartbeat => {
+                // Record activity from this client (use first identity frame as key)
+                if let Some(client_id) = identity.first() {
+                    self.client_tracker.record_activity(client_id).await;
+                }
+
                 // Respond immediately with heartbeat
                 let response = HootFrame::heartbeat("hootenanny");
                 let reply_frames = response.to_frames_with_identity(&identity);
@@ -219,19 +240,30 @@ impl HooteprotoServer {
             }
 
             Command::Ready => {
-                // Log worker registration (we're the server, so this is informational)
+                // Register client for bidirectional heartbeating (use first identity frame)
+                let service = frame.service.clone();
+                if let Some(client_id) = identity.first() {
+                    self.client_tracker
+                        .register(client_id.clone(), service.clone())
+                        .await;
+                }
+
                 if let Ok(caps) = frame.payload::<ReadyPayload>() {
                     info!(
-                        "Worker registered: service={} tools={:?} binary={}",
-                        frame.service, caps.tools, caps.accepts_binary
+                        "Client registered: service={} tools={:?} binary={}",
+                        service, caps.tools, caps.accepts_binary
                     );
                 } else {
-                    info!("Worker registered: service={}", frame.service);
+                    info!("Client registered: service={}", service);
                 }
             }
 
             Command::Disconnect => {
-                info!("Worker disconnected: service={}", frame.service);
+                // Remove client from tracker
+                if let Some(client_id) = identity.first() {
+                    self.client_tracker.remove(client_id).await;
+                }
+                info!("Client disconnected: service={}", frame.service);
             }
 
             Command::Reply => {
@@ -378,6 +410,9 @@ impl HooteprotoServer {
 
     /// Check if a payload should be routed to luanette
     fn should_route_to_luanette(&self, payload: &Payload) -> bool {
+        // Only Lua scripting tools go to luanette
+        // Job tools (JobStatus, JobPoll, JobCancel, JobList) are handled locally
+        // because the job store lives in hootenanny
         matches!(
             payload,
             Payload::LuaEval { .. }
@@ -385,10 +420,6 @@ impl HooteprotoServer {
                 | Payload::ScriptStore { .. }
                 | Payload::ScriptSearch { .. }
                 | Payload::JobExecute { .. }
-                | Payload::JobStatus { .. }
-                | Payload::JobPoll { .. }
-                | Payload::JobCancel { .. }
-                | Payload::JobList { .. }
         )
     }
 
