@@ -49,6 +49,10 @@ struct Cli {
     #[arg(long)]
     chaosgarden: Option<String>,
 
+    /// Connect to luanette (Lua scripting) at this endpoint (e.g., "tcp://localhost:5570")
+    #[arg(long)]
+    luanette: Option<String>,
+
     /// Bind a hooteproto ZMQ ROUTER for holler gateway (e.g., "tcp://0.0.0.0:5580")
     #[arg(long)]
     zmq_bind: Option<String>,
@@ -167,6 +171,24 @@ async fn main() -> Result<()> {
         None
     };
 
+    // --- Luanette Connection (optional) ---
+    let luanette_client: Option<Arc<zmq::LuanetteClient>> = if let Some(endpoint) = &cli.luanette {
+        tracing::info!("🌙 Connecting to luanette at {}...", endpoint);
+        match zmq::LuanetteClient::connect(endpoint, 30000).await {
+            Ok(client) => {
+                tracing::info!("   Connected to luanette!");
+                Some(Arc::new(client))
+            }
+            Err(e) => {
+                tracing::warn!("   Failed to connect to luanette: {}", e);
+                tracing::warn!("   Continuing without Lua scripting");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let addr = format!("0.0.0.0:{}", cli.port);
 
     // --- ZMQ PUB socket for broadcasts (optional, for holler SSE) ---
@@ -206,13 +228,18 @@ async fn main() -> Result<()> {
             Arc::new(cas.clone()),
             artifact_store.clone(),
             event_duality_server.clone(),
-        );
+        )
+        .with_luanette(luanette_client.clone());
+
         tokio::spawn(async move {
             if let Err(e) = zmq_server.run(shutdown_rx).await {
                 tracing::error!("ZMQ server error: {}", e);
             }
         });
         tracing::info!("   ZMQ ROUTER: {}", zmq_bind);
+        if luanette_client.is_some() {
+            tracing::info!("   Luanette proxy: enabled");
+        }
         Some(shutdown_tx)
     } else {
         tracing::warn!("⚠️  No --zmq-bind specified. Tools will not be available.");
@@ -249,6 +276,8 @@ async fn main() -> Result<()> {
     struct HealthState {
         job_store: Arc<job_system::JobStore>,
         start_time: Instant,
+        luanette: Option<Arc<zmq::LuanetteClient>>,
+        garden: Option<Arc<zmq::GardenManager>>,
     }
 
     async fn health_handler(
@@ -257,6 +286,20 @@ async fn main() -> Result<()> {
         let job_stats = state.job_store.stats();
         let uptime = state.start_time.elapsed();
 
+        // Build backends status
+        let mut backends = serde_json::Map::new();
+
+        if let Some(ref luanette) = state.luanette {
+            backends.insert("luanette".to_string(), luanette.health.health_summary().await);
+        }
+
+        if let Some(ref garden) = state.garden {
+            backends.insert("chaosgarden".to_string(), serde_json::json!({
+                "connected": garden.is_connected().await,
+                "state": format!("{:?}", garden.state().await),
+            }));
+        }
+
         axum::Json(serde_json::json!({
             "status": "healthy",
             "uptime_secs": uptime.as_secs(),
@@ -264,13 +307,16 @@ async fn main() -> Result<()> {
             "jobs": {
                 "pending": job_stats.pending,
                 "running": job_stats.running,
-            }
+            },
+            "backends": backends,
         }))
     }
 
     let health_state = HealthState {
         job_store: job_store.clone(),
         start_time: server_start,
+        luanette: luanette_client.clone(),
+        garden: garden_manager.clone(),
     };
 
     // Build the main application router

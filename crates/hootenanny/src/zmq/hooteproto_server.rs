@@ -25,12 +25,15 @@ use crate::api::service::EventDualityServer;
 use crate::artifact_store::{self, ArtifactStore as _};
 use crate::cas::FileStore;
 use crate::telemetry;
+use crate::zmq::LuanetteClient;
 
 /// ZMQ server for hooteproto messages
 ///
 /// Can operate in two modes:
 /// 1. Standalone - with direct CAS/artifact access (legacy, for basic operations)
 /// 2. Full - with EventDualityServer for full tool dispatch
+///
+/// Optionally proxies lua_* payloads to luanette if configured.
 pub struct HooteprotoServer {
     bind_address: String,
     cas: Arc<FileStore>,
@@ -38,6 +41,8 @@ pub struct HooteprotoServer {
     start_time: Instant,
     /// Optional EventDualityServer for full tool dispatch
     event_server: Option<Arc<EventDualityServer>>,
+    /// Optional luanette client for Lua scripting proxy
+    luanette: Option<Arc<LuanetteClient>>,
 }
 
 impl HooteprotoServer {
@@ -53,6 +58,7 @@ impl HooteprotoServer {
             artifacts,
             start_time: Instant::now(),
             event_server: None,
+            luanette: None,
         }
     }
 
@@ -69,7 +75,14 @@ impl HooteprotoServer {
             artifacts,
             start_time: Instant::now(),
             event_server: Some(event_server),
+            luanette: None,
         }
+    }
+
+    /// Add luanette client for Lua scripting proxy
+    pub fn with_luanette(mut self, luanette: Option<Arc<LuanetteClient>>) -> Self {
+        self.luanette = luanette;
+        self
     }
 
     /// Run the server until shutdown signal
@@ -295,6 +308,19 @@ impl HooteprotoServer {
             _ => {}
         }
 
+        // Route lua_*, job_*, script_* payloads to luanette if connected
+        if self.should_route_to_luanette(&payload) {
+            if let Some(ref luanette) = self.luanette {
+                return self.dispatch_via_luanette(luanette, payload).await;
+            } else {
+                return Payload::Error {
+                    code: "luanette_not_connected".to_string(),
+                    message: "Lua scripting requires luanette connection. Start hootenanny with --luanette tcp://localhost:5570".to_string(),
+                    details: None,
+                };
+            }
+        }
+
         // If we have an EventDualityServer, route through it for full functionality
         if let Some(ref server) = self.event_server {
             return self.dispatch_via_server(server, payload).await;
@@ -347,6 +373,39 @@ impl HooteprotoServer {
                 message,
                 details,
             },
+        }
+    }
+
+    /// Check if a payload should be routed to luanette
+    fn should_route_to_luanette(&self, payload: &Payload) -> bool {
+        matches!(
+            payload,
+            Payload::LuaEval { .. }
+                | Payload::LuaDescribe { .. }
+                | Payload::ScriptStore { .. }
+                | Payload::ScriptSearch { .. }
+                | Payload::JobExecute { .. }
+                | Payload::JobStatus { .. }
+                | Payload::JobPoll { .. }
+                | Payload::JobCancel { .. }
+                | Payload::JobList { .. }
+        )
+    }
+
+    /// Dispatch a payload to luanette via ZMQ proxy
+    async fn dispatch_via_luanette(&self, luanette: &LuanetteClient, payload: Payload) -> Payload {
+        debug!("Proxying to luanette: {}", payload_type_name(&payload));
+
+        match luanette.request(payload, None).await {
+            Ok(response) => response,
+            Err(e) => {
+                warn!("Luanette proxy error: {}", e);
+                Payload::Error {
+                    code: "luanette_proxy_error".to_string(),
+                    message: e.to_string(),
+                    details: None,
+                }
+            }
         }
     }
 

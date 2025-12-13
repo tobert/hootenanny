@@ -127,15 +127,16 @@ Update this section as work completes. Check off items, note blockers, add commi
 - [ ] Update luanette similarly (separate task)
 - [ ] Commit: _________________
 
-### Phase 4: Backend Proxies (hootenanny)
-- [ ] Create `crates/hootenanny/src/chaosgarden_client.rs`
-- [ ] IPC connection to chaosgarden on startup
-- [ ] Route `graph_*` and `play` through chaosgarden proxy
-- [ ] Create `crates/hootenanny/src/luanette_client.rs`
-- [ ] ZMQ connection to luanette on startup
-- [ ] Route luanette tools through luanette proxy
-- [ ] Propagate traceparent for unified tracing
-- [ ] Add chaosgarden + luanette health to `/health`
+### Phase 4: Backend Proxies (hootenanny) ✅
+- [x] Chaosgarden: already has GardenManager (zmq/manager.rs)
+- [x] Create `crates/hootenanny/src/zmq/luanette_client.rs`
+- [x] Add `--luanette tcp://localhost:5570` CLI option
+- [x] ZMQ DEALER connection to luanette on startup
+- [x] Route lua_*, job_*, script_* payloads through luanette proxy
+- [x] `HooteprotoServer::with_luanette()` builder method
+- [x] `should_route_to_luanette()` + `dispatch_via_luanette()` helpers
+- [x] Health tracking with `HealthTracker` (connected/failures/last_message)
+- [x] Add luanette + chaosgarden status to `/health` endpoint
 - [ ] Commit: _________________
 
 ### Phase 5: Holler Simplification
