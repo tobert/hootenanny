@@ -1,7 +1,7 @@
 //! Note, chord, and rest parsing using winnow combinators.
 
-use winnow::prelude::*;
 use winnow::combinator::{alt, opt, repeat};
+use winnow::prelude::*;
 use winnow::token::{one_of, take_while};
 
 use crate::ast::{Accidental, Chord, Duration, Note, NoteName, Rest};
@@ -12,8 +12,10 @@ type PResult<T> = winnow::ModalResult<T>;
 /// Uppercase = octave 0, lowercase = octave 1
 pub fn parse_pitch(input: &mut &str) -> PResult<(NoteName, i8)> {
     // Use one_of to only consume valid pitch characters
-    let c = one_of(['C', 'D', 'E', 'F', 'G', 'A', 'B', 'c', 'd', 'e', 'f', 'g', 'a', 'b'])
-        .parse_next(input)?;
+    let c = one_of([
+        'C', 'D', 'E', 'F', 'G', 'A', 'B', 'c', 'd', 'e', 'f', 'g', 'a', 'b',
+    ])
+    .parse_next(input)?;
     match c {
         'C' => Ok((NoteName::C, 0)),
         'D' => Ok((NoteName::D, 0)),

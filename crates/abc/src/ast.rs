@@ -118,6 +118,39 @@ impl NoteName {
             NoteName::B,
         ]
     }
+
+    /// Create from semitone offset (0-11), preferring sharps for chromatic notes
+    pub fn from_semitone(semitone: i8) -> (NoteName, Option<Accidental>) {
+        match semitone.rem_euclid(12) {
+            0 => (NoteName::C, None),
+            1 => (NoteName::C, Some(Accidental::Sharp)),
+            2 => (NoteName::D, None),
+            3 => (NoteName::D, Some(Accidental::Sharp)),
+            4 => (NoteName::E, None),
+            5 => (NoteName::F, None),
+            6 => (NoteName::F, Some(Accidental::Sharp)),
+            7 => (NoteName::G, None),
+            8 => (NoteName::G, Some(Accidental::Sharp)),
+            9 => (NoteName::A, None),
+            10 => (NoteName::A, Some(Accidental::Sharp)),
+            11 => (NoteName::B, None),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Parse from string (case-insensitive)
+    pub fn parse(s: &str) -> Option<NoteName> {
+        match s.to_uppercase().as_str() {
+            "C" => Some(NoteName::C),
+            "D" => Some(NoteName::D),
+            "E" => Some(NoteName::E),
+            "F" => Some(NoteName::F),
+            "G" => Some(NoteName::G),
+            "A" => Some(NoteName::A),
+            "B" => Some(NoteName::B),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,6 +171,18 @@ impl Accidental {
             Accidental::Natural => 0,
             Accidental::Flat => -1,
             Accidental::DoubleFlat => -2,
+        }
+    }
+
+    /// Parse from string
+    pub fn parse(s: &str) -> Option<Accidental> {
+        match s {
+            "#" | "^" => Some(Accidental::Sharp),
+            "b" | "_" => Some(Accidental::Flat),
+            "##" | "^^" => Some(Accidental::DoubleSharp),
+            "bb" | "__" => Some(Accidental::DoubleFlat),
+            "=" => Some(Accidental::Natural),
+            _ => None,
         }
     }
 }
@@ -178,10 +223,7 @@ impl Mode {
 /// Meter/time signature
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Meter {
-    Simple {
-        numerator: u8,
-        denominator: u8,
-    },
+    Simple { numerator: u8, denominator: u8 },
     Common, // C = 4/4
     Cut,    // C| = 2/2
     None,   // Free meter
@@ -259,8 +301,8 @@ pub struct VoiceDef {
     pub id: String,
     pub name: Option<String>,
     pub clef: Option<Clef>,
-    pub octave: Option<i8>,        // Octave transposition
-    pub transpose: Option<i8>,     // Semitone transposition
+    pub octave: Option<i8>,    // Octave transposition
+    pub transpose: Option<i8>, // Semitone transposition
     pub stem: Option<StemDirection>,
 }
 
@@ -309,7 +351,7 @@ pub enum Element {
     InlineField(InfoField),
     Decoration(Decoration),
     Slur(SlurBoundary),
-    VoiceSwitch(String),  // Switch to voice with given ID
+    VoiceSwitch(String), // Switch to voice with given ID
     Space,
     LineBreak,
 }
@@ -345,13 +387,9 @@ impl Note {
         // ABC octave 1 (lowercase c-b) = MIDI 60-71 (middle C octave)
         // So: base + (octave + 4) * 12
         let octave_offset = (self.octave + 4) * 12;
-        let acc_offset = self
-            .accidental
-            .map(|a| a.to_semitone_offset())
-            .unwrap_or(0);
+        let acc_offset = self.accidental.map(|a| a.to_semitone_offset()).unwrap_or(0);
 
-        ((base as i16) + (octave_offset as i16) + (acc_offset as i16))
-            .clamp(0, 127) as u8
+        ((base as i16) + (octave_offset as i16) + (acc_offset as i16)).clamp(0, 127) as u8
     }
 }
 
@@ -408,7 +446,7 @@ pub struct Chord {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Rest {
     pub duration: Duration,
-    pub visible: bool,         // z vs x
+    pub visible: bool,              // z vs x
     pub multi_measure: Option<u16>, // Z4 = 4 bars
 }
 
@@ -456,15 +494,19 @@ pub enum Bar {
 /// Tuplet
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tuplet {
-    pub p: u8,                  // p notes
-    pub q: u8,                  // in time of q notes
+    pub p: u8, // p notes
+    pub q: u8, // in time of q notes
     pub elements: Vec<Element>,
 }
 
 impl Tuplet {
     /// Create a triplet (3 notes in time of 2)
     pub fn triplet(elements: Vec<Element>) -> Self {
-        Tuplet { p: 3, q: 2, elements }
+        Tuplet {
+            p: 3,
+            q: 2,
+            elements,
+        }
     }
 }
 
@@ -560,15 +602,15 @@ mod tests {
     }
 
     #[test]
-    fn test_mode_from_str() {
-        assert_eq!(Mode::from_str("maj"), Some(Mode::Major));
-        assert_eq!(Mode::from_str("Major"), Some(Mode::Major));
-        assert_eq!(Mode::from_str("m"), Some(Mode::Minor));
-        assert_eq!(Mode::from_str("min"), Some(Mode::Minor));
-        assert_eq!(Mode::from_str("dor"), Some(Mode::Dorian));
-        assert_eq!(Mode::from_str("Mixolydian"), Some(Mode::Mixolydian));
-        assert_eq!(Mode::from_str(""), Some(Mode::Major));
-        assert_eq!(Mode::from_str("invalid"), None);
+    fn test_mode_parse() {
+        assert_eq!(Mode::parse("maj"), Some(Mode::Major));
+        assert_eq!(Mode::parse("Major"), Some(Mode::Major));
+        assert_eq!(Mode::parse("m"), Some(Mode::Minor));
+        assert_eq!(Mode::parse("min"), Some(Mode::Minor));
+        assert_eq!(Mode::parse("dor"), Some(Mode::Dorian));
+        assert_eq!(Mode::parse("Mixolydian"), Some(Mode::Mixolydian));
+        assert_eq!(Mode::parse(""), Some(Mode::Major));
+        assert_eq!(Mode::parse("invalid"), None);
     }
 
     #[test]

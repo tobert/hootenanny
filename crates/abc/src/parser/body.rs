@@ -77,7 +77,9 @@ fn try_parse_element(input: &mut &str, collector: &mut FeedbackCollector) -> Opt
     if input.starts_with("V:") {
         let rest = &input[2..];
         // Get voice ID (up to whitespace or end of line)
-        let id_end = rest.find(|c: char| c.is_whitespace() || c == '|').unwrap_or(rest.len());
+        let id_end = rest
+            .find(|c: char| c.is_whitespace() || c == '|')
+            .unwrap_or(rest.len());
         let voice_id = rest[..id_end].trim().to_string();
         *input = &rest[id_end..];
         return Some(Element::VoiceSwitch(voice_id));
@@ -181,10 +183,7 @@ fn try_parse_bar(input: &mut &str) -> Option<Bar> {
         if input.len() >= 3 && input.chars().nth(2).is_some_and(|c| c.is_ascii_digit()) {
             *input = &input[2..];
             // Parse the number
-            let num_str: String = input
-                .chars()
-                .take_while(|c| c.is_ascii_digit())
-                .collect();
+            let num_str: String = input.chars().take_while(|c| c.is_ascii_digit()).collect();
             *input = &input[num_str.len()..];
             return Some(Bar::SecondEnding);
         }
@@ -221,10 +220,7 @@ fn try_parse_tuplet(input: &mut &str, collector: &mut FeedbackCollector) -> Opti
     *input = &input[1..]; // consume '('
 
     // Parse p (number of notes)
-    let p_str: String = input
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
+    let p_str: String = input.chars().take_while(|c| c.is_ascii_digit()).collect();
     *input = &input[p_str.len()..];
     let p: u8 = p_str.parse().unwrap_or(3);
 
@@ -244,10 +240,7 @@ fn try_parse_tuplet(input: &mut &str, collector: &mut FeedbackCollector) -> Opti
     // Check for explicit :q:r
     let (q, r) = if input.starts_with(':') {
         *input = &input[1..];
-        let q_str: String = input
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect();
+        let q_str: String = input.chars().take_while(|c| c.is_ascii_digit()).collect();
         *input = &input[q_str.len()..];
         let q: u8 = if q_str.is_empty() {
             default_q
@@ -257,10 +250,7 @@ fn try_parse_tuplet(input: &mut &str, collector: &mut FeedbackCollector) -> Opti
 
         let r = if input.starts_with(':') {
             *input = &input[1..];
-            let r_str: String = input
-                .chars()
-                .take_while(|c| c.is_ascii_digit())
-                .collect();
+            let r_str: String = input.chars().take_while(|c| c.is_ascii_digit()).collect();
             *input = &input[r_str.len()..];
             if r_str.is_empty() {
                 p
@@ -371,21 +361,42 @@ fn try_parse_decoration(input: &mut &str) -> Option<crate::ast::Decoration> {
         // H not followed by lowercase (which would be a note like Ha - invalid anyway)
         // Actually H alone is fermata, but H followed by uppercase might be note
         // Let's be conservative
-        if input.len() == 1 || !input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic()) {
+        if input.len() == 1
+            || !input
+                .chars()
+                .nth(1)
+                .is_some_and(|c| c.is_ascii_alphabetic())
+        {
             *input = &input[1..];
             return Some(Decoration::Fermata);
         }
     }
-    if input.starts_with('T') && !input.chars().nth(1).is_some_and(|c| c.is_ascii_lowercase())
-        && (input.len() == 1 || !input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic())) {
-            *input = &input[1..];
-            return Some(Decoration::Trill);
+    if input.starts_with('T')
+        && !input.chars().nth(1).is_some_and(|c| c.is_ascii_lowercase())
+        && (input.len() == 1
+            || !input
+                .chars()
+                .nth(1)
+                .is_some_and(|c| c.is_ascii_alphabetic()))
+    {
+        *input = &input[1..];
+        return Some(Decoration::Trill);
     }
-    if input.starts_with('u') && !input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic()) {
+    if input.starts_with('u')
+        && !input
+            .chars()
+            .nth(1)
+            .is_some_and(|c| c.is_ascii_alphabetic())
+    {
         *input = &input[1..];
         return Some(Decoration::UpBow);
     }
-    if input.starts_with('v') && !input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic()) {
+    if input.starts_with('v')
+        && !input
+            .chars()
+            .nth(1)
+            .is_some_and(|c| c.is_ascii_alphabetic())
+    {
         *input = &input[1..];
         return Some(Decoration::DownBow);
     }

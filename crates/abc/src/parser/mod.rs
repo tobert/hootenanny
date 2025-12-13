@@ -3,14 +3,14 @@
 //! The parser is designed to be generous - it will attempt to continue
 //! parsing even when encountering issues, collecting feedback for the user.
 
-mod header;
 mod body;
-mod note;
+mod header;
 mod key;
+mod note;
 
-use std::collections::HashMap;
 use crate::ast::{Element, Tune, Voice};
 use crate::feedback::{FeedbackCollector, ParseResult};
+use std::collections::HashMap;
 
 /// Parse ABC notation into a Tune AST.
 pub fn parse(input: &str) -> ParseResult<Tune> {
@@ -25,20 +25,21 @@ pub fn parse(input: &str) -> ParseResult<Tune> {
     // Route elements to voices based on VoiceSwitch elements
     let voices = route_elements_to_voices(&header.voice_defs, elements);
 
-    let tune = Tune {
-        header,
-        voices,
-    };
+    let tune = Tune { header, voices };
 
     ParseResult::new(tune, collector.into_feedback())
 }
 
 /// Route parsed elements to their respective voices based on VoiceSwitch markers.
-fn route_elements_to_voices(voice_defs: &[crate::ast::VoiceDef], elements: Vec<Element>) -> Vec<Voice> {
+fn route_elements_to_voices(
+    voice_defs: &[crate::ast::VoiceDef],
+    elements: Vec<Element>,
+) -> Vec<Voice> {
     // If no voice definitions, put everything in a single default voice
     if voice_defs.is_empty() {
         // Filter out VoiceSwitch elements if any (shouldn't exist without defs, but be safe)
-        let filtered: Vec<_> = elements.into_iter()
+        let filtered: Vec<_> = elements
+            .into_iter()
             .filter(|e| !matches!(e, Element::VoiceSwitch(_)))
             .collect();
         return vec![Voice {
@@ -234,8 +235,8 @@ mod tests {
 
         assert_eq!(notes.len(), 3);
         assert_eq!(notes[0].octave, -1); // C,
-        assert_eq!(notes[1].octave, 0);  // C
-        assert_eq!(notes[2].octave, 2);  // c'
+        assert_eq!(notes[1].octave, 0); // C
+        assert_eq!(notes[2].octave, 2); // c'
     }
 
     #[test]

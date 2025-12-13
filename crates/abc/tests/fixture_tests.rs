@@ -117,18 +117,28 @@ C,D,E,F,|
     // Should have 2 voice definitions
     assert_eq!(result.value.header.voice_defs.len(), 2);
     assert_eq!(result.value.header.voice_defs[0].id, "1");
-    assert_eq!(result.value.header.voice_defs[0].name, Some("Melody".to_string()));
+    assert_eq!(
+        result.value.header.voice_defs[0].name,
+        Some("Melody".to_string())
+    );
     assert_eq!(result.value.header.voice_defs[1].id, "2");
-    assert_eq!(result.value.header.voice_defs[1].name, Some("Bass".to_string()));
+    assert_eq!(
+        result.value.header.voice_defs[1].name,
+        Some("Bass".to_string())
+    );
 
     // Should have 2 voices in the tune
     assert_eq!(result.value.voices.len(), 2);
 
     // Each voice should have content (notes)
-    let voice1_notes = result.value.voices[0].elements.iter()
+    let voice1_notes = result.value.voices[0]
+        .elements
+        .iter()
         .filter(|e| matches!(e, abc::Element::Note(_)))
         .count();
-    let voice2_notes = result.value.voices[1].elements.iter()
+    let voice2_notes = result.value.voices[1]
+        .elements
+        .iter()
         .filter(|e| matches!(e, abc::Element::Note(_)))
         .count();
 
@@ -322,12 +332,8 @@ fn parse_midi_tracks(midi: &[u8]) -> Vec<Vec<MidiNoteEvent>> {
         pos += 4;
 
         // Track length
-        let track_len = u32::from_be_bytes([
-            midi[pos],
-            midi[pos + 1],
-            midi[pos + 2],
-            midi[pos + 3],
-        ]) as usize;
+        let track_len =
+            u32::from_be_bytes([midi[pos], midi[pos + 1], midi[pos + 2], midi[pos + 3]]) as usize;
         pos += 4;
 
         if pos + track_len > midi.len() {
@@ -370,7 +376,11 @@ C,|
     let tracks = parse_midi_tracks(&midi);
 
     // Format 1: Track 0 = tempo, Track 1 = voice 1, Track 2 = voice 2
-    assert!(tracks.len() >= 3, "Expected 3 tracks (tempo + 2 voices), got {}", tracks.len());
+    assert!(
+        tracks.len() >= 3,
+        "Expected 3 tracks (tempo + 2 voices), got {}",
+        tracks.len()
+    );
 
     // Track 1 (voice 1): should have note c (MIDI 72) on channel 0
     let voice1_notes: Vec<_> = tracks[1].iter().filter(|e| e.is_note_on).collect();
@@ -408,16 +418,36 @@ K:C
     let voice1_notes: Vec<_> = result.value.voices[0]
         .elements
         .iter()
-        .filter_map(|e| if let abc::Element::Note(n) = e { Some(n) } else { None })
+        .filter_map(|e| {
+            if let abc::Element::Note(n) = e {
+                Some(n)
+            } else {
+                None
+            }
+        })
         .collect();
     let voice2_notes: Vec<_> = result.value.voices[1]
         .elements
         .iter()
-        .filter_map(|e| if let abc::Element::Note(n) = e { Some(n) } else { None })
+        .filter_map(|e| {
+            if let abc::Element::Note(n) = e {
+                Some(n)
+            } else {
+                None
+            }
+        })
         .collect();
 
-    assert_eq!(voice1_notes.len(), 3, "Voice 1 should have 3 notes (c, d, e)");
-    assert_eq!(voice2_notes.len(), 3, "Voice 2 should have 3 notes (C, D, E)");
+    assert_eq!(
+        voice1_notes.len(),
+        3,
+        "Voice 1 should have 3 notes (c, d, e)"
+    );
+    assert_eq!(
+        voice2_notes.len(),
+        3,
+        "Voice 2 should have 3 notes (C, D, E)"
+    );
 
     // Verify note pitches
     assert_eq!(voice1_notes[0].pitch, abc::NoteName::C);
@@ -532,7 +562,10 @@ CDEF|
     let midi = to_midi(&result.value, &MidiParams::default());
     let tracks = parse_midi_tracks(&midi);
 
-    assert!(tracks.len() >= 3, "Should have tempo track + 2 voice tracks");
+    assert!(
+        tracks.len() >= 3,
+        "Should have tempo track + 2 voice tracks"
+    );
 
     // Both voice tracks should have first note at tick 0
     let voice1_first = tracks[1].iter().find(|e| e.is_note_on);
@@ -541,8 +574,16 @@ CDEF|
     assert!(voice1_first.is_some(), "Voice 1 should have notes");
     assert!(voice2_first.is_some(), "Voice 2 should have notes");
 
-    assert_eq!(voice1_first.unwrap().tick, 0, "Voice 1 should start at tick 0");
-    assert_eq!(voice2_first.unwrap().tick, 0, "Voice 2 should start at tick 0");
+    assert_eq!(
+        voice1_first.unwrap().tick,
+        0,
+        "Voice 1 should start at tick 0"
+    );
+    assert_eq!(
+        voice2_first.unwrap().tick,
+        0,
+        "Voice 2 should start at tick 0"
+    );
 }
 
 // ============================================================================
@@ -578,7 +619,10 @@ K:C
     assert_eq!(notes[2].pitch, 61, "Third C should inherit C# (61)");
 
     // Fourth C is after bar line, should reset to C natural
-    assert_eq!(notes[3].pitch, 60, "Fourth C after bar should be C natural (60)");
+    assert_eq!(
+        notes[3].pitch, 60,
+        "Fourth C after bar should be C natural (60)"
+    );
 }
 
 /// Test key signature affects MIDI output: K:G means F becomes F#
@@ -658,7 +702,11 @@ K:C
     let notes: Vec<_> = tracks[0].iter().filter(|e| e.is_note_on).collect();
 
     // Expected: A B (first time) A B (repeat) C D (first time) C D (repeat) = 8 notes
-    assert_eq!(notes.len(), 8, "Double repeat should produce 8 notes: A B A B C D C D");
+    assert_eq!(
+        notes.len(),
+        8,
+        "Double repeat should produce 8 notes: A B A B C D C D"
+    );
 
     // Uppercase A = octave 0 = MIDI 69, B = 71, C = 60, D = 62
     assert_eq!(notes[0].pitch, 69, "Note 1: A");
@@ -696,10 +744,17 @@ Z2 C |
     let tracks = parse_midi_tracks(&midi);
 
     let notes: Vec<_> = tracks[0].iter().filter(|e| e.is_note_on).collect();
-    assert_eq!(notes.len(), 1, "Should have 1 note after multi-measure rest");
+    assert_eq!(
+        notes.len(),
+        1,
+        "Should have 1 note after multi-measure rest"
+    );
 
     // 2 bars * 4 beats * 480 ticks = 3840 ticks
-    assert_eq!(notes[0].tick, 3840, "Note should start at tick 3840 (after Z2)");
+    assert_eq!(
+        notes[0].tick, 3840,
+        "Note should start at tick 3840 (after Z2)"
+    );
 }
 
 /// Test grace notes are parsed (documents current MIDI behavior)
@@ -718,9 +773,10 @@ K:C
     assert!(!result.has_errors(), "Parse errors: {:?}", result.feedback);
 
     // Check that grace notes are in the AST
-    let has_grace = result.value.voices[0].elements.iter().any(|e| {
-        matches!(e, abc::Element::GraceNotes { .. })
-    });
+    let has_grace = result.value.voices[0]
+        .elements
+        .iter()
+        .any(|e| matches!(e, abc::Element::GraceNotes { .. }));
     assert!(has_grace, "Should have parsed grace notes");
 
     // Note: Grace notes are currently NOT rendered to MIDI
@@ -730,7 +786,11 @@ K:C
     let notes: Vec<_> = tracks[0].iter().filter(|e| e.is_note_on).collect();
 
     // Currently only main notes (c, d, e, f) are in MIDI, grace notes are skipped
-    assert_eq!(notes.len(), 4, "MIDI has 4 main notes (grace notes not rendered)");
+    assert_eq!(
+        notes.len(),
+        4,
+        "MIDI has 4 main notes (grace notes not rendered)"
+    );
 }
 
 /// Test invisible rest x advances time without sound
@@ -752,11 +812,18 @@ C x C |
     let tracks = parse_midi_tracks(&midi);
 
     let notes: Vec<_> = tracks[0].iter().filter(|e| e.is_note_on).collect();
-    assert_eq!(notes.len(), 2, "Should have 2 notes (invisible rest is silent)");
+    assert_eq!(
+        notes.len(),
+        2,
+        "Should have 2 notes (invisible rest is silent)"
+    );
 
     // First C at tick 0, invisible rest for 1 beat (480 ticks), second C at tick 960
     assert_eq!(notes[0].tick, 0, "First C at tick 0");
-    assert_eq!(notes[1].tick, 960, "Second C at tick 960 (after invisible rest)");
+    assert_eq!(
+        notes[1].tick, 960,
+        "Second C at tick 960 (after invisible rest)"
+    );
 }
 
 // ============================================================================
@@ -836,12 +903,14 @@ K:C
     assert!(!result.has_errors(), "Parse errors: {:?}", result.feedback);
 
     // Check that bar types are in the AST
-    let has_first_ending = result.value.voices[0].elements.iter().any(|e| {
-        matches!(e, abc::Element::Bar(abc::Bar::FirstEnding))
-    });
-    let has_second_ending = result.value.voices[0].elements.iter().any(|e| {
-        matches!(e, abc::Element::Bar(abc::Bar::SecondEnding))
-    });
+    let has_first_ending = result.value.voices[0]
+        .elements
+        .iter()
+        .any(|e| matches!(e, abc::Element::Bar(abc::Bar::FirstEnding)));
+    let has_second_ending = result.value.voices[0]
+        .elements
+        .iter()
+        .any(|e| matches!(e, abc::Element::Bar(abc::Bar::SecondEnding)));
 
     assert!(has_first_ending, "Should have parsed first ending |1");
     assert!(has_second_ending, "Should have parsed second ending :|2");
@@ -876,9 +945,10 @@ K:C
     assert!(!result.has_errors(), "Parse errors: {:?}", result.feedback);
 
     // Check that tuplet was parsed with chord elements
-    let has_tuplet = result.value.voices[0].elements.iter().any(|e| {
-        matches!(e, abc::Element::Tuplet(_))
-    });
+    let has_tuplet = result.value.voices[0]
+        .elements
+        .iter()
+        .any(|e| matches!(e, abc::Element::Tuplet(_)));
     assert!(has_tuplet, "Should have parsed tuplet");
 
     // LIMITATION: Current MIDI generator only handles Note inside Tuplet, not Chord
@@ -890,7 +960,11 @@ K:C
 
     // Document current behavior: chords in tuplets produce NO notes
     // This should be 9 notes when properly implemented (3 chords * 3 notes each)
-    assert_eq!(notes.len(), 0, "LIMITATION: Chords inside tuplets are not rendered to MIDI");
+    assert_eq!(
+        notes.len(),
+        0,
+        "LIMITATION: Chords inside tuplets are not rendered to MIDI"
+    );
 }
 
 /// Test many voices handles MIDI channel overflow gracefully
@@ -966,7 +1040,11 @@ f'|
     let tracks = parse_midi_tracks(&midi);
 
     // Should have tempo track + 18 voice tracks = 19 tracks
-    assert_eq!(tracks.len(), 19, "Should have 19 tracks (tempo + 18 voices)");
+    assert_eq!(
+        tracks.len(),
+        19,
+        "Should have 19 tracks (tempo + 18 voices)"
+    );
 
     // All voices should have produced notes
     for i in 1..19 {
@@ -999,7 +1077,10 @@ V:2
     let tracks = parse_midi_tracks(&midi);
 
     // Should handle gracefully - at least the tempo track and voice 1
-    assert!(tracks.len() >= 2, "Should have at least tempo + voice 1 tracks");
+    assert!(
+        tracks.len() >= 2,
+        "Should have at least tempo + voice 1 tracks"
+    );
 
     // Voice 1 should have its notes
     let voice1_notes: Vec<_> = tracks[1].iter().filter(|e| e.is_note_on).collect();
@@ -1033,5 +1114,8 @@ C16 |
 
     // Duration should be 16 * 480 = 7680 ticks
     let duration = note_off.unwrap().tick - note_on.unwrap().tick;
-    assert_eq!(duration, 7680, "Note duration should be 7680 ticks (16 beats)");
+    assert_eq!(
+        duration, 7680,
+        "Note duration should be 7680 ticks (16 beats)"
+    );
 }

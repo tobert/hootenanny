@@ -10,9 +10,10 @@ use crate::MidiParams;
 /// Get the combined pitch offset from voice properties (transpose + octave)
 fn get_voice_pitch_offset(voice: &Voice, voice_defs: &[crate::ast::VoiceDef]) -> i16 {
     // Find the voice definition that matches this voice
-    let voice_def = voice.id.as_ref().and_then(|vid| {
-        voice_defs.iter().find(|vd| &vd.id == vid)
-    });
+    let voice_def = voice
+        .id
+        .as_ref()
+        .and_then(|vid| voice_defs.iter().find(|vd| &vd.id == vid));
 
     let transpose_offset = voice_def
         .and_then(|vd| vd.transpose)
@@ -52,7 +53,11 @@ fn expand_repeats(elements: &[Element]) -> Vec<Element> {
 
                 let start = repeat_start_idx.unwrap_or(0);
                 // Skip the RepeatStart bar itself in the copy
-                let copy_start = if repeat_start_idx.is_some() { start + 1 } else { start };
+                let copy_start = if repeat_start_idx.is_some() {
+                    start + 1
+                } else {
+                    start
+                };
 
                 // Copy elements (excluding the RepeatEnd we just added)
                 let to_copy: Vec<_> = result[copy_start..result.len() - 1].to_vec();
@@ -67,7 +72,11 @@ fn expand_repeats(elements: &[Element]) -> Vec<Element> {
                 result.push(Element::Bar(Bar::RepeatEnd));
 
                 let start = repeat_start_idx.unwrap_or(0);
-                let copy_start = if repeat_start_idx.is_some() { start + 1 } else { start };
+                let copy_start = if repeat_start_idx.is_some() {
+                    start + 1
+                } else {
+                    start
+                };
                 let to_copy: Vec<_> = result[copy_start..result.len() - 1].to_vec();
                 result.extend(to_copy);
 
@@ -87,7 +96,9 @@ fn expand_repeats(elements: &[Element]) -> Vec<Element> {
 /// Generate MIDI bytes from a parsed ABC tune
 pub fn generate(tune: &Tune, params: &MidiParams) -> Vec<u8> {
     // Count voices with actual content
-    let voices_with_content: Vec<_> = tune.voices.iter()
+    let voices_with_content: Vec<_> = tune
+        .voices
+        .iter()
         .filter(|v| !v.elements.is_empty())
         .collect();
 
@@ -131,8 +142,12 @@ pub fn generate(tune: &Tune, params: &MidiParams) -> Vec<u8> {
             match element {
                 Element::Note(note) => {
                     // Determine pitch with accidentals, then apply voice offset
-                    let base_pitch =
-                        note_to_midi_pitch(note.pitch, note.octave, note.accidental, &bar_accidentals);
+                    let base_pitch = note_to_midi_pitch(
+                        note.pitch,
+                        note.octave,
+                        note.accidental,
+                        &bar_accidentals,
+                    );
                     let midi_pitch = apply_pitch_offset(base_pitch, pitch_offset);
                     let ticks = note.duration.to_ticks(unit_ticks);
 
@@ -167,8 +182,12 @@ pub fn generate(tune: &Tune, params: &MidiParams) -> Vec<u8> {
 
                     // Note on for all notes
                     for note in &chord.notes {
-                        let base_pitch =
-                            note_to_midi_pitch(note.pitch, note.octave, note.accidental, &bar_accidentals);
+                        let base_pitch = note_to_midi_pitch(
+                            note.pitch,
+                            note.octave,
+                            note.accidental,
+                            &bar_accidentals,
+                        );
                         let midi_pitch = apply_pitch_offset(base_pitch, pitch_offset);
                         writer.note_on(midi_pitch, params.velocity);
 
@@ -182,8 +201,12 @@ pub fn generate(tune: &Tune, params: &MidiParams) -> Vec<u8> {
 
                     // Note off for all notes
                     for note in &chord.notes {
-                        let base_pitch =
-                            note_to_midi_pitch(note.pitch, note.octave, note.accidental, &bar_accidentals);
+                        let base_pitch = note_to_midi_pitch(
+                            note.pitch,
+                            note.octave,
+                            note.accidental,
+                            &bar_accidentals,
+                        );
                         let midi_pitch = apply_pitch_offset(base_pitch, pitch_offset);
                         writer.note_off(midi_pitch);
                     }
@@ -278,7 +301,12 @@ fn generate_multitrack(tune: &Tune, params: &MidiParams) -> Vec<u8> {
         let pitch_offset = get_voice_pitch_offset(voice, &tune.header.voice_defs);
 
         // Use different MIDI channel per voice (0-15, skip 9 which is percussion)
-        let channel = if voice_idx >= 9 { voice_idx + 1 } else { voice_idx } as u8 % 16;
+        let channel = if voice_idx >= 9 {
+            voice_idx + 1
+        } else {
+            voice_idx
+        } as u8
+            % 16;
         let mut writer = MidiWriter::new(params.ticks_per_beat, channel);
 
         let elements = expand_repeats(&voice.elements);
@@ -289,7 +317,10 @@ fn generate_multitrack(tune: &Tune, params: &MidiParams) -> Vec<u8> {
             match element {
                 Element::Note(note) => {
                     let base_pitch = note_to_midi_pitch(
-                        note.pitch, note.octave, note.accidental, &bar_accidentals
+                        note.pitch,
+                        note.octave,
+                        note.accidental,
+                        &bar_accidentals,
                     );
                     let midi_pitch = apply_pitch_offset(base_pitch, pitch_offset);
                     let ticks = note.duration.to_ticks(unit_ticks);
@@ -318,7 +349,10 @@ fn generate_multitrack(tune: &Tune, params: &MidiParams) -> Vec<u8> {
                     let ticks = chord.duration.to_ticks(unit_ticks);
                     for note in &chord.notes {
                         let base_pitch = note_to_midi_pitch(
-                            note.pitch, note.octave, note.accidental, &bar_accidentals
+                            note.pitch,
+                            note.octave,
+                            note.accidental,
+                            &bar_accidentals,
                         );
                         let midi_pitch = apply_pitch_offset(base_pitch, pitch_offset);
                         writer.note_on_channel(midi_pitch, params.velocity, channel);
@@ -329,7 +363,10 @@ fn generate_multitrack(tune: &Tune, params: &MidiParams) -> Vec<u8> {
                     writer.advance(ticks);
                     for note in &chord.notes {
                         let base_pitch = note_to_midi_pitch(
-                            note.pitch, note.octave, note.accidental, &bar_accidentals
+                            note.pitch,
+                            note.octave,
+                            note.accidental,
+                            &bar_accidentals,
                         );
                         let midi_pitch = apply_pitch_offset(base_pitch, pitch_offset);
                         writer.note_off_channel(midi_pitch, channel);
@@ -338,7 +375,9 @@ fn generate_multitrack(tune: &Tune, params: &MidiParams) -> Vec<u8> {
 
                 Element::Rest(rest) => {
                     if let Some(bars) = rest.multi_measure {
-                        let (beats_per_bar, _) = tune.header.meter
+                        let (beats_per_bar, _) = tune
+                            .header
+                            .meter
                             .as_ref()
                             .map(|m| m.to_fraction())
                             .unwrap_or((4, 4));
@@ -359,7 +398,10 @@ fn generate_multitrack(tune: &Tune, params: &MidiParams) -> Vec<u8> {
                     for elem in &tuplet.elements {
                         if let Element::Note(note) = elem {
                             let base_pitch = note_to_midi_pitch(
-                                note.pitch, note.octave, note.accidental, &bar_accidentals
+                                note.pitch,
+                                note.octave,
+                                note.accidental,
+                                &bar_accidentals,
                             );
                             let midi_pitch = apply_pitch_offset(base_pitch, pitch_offset);
                             let base_ticks = note.duration.to_ticks(unit_ticks);
@@ -545,11 +587,14 @@ impl MidiWriter {
 
     fn tempo(&mut self, bpm: u16) {
         let us_per_beat = 60_000_000u32 / bpm as u32;
-        self.meta_event(0x51, vec![
-            ((us_per_beat >> 16) & 0xFF) as u8,
-            ((us_per_beat >> 8) & 0xFF) as u8,
-            (us_per_beat & 0xFF) as u8,
-        ]);
+        self.meta_event(
+            0x51,
+            vec![
+                ((us_per_beat >> 16) & 0xFF) as u8,
+                ((us_per_beat >> 8) & 0xFF) as u8,
+                (us_per_beat & 0xFF) as u8,
+            ],
+        );
     }
 
     fn note_on(&mut self, pitch: u8, velocity: u8) {
@@ -682,19 +727,37 @@ mod tests {
     fn test_compute_unit_ticks() {
         // L:1/4 with 480 ticks/beat = 480 ticks per unit (quarter note)
         assert_eq!(
-            compute_unit_ticks(&UnitLength { numerator: 1, denominator: 4 }, 480),
+            compute_unit_ticks(
+                &UnitLength {
+                    numerator: 1,
+                    denominator: 4
+                },
+                480
+            ),
             480
         );
 
         // L:1/8 with 480 ticks/beat = 240 ticks per unit (eighth note)
         assert_eq!(
-            compute_unit_ticks(&UnitLength { numerator: 1, denominator: 8 }, 480),
+            compute_unit_ticks(
+                &UnitLength {
+                    numerator: 1,
+                    denominator: 8
+                },
+                480
+            ),
             240
         );
 
         // L:1/16 with 480 ticks/beat = 120 ticks per unit
         assert_eq!(
-            compute_unit_ticks(&UnitLength { numerator: 1, denominator: 16 }, 480),
+            compute_unit_ticks(
+                &UnitLength {
+                    numerator: 1,
+                    denominator: 16
+                },
+                480
+            ),
             120
         );
     }
@@ -756,9 +819,19 @@ mod tests {
                 title: "Test".to_string(),
                 titles: vec![],
                 key: Key::default(),
-                meter: Some(Meter::Simple { numerator: 4, denominator: 4 }),
-                unit_length: Some(UnitLength { numerator: 1, denominator: 8 }),
-                tempo: Some(Tempo { beat_unit: (1, 4), bpm: 120, text: None }),
+                meter: Some(Meter::Simple {
+                    numerator: 4,
+                    denominator: 4,
+                }),
+                unit_length: Some(UnitLength {
+                    numerator: 1,
+                    denominator: 8,
+                }),
+                tempo: Some(Tempo {
+                    beat_unit: (1, 4),
+                    bpm: 120,
+                    text: None,
+                }),
                 ..Header::default()
             },
             voices: vec![Voice {
@@ -789,9 +862,19 @@ mod tests {
                 title: "Test".to_string(),
                 titles: vec![],
                 key: Key::default(),
-                meter: Some(Meter::Simple { numerator: 4, denominator: 4 }),
-                unit_length: Some(UnitLength { numerator: 1, denominator: 4 }),
-                tempo: Some(Tempo { beat_unit: (1, 4), bpm: 120, text: None }),
+                meter: Some(Meter::Simple {
+                    numerator: 4,
+                    denominator: 4,
+                }),
+                unit_length: Some(UnitLength {
+                    numerator: 1,
+                    denominator: 4,
+                }),
+                tempo: Some(Tempo {
+                    beat_unit: (1, 4),
+                    bpm: 120,
+                    text: None,
+                }),
                 ..Header::default()
             },
             voices: vec![Voice {
@@ -834,7 +917,8 @@ mod tests {
         let midi = generate(&result.value, &MidiParams::default());
 
         // Count note-on events (0x90) - should be exactly 1 for the tied note
-        let note_ons = midi.windows(2)
+        let note_ons = midi
+            .windows(2)
             .filter(|w| w[0] == 0x90 && w[1] == 72) // 0x90 = note on, 72 = c (C5)
             .count();
         assert_eq!(note_ons, 1, "Tied notes should produce single note-on");
@@ -850,7 +934,8 @@ mod tests {
         let midi = generate(&result.value, &MidiParams::default());
 
         // Should still be one note
-        let note_ons = midi.windows(2)
+        let note_ons = midi
+            .windows(2)
             .filter(|w| w[0] == 0x90 && w[1] == 72)
             .count();
         assert_eq!(note_ons, 1, "Tie across bar should produce single note-on");
@@ -866,13 +951,15 @@ mod tests {
         let midi = generate(&result.value, &MidiParams::default());
 
         // Count c notes (midi 72) - should be 2 (once per repeat)
-        let c_notes = midi.windows(2)
+        let c_notes = midi
+            .windows(2)
             .filter(|w| w[0] == 0x90 && w[1] == 72)
             .count();
         assert_eq!(c_notes, 2, "Repeat should double the notes");
 
         // Count d notes (midi 74)
-        let d_notes = midi.windows(2)
+        let d_notes = midi
+            .windows(2)
             .filter(|w| w[0] == 0x90 && w[1] == 74)
             .count();
         assert_eq!(d_notes, 2, "Repeat should double the notes");
@@ -933,6 +1020,9 @@ mod tests {
 
         // Verify no channel 0 events when using channel 9
         let has_ch0_in_ch9 = midi_ch9.windows(2).any(|w| w[0] == 0x90 && w[1] == 72);
-        assert!(!has_ch0_in_ch9, "Should not have channel 0 events when using channel 9");
+        assert!(
+            !has_ch0_in_ch9,
+            "Should not have channel 0 events when using channel 9"
+        );
     }
 }
