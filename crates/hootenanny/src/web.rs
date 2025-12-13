@@ -120,7 +120,11 @@ async fn download_artifact(State(state): State<WebState>, Path(id): Path<String>
         .header("X-Content-Hash", content_hash.as_str())
         .header("X-Access-Count", access_count.to_string())
         .body(body)
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        .map_err(|e| {
+            tracing::error!("Failed to build response: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+        .unwrap_or_else(|status| status.into_response())
 }
 
 /// Artifact metadata response
@@ -192,7 +196,10 @@ async fn artifact_meta(
                 metadata: artifact.metadata.clone(),
             };
 
-            (StatusCode::OK, Json(serde_json::to_value(response).unwrap()))
+            (StatusCode::OK, Json(serde_json::to_value(response).unwrap_or_else(|e| {
+                tracing::error!("Failed to serialize artifact metadata: {}", e);
+                serde_json::json!({"error": "serialization failed"})
+            })))
         }
         Ok(None) => (
             StatusCode::NOT_FOUND,
@@ -267,7 +274,10 @@ async fn list_artifacts(
         })
         .collect();
 
-    (StatusCode::OK, Json(serde_json::to_value(filtered).unwrap()))
+    (StatusCode::OK, Json(serde_json::to_value(filtered).unwrap_or_else(|e| {
+        tracing::error!("Failed to serialize artifact list: {}", e);
+        serde_json::json!({"error": "serialization failed"})
+    })))
 }
 
 #[cfg(test)]

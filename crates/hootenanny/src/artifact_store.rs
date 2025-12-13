@@ -273,33 +273,39 @@ impl Default for InMemoryStore {
 
 impl ArtifactStore for InMemoryStore {
     fn get(&self, id: &str) -> Result<Option<Artifact>> {
-        let artifacts = self.artifacts.read().unwrap();
+        let artifacts = self.artifacts.read()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in artifact_store.get: {}", e))?;
         Ok(artifacts.get(id).cloned())
     }
 
     fn put(&self, artifact: Artifact) -> Result<()> {
-        let mut artifacts = self.artifacts.write().unwrap();
+        let mut artifacts = self.artifacts.write()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in artifact_store.put: {}", e))?;
         artifacts.insert(artifact.id.as_str().to_string(), artifact);
         Ok(())
     }
 
     fn delete(&self, id: &str) -> Result<bool> {
-        let mut artifacts = self.artifacts.write().unwrap();
+        let mut artifacts = self.artifacts.write()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in artifact_store.delete: {}", e))?;
         Ok(artifacts.remove(id).is_some())
     }
 
     fn all(&self) -> Result<Vec<Artifact>> {
-        let artifacts = self.artifacts.read().unwrap();
+        let artifacts = self.artifacts.read()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in artifact_store.all: {}", e))?;
         Ok(artifacts.values().cloned().collect())
     }
 
     fn count(&self) -> Result<usize> {
-        let artifacts = self.artifacts.read().unwrap();
+        let artifacts = self.artifacts.read()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in artifact_store.count: {}", e))?;
         Ok(artifacts.len())
     }
 
     fn exists(&self, id: &str) -> Result<bool> {
-        let artifacts = self.artifacts.read().unwrap();
+        let artifacts = self.artifacts.read()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in artifact_store.exists: {}", e))?;
         Ok(artifacts.contains_key(id))
     }
 }
@@ -357,7 +363,8 @@ impl FileStore {
         std::fs::rename(&temp_path, &self.path)?;
 
         // Save annotations
-        let annotations = self.annotations.read().unwrap();
+        let annotations = self.annotations.read()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store.save (annotations): {}", e))?;
         let annotations_json = serde_json::to_string_pretty(&*annotations)?;
         let annotations_temp = self.annotations_path.with_extension("tmp");
         std::fs::write(&annotations_temp, annotations_json)?;
@@ -419,7 +426,8 @@ impl ArtifactSource for FileStore {
     }
 
     fn annotations_for(&self, artifact_id: &str) -> anyhow::Result<Vec<AnnotationData>> {
-        let annotations = self.annotations.read().unwrap();
+        let annotations = self.annotations.read()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in annotations_for: {}", e))?;
         Ok(annotations
             .iter()
             .filter(|a| a.artifact_id == artifact_id)
@@ -428,7 +436,8 @@ impl ArtifactSource for FileStore {
     }
 
     fn add_annotation(&self, annotation: AnnotationData) -> anyhow::Result<()> {
-        let mut annotations = self.annotations.write().unwrap();
+        let mut annotations = self.annotations.write()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in add_annotation: {}", e))?;
         annotations.push(annotation);
         Ok(())
     }
@@ -482,47 +491,56 @@ impl FileStoreSource {
 
 impl ArtifactSource for FileStoreSource {
     fn get(&self, id: &str) -> anyhow::Result<Option<ArtifactData>> {
-        let store = self.store.read().unwrap();
+        let store = self.store.read()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store_source.get: {}", e))?;
         ArtifactSource::get(&*store, id)
     }
 
     fn all(&self) -> anyhow::Result<Vec<ArtifactData>> {
-        let store = self.store.read().unwrap();
+        let store = self.store.read()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store_source.all: {}", e))?;
         ArtifactSource::all(&*store)
     }
 
     fn by_tag(&self, tag: &str) -> anyhow::Result<Vec<ArtifactData>> {
-        let store = self.store.read().unwrap();
+        let store = self.store.read()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store_source.by_tag: {}", e))?;
         ArtifactSource::by_tag(&*store, tag)
     }
 
     fn by_creator(&self, creator: &str) -> anyhow::Result<Vec<ArtifactData>> {
-        let store = self.store.read().unwrap();
+        let store = self.store.read()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store_source.by_creator: {}", e))?;
         ArtifactSource::by_creator(&*store, creator)
     }
 
     fn by_parent(&self, parent_id: &str) -> anyhow::Result<Vec<ArtifactData>> {
-        let store = self.store.read().unwrap();
+        let store = self.store.read()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store_source.by_parent: {}", e))?;
         ArtifactSource::by_parent(&*store, parent_id)
     }
 
     fn by_variation_set(&self, set_id: &str) -> anyhow::Result<Vec<ArtifactData>> {
-        let store = self.store.read().unwrap();
+        let store = self.store.read()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store_source.by_variation_set: {}", e))?;
         ArtifactSource::by_variation_set(&*store, set_id)
     }
 
     fn annotations_for(&self, artifact_id: &str) -> anyhow::Result<Vec<AnnotationData>> {
-        let store = self.store.read().unwrap();
+        let store = self.store.read()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store_source.annotations_for: {}", e))?;
         ArtifactSource::annotations_for(&*store, artifact_id)
     }
 
     fn add_annotation(&self, annotation: AnnotationData) -> anyhow::Result<()> {
-        let store = self.store.read().unwrap();
+        let store = self.store.read()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store_source.add_annotation: {}", e))?;
         ArtifactSource::add_annotation(&*store, annotation)
     }
 
     fn recent(&self, within: std::time::Duration) -> anyhow::Result<Vec<ArtifactData>> {
-        let store = self.store.read().unwrap();
+        let store = self.store.read()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store_source.recent: {}", e))?;
         ArtifactSource::recent(&*store, within)
     }
 }
