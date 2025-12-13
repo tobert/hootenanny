@@ -2,52 +2,104 @@
 //!
 //! Implements baton::Handler to bridge MCP protocol to ZMQ backends.
 //! Tools are dynamically discovered from backends and calls are routed based on prefix.
+//! Tool lists are cached and refreshed when backends recover from failures.
 
 use async_trait::async_trait;
 use baton::{CallToolResult, Content, ErrorData, Handler, Implementation, Tool, ToolSchema};
 use hooteproto::{Payload, ToolInfo};
 use serde_json::Value;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::backend::BackendPool;
 
+/// Shared tool cache for dynamic refresh across handler instances.
+///
+/// This allows multiple ZmqHandler instances (one for initial refresh,
+/// one owned by baton's McpState) to share the same cached tool list.
+pub type ToolCache = Arc<RwLock<Vec<Tool>>>;
+
+/// Create a new empty tool cache.
+pub fn new_tool_cache() -> ToolCache {
+    Arc::new(RwLock::new(Vec::new()))
+}
+
+/// Refresh tools from hootenanny into the shared cache.
+///
+/// Called on startup and when backend recovers from Dead → Ready.
+pub async fn refresh_tools_into(cache: &ToolCache, backends: &BackendPool) -> usize {
+    let tools = collect_tools_async(backends).await;
+    let count = tools.len();
+
+    if count > 0 {
+        info!("🔧 Refreshed {} tools from hootenanny", count);
+    }
+
+    *cache.write().await = tools;
+    count
+}
+
 /// MCP Handler that forwards tool calls to ZMQ backends.
+///
+/// Maintains a cached list of tools that can be refreshed dynamically
+/// when backends recover from failure (Dead → Ready transition).
 pub struct ZmqHandler {
     backends: Arc<BackendPool>,
+    /// Cached tool list - shared across handler instances
+    cached_tools: ToolCache,
 }
 
 impl ZmqHandler {
-    /// Create a new handler with the given backend pool.
+    /// Create a new handler with the given backend pool and a new cache.
     pub fn new(backends: Arc<BackendPool>) -> Self {
-        Self { backends }
+        Self {
+            backends,
+            cached_tools: new_tool_cache(),
+        }
+    }
+
+    /// Create a handler with a shared cache.
+    ///
+    /// Use this when you need multiple handlers to share the same tool list
+    /// (e.g., for recovery callbacks to update tools visible to MCP clients).
+    pub fn with_shared_cache(backends: Arc<BackendPool>, cache: ToolCache) -> Self {
+        Self {
+            backends,
+            cached_tools: cache,
+        }
+    }
+
+    /// Refresh tools from hootenanny and update the cache.
+    ///
+    /// Called on startup and when backend recovers from Dead → Ready.
+    pub async fn refresh_tools(&self) -> usize {
+        refresh_tools_into(&self.cached_tools, &self.backends).await
+    }
+
+    /// Get a clone of the cached tools (for async contexts).
+    pub async fn get_cached_tools(&self) -> Vec<Tool> {
+        self.cached_tools.read().await.clone()
     }
 }
 
 #[async_trait]
 impl Handler for ZmqHandler {
     fn tools(&self) -> Vec<Tool> {
-        // Tools are fetched dynamically, but baton's Handler trait expects
-        // a synchronous list. We'll cache the last known tools or return empty
-        // and rely on the actual call routing. For now, return empty and override
-        // tool listing via a custom approach.
+        // Return cached tools synchronously.
         //
-        // Actually, we need to block on the async call here. That's problematic.
-        // Let's use tokio's Handle to block within the sync context.
-        let backends = Arc::clone(&self.backends);
+        // The cache is populated:
+        // 1. On server startup via refresh_tools()
+        // 2. When backend recovers from Dead → Ready
+        //
+        // This avoids the blocking spawn hack and provides consistent tool lists.
+        let cached_tools = Arc::clone(&self.cached_tools);
 
-        // Try to get runtime handle - if we're in async context this works
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            // We're in an async context, spawn a blocking task
-            std::thread::spawn(move || {
-                handle.block_on(async {
-                    collect_tools_async(&backends).await
-                })
-            })
-            .join()
-            .unwrap_or_default()
+            std::thread::spawn(move || handle.block_on(async { cached_tools.read().await.clone() }))
+                .join()
+                .unwrap_or_default()
         } else {
-            // Not in async context, return empty
             vec![]
         }
     }

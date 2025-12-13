@@ -5,10 +5,15 @@
 //!
 //! Health tracking via the HealthTracker struct enables the Paranoid Pirate pattern
 //! for detecting backend failures and triggering reconnection.
+//!
+//! Socket reconnection follows ZMQ best practices from RFC 7 (MDP) and zguide:
+//! - On disconnect, the socket is closed and a new one created
+//! - Exponential backoff between reconnection attempts (1s → 32s max)
+//! - Ready command sent after reconnection to re-register with broker
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use hooteproto::{garden, Command, Envelope, HootFrame, Payload, PROTOCOL_VERSION};
+use hooteproto::{garden, Command, Envelope, HootFrame, Payload, ReadyPayload, PROTOCOL_VERSION};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -36,37 +41,176 @@ pub struct BackendConfig {
     pub protocol: Protocol,
 }
 
+/// Reconnection configuration
+#[derive(Debug, Clone)]
+pub struct ReconnectConfig {
+    /// Initial delay before first reconnection attempt
+    pub initial_delay: Duration,
+    /// Maximum delay between reconnection attempts
+    pub max_delay: Duration,
+    /// Connection timeout
+    pub connect_timeout: Duration,
+}
+
+impl Default for ReconnectConfig {
+    fn default() -> Self {
+        Self {
+            initial_delay: Duration::from_secs(1),
+            max_delay: Duration::from_secs(32),
+            connect_timeout: Duration::from_secs(5),
+        }
+    }
+}
+
 /// A single backend connection
+///
+/// Socket is wrapped in Option to allow closing and reopening on disconnect.
+/// Per ZMQ best practices, we close and recreate the socket rather than
+/// relying on ZMQ's automatic reconnection, which doesn't re-register workers.
 pub struct Backend {
     pub config: BackendConfig,
-    socket: RwLock<DealerSocket>,
+    /// Socket is Option to allow close/reopen. None means disconnected.
+    socket: RwLock<Option<DealerSocket>>,
     /// Health tracking for heartbeat monitoring
     pub health: Arc<HealthTracker>,
+    /// Current reconnection delay (doubles each attempt up to max)
+    reconnect_delay: RwLock<Duration>,
+    /// Reconnection configuration
+    reconnect_config: ReconnectConfig,
 }
 
 impl Backend {
     /// Connect to a backend
     pub async fn connect(config: BackendConfig) -> Result<Self> {
-        debug!("Creating DEALER socket for {}", config.name);
-        let mut socket = DealerSocket::new();
-        debug!("DEALER socket created, connecting to {}", config.endpoint);
+        let reconnect_config = ReconnectConfig::default();
+        let socket = Self::create_and_connect(&config, reconnect_config.connect_timeout).await?;
 
-        // Wrap in timeout because zeromq-rs connect() can block indefinitely
-        tokio::time::timeout(Duration::from_secs(5), socket.connect(&config.endpoint))
-            .await
-            .with_context(|| format!("Timeout connecting to {} at {}", config.name, config.endpoint))?
-            .with_context(|| format!("Failed to connect to {} at {}", config.name, config.endpoint))?;
-
-        info!("Connected to {} at {} ({:?})", config.name, config.endpoint, config.protocol);
+        info!(
+            "Connected to {} at {} ({:?})",
+            config.name, config.endpoint, config.protocol
+        );
 
         let health = Arc::new(HealthTracker::new());
         health.set_state(BackendState::Ready);
 
         Ok(Self {
             config,
-            socket: RwLock::new(socket),
+            socket: RwLock::new(Some(socket)),
             health,
+            reconnect_delay: RwLock::new(reconnect_config.initial_delay),
+            reconnect_config,
         })
+    }
+
+    /// Create a new socket and connect to the endpoint
+    async fn create_and_connect(
+        config: &BackendConfig,
+        timeout: Duration,
+    ) -> Result<DealerSocket> {
+        debug!("Creating DEALER socket for {}", config.name);
+        let mut socket = DealerSocket::new();
+        debug!(
+            "DEALER socket created, connecting to {}",
+            config.endpoint
+        );
+
+        tokio::time::timeout(timeout, socket.connect(&config.endpoint))
+            .await
+            .with_context(|| {
+                format!(
+                    "Timeout connecting to {} at {}",
+                    config.name, config.endpoint
+                )
+            })?
+            .with_context(|| {
+                format!(
+                    "Failed to connect to {} at {}",
+                    config.name, config.endpoint
+                )
+            })?;
+
+        Ok(socket)
+    }
+
+    /// Close the socket and attempt to reconnect with exponential backoff.
+    ///
+    /// Per ZMQ RFC 7 and zguide Chapter 4:
+    /// - Socket must be closed and reopened (not just reconnected)
+    /// - Ready command must be sent to re-register with broker
+    /// - Exponential backoff prevents thundering herd
+    ///
+    /// Returns Ok(true) if reconnection succeeded, Ok(false) if still trying.
+    pub async fn reconnect(&self) -> Result<bool> {
+        // Close existing socket
+        {
+            let mut socket_guard = self.socket.write().await;
+            if socket_guard.is_some() {
+                info!("{}: Closing socket for reconnection", self.config.name);
+                *socket_guard = None; // Drop closes the socket
+            }
+        }
+
+        // Get current delay and update for next attempt
+        let delay = {
+            let mut delay_guard = self.reconnect_delay.write().await;
+            let current = *delay_guard;
+            *delay_guard = (*delay_guard * 2).min(self.reconnect_config.max_delay);
+            current
+        };
+
+        info!(
+            "{}: Waiting {:?} before reconnection attempt",
+            self.config.name, delay
+        );
+        tokio::time::sleep(delay).await;
+
+        // Attempt to create new socket and connect
+        match Self::create_and_connect(&self.config, self.reconnect_config.connect_timeout).await {
+            Ok(mut new_socket) => {
+                // Send Ready command to re-register with broker
+                let ready = HootFrame::ready(
+                    &self.config.name,
+                    &ReadyPayload {
+                        protocol: "HOOT01".to_string(),
+                        tools: vec![], // Client doesn't advertise tools
+                        accepts_binary: true,
+                    },
+                )?;
+                let msg = frames_to_zmq_message(&ready.to_frames());
+
+                if let Err(e) = new_socket.send(msg).await {
+                    warn!("{}: Failed to send Ready after reconnect: {}", self.config.name, e);
+                    return Ok(false);
+                }
+
+                // Store new socket
+                *self.socket.write().await = Some(new_socket);
+
+                // Reset backoff delay on success
+                *self.reconnect_delay.write().await = self.reconnect_config.initial_delay;
+
+                // Update state
+                self.health.set_state(BackendState::Connecting);
+                self.health.reset_failures();
+
+                info!("{}: Reconnected and sent Ready", self.config.name);
+                Ok(true)
+            }
+            Err(e) => {
+                warn!(
+                    "{}: Reconnection failed: {} (next attempt in {:?})",
+                    self.config.name,
+                    e,
+                    self.reconnect_delay.read().await
+                );
+                Ok(false)
+            }
+        }
+    }
+
+    /// Check if socket is currently connected
+    pub async fn is_connected(&self) -> bool {
+        self.socket.read().await.is_some()
     }
 
     /// Get current backend state
@@ -83,12 +227,18 @@ impl Backend {
     ///
     /// This uses the new frame protocol for efficient heartbeating without
     /// MsgPack serialization overhead.
+    ///
+    /// Returns Disconnected if socket is not connected (caller should reconnect).
     pub async fn send_heartbeat(&self, timeout: Duration) -> HeartbeatResult {
         let frame = HootFrame::heartbeat(&self.config.name);
         let frames = frame.to_frames();
         let msg = frames_to_zmq_message(&frames);
 
-        let mut socket = self.socket.write().await;
+        let mut socket_guard = self.socket.write().await;
+        let socket = match socket_guard.as_mut() {
+            Some(s) => s,
+            None => return HeartbeatResult::Disconnected,
+        };
 
         // Send heartbeat
         match tokio::time::timeout(timeout, socket.send(msg)).await {
@@ -159,13 +309,16 @@ impl Backend {
         if let Some(tp) = traceparent {
             envelope = envelope.with_traceparent(tp);
         }
-        
+
         // Serialize to MsgPack
         let bytes = rmp_serde::to_vec(&envelope)?;
 
         debug!("Sending to {} ({} bytes)", self.config.name, bytes.len());
 
-        let mut socket = self.socket.write().await;
+        let mut socket_guard = self.socket.write().await;
+        let socket = socket_guard
+            .as_mut()
+            .context("Socket disconnected - backend is dead")?;
 
         // Send
         let msg = ZmqMessage::from(bytes);
@@ -198,12 +351,10 @@ impl Backend {
     ) -> Result<Payload> {
         // 1. Convert Payload to garden::ShellRequest
         let request = payload_to_garden_request(payload)?;
-        
+
         // 2. Wrap in garden::Message
         let session = Uuid::new_v4();
-        // Determine message type based on variant name (simplified)
-        // In a real implementation, we might want precise mapping, but for now:
-        let msg_type = "shell_request"; 
+        let msg_type = "shell_request";
         let message = garden::Message::new(session, msg_type, request);
 
         // 3. Serialize to MsgPack
@@ -211,7 +362,10 @@ impl Backend {
 
         debug!("Sending to {} ({} bytes)", self.config.name, bytes.len());
 
-        let mut socket = self.socket.write().await;
+        let mut socket_guard = self.socket.write().await;
+        let socket = socket_guard
+            .as_mut()
+            .context("Socket disconnected - backend is dead")?;
 
         // Send
         let msg = ZmqMessage::from(bytes);
@@ -228,23 +382,12 @@ impl Backend {
             .context("Receive timeout")?
             .context("Failed to receive")?;
 
-        // Chaosgarden replies are multipart: [identity, ..., content]
-        // But since we are Dealer connected to Router, we might just get the content part?
-        // Wait, Dealer/Router pattern:
-        // Sender (Dealer) sends: [empty frame (added by ZMQ?), content] -> Router
-        // Router receives: [SenderID, content]
-        // Router sends: [SenderID, content]
-        // Sender (Dealer) receives: [content]
-        
-        // However, chaosgarden server.rs sends: [identity, content]
-        // So Dealer should receive: [content]
-        
         let response_bytes = response.get(0).context("Empty response")?;
-        
+
         // 4. Deserialize garden::Message<garden::ShellReply>
         let reply_msg: garden::Message<garden::ShellReply> = rmp_serde::from_slice(response_bytes)
             .with_context(|| "Failed to deserialize garden response")?;
-            
+
         // 5. Convert garden::ShellReply back to Payload
         garden_reply_to_payload(reply_msg.content)
     }

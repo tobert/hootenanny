@@ -9,14 +9,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-mod backend;
-mod client;
-mod commands;
-mod handler;
-mod heartbeat;
-mod serve;
-mod subscriber;
-mod telemetry;
+use holler::{commands, serve, telemetry};
 
 #[derive(Parser)]
 #[command(name = "holler")]

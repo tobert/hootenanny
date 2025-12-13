@@ -186,6 +186,8 @@ pub enum HeartbeatResult {
     Timeout,
     /// Send or receive error
     Error(String),
+    /// Socket is disconnected - caller should trigger reconnection
+    Disconnected,
 }
 
 /// Callback for state changes
@@ -252,6 +254,11 @@ where
                                     info!("{}: marked as dead after {} failures", backend_name, failures);
                                 }
                             }
+                        }
+                        Ok(HeartbeatResult::Disconnected) => {
+                            // Socket disconnected - mark as dead immediately
+                            warn!("{}: socket disconnected, marking as dead", backend_name);
+                            health.set_state(BackendState::Dead);
                         }
                     }
                 }

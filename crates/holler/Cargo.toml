@@ -5,6 +5,10 @@ edition = "2021"
 description = "MCP gateway and ZMQ CLI for the Hootenanny system"
 license = "MIT"
 
+[lib]
+name = "holler"
+path = "src/lib.rs"
+
 [[bin]]
 name = "holler"
 path = "src/main.rs"
