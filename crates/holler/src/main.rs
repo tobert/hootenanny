@@ -5,17 +5,38 @@
 //! - `holler ping <endpoint>` - Test connectivity to a backend
 //! - `holler send <endpoint> <json>` - Send raw hooteproto message
 //! - `holler lua <endpoint> <code>` - Evaluate Lua code
+//!
+//! Configuration is loaded from (in order, later wins):
+//! 1. Compiled defaults
+//! 2. /etc/hootenanny/config.toml
+//! 3. ~/.config/hootenanny/config.toml
+//! 4. ./hootenanny.toml (or --config path)
+//! 5. Environment variables (HOLLER_*)
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use hooteconf::HootConfig;
+use std::path::PathBuf;
 
 use holler::{commands, serve, telemetry};
 
+/// MCP gateway and ZMQ CLI for Hootenanny
+///
+/// Configuration is loaded from (in order, later wins):
+/// 1. Compiled defaults
+/// 2. /etc/hootenanny/config.toml
+/// 3. ~/.config/hootenanny/config.toml
+/// 4. ./hootenanny.toml (or --config path)
+/// 5. Environment variables (HOLLER_*)
 #[derive(Parser)]
 #[command(name = "holler")]
 #[command(about = "MCP gateway and ZMQ CLI for Hootenanny")]
 #[command(version)]
 struct Cli {
+    /// Path to config file (overrides ./hootenanny.toml)
+    #[arg(short, long, global = true)]
+    config: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -73,22 +94,9 @@ enum Commands {
 
     /// Run the MCP gateway server
     Serve {
-        /// HTTP port to bind
-        #[arg(short, long, default_value = "8080")]
-        port: u16,
-
-        /// Hootenanny ZMQ ROUTER endpoint (for all tool calls)
-        /// Hootenanny proxies to luanette and chaosgarden internally
-        #[arg(long, default_value = "tcp://localhost:5580")]
-        hootenanny: String,
-
-        /// Hootenanny ZMQ PUB endpoint (for broadcasts/SSE)
+        /// Show loaded configuration and exit
         #[arg(long)]
-        hootenanny_pub: Option<String>,
-
-        /// OTLP gRPC endpoint for OpenTelemetry (e.g., "localhost:4317")
-        #[arg(long, default_value = "localhost:4317")]
-        otlp_endpoint: String,
+        show_config: bool,
     },
 }
 
@@ -180,19 +188,43 @@ async fn main() -> Result<()> {
                 commands::job_poll(&endpoint, job_ids, timeout, &mode).await?;
             }
         },
-        Commands::Serve {
-            port,
-            hootenanny,
-            hootenanny_pub,
-            otlp_endpoint,
-        } => {
+        Commands::Serve { show_config } => {
+            // Load configuration from files + env
+            let (config, sources) = HootConfig::load_with_sources_from(cli.config.as_deref())
+                .context("Failed to load configuration")?;
+
+            // Show config and exit if requested
+            if show_config {
+                println!("# Configuration sources:");
+                for path in &sources.files {
+                    println!("#   - {}", path.display());
+                }
+                if !sources.env_overrides.is_empty() {
+                    println!("# Environment overrides:");
+                    for var in &sources.env_overrides {
+                        println!("#   - {}", var);
+                    }
+                }
+                println!();
+                println!("{}", config.to_toml());
+                return Ok(());
+            }
+
             // Initialize OTEL for serve mode
-            telemetry::init(&otlp_endpoint)?;
+            telemetry::init(&config.infra.telemetry.otlp_endpoint)?;
+
+            tracing::info!("📋 Configuration loaded from:");
+            for path in &sources.files {
+                tracing::info!("   - {}", path.display());
+            }
+            if !sources.env_overrides.is_empty() {
+                tracing::info!("   Environment overrides: {:?}", sources.env_overrides);
+            }
 
             serve::run(serve::ServeConfig {
-                port,
-                hootenanny,
-                hootenanny_pub,
+                port: config.infra.gateway.http_port,
+                hootenanny: config.infra.gateway.hootenanny,
+                hootenanny_pub: Some(config.infra.gateway.hootenanny_pub),
             })
             .await?;
         }

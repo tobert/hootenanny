@@ -102,6 +102,30 @@ impl Backend {
         })
     }
 
+    /// Create a backend in disconnected state for lazy connection.
+    ///
+    /// The backend starts in Dead state and will connect on first reconnect() call.
+    /// Use this when you want to start the server immediately without blocking on
+    /// backend availability.
+    pub fn new_disconnected(config: BackendConfig) -> Self {
+        let reconnect_config = ReconnectConfig::default();
+        let health = Arc::new(HealthTracker::new());
+        health.set_state(BackendState::Dead);
+
+        info!(
+            "Created disconnected backend {} for {} ({:?})",
+            config.name, config.endpoint, config.protocol
+        );
+
+        Self {
+            config,
+            socket: RwLock::new(None),
+            health,
+            reconnect_delay: RwLock::new(reconnect_config.initial_delay),
+            reconnect_config,
+        }
+    }
+
     /// Create a new socket and connect to the endpoint
     async fn create_and_connect(
         config: &BackendConfig,
@@ -504,6 +528,20 @@ impl BackendPool {
         .await?;
         self.hootenanny = Some(Arc::new(backend));
         Ok(())
+    }
+
+    /// Set up Hootenanny backend for lazy connection (non-blocking startup).
+    ///
+    /// Creates a disconnected backend that will connect via the heartbeat/reconnect loop.
+    /// The server can start immediately without waiting for the backend to be available.
+    pub fn setup_hootenanny_lazy(&mut self, endpoint: &str, timeout_ms: u64) {
+        let backend = Backend::new_disconnected(BackendConfig {
+            name: "hootenanny".to_string(),
+            endpoint: endpoint.to_string(),
+            timeout_ms,
+            protocol: Protocol::Hootenanny,
+        });
+        self.hootenanny = Some(Arc::new(backend));
     }
 
     /// Route all tool calls to hootenanny

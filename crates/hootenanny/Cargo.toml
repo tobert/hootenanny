@@ -28,7 +28,7 @@ abc = { path = "../abc" }
 cas = { path = "../cas" }
 chaosgarden = { path = "../chaosgarden" }
 audio-graph-mcp = { path = "../audio-graph-mcp" }
-hoot-config = { path = "../hoot-config" }
+hooteconf = { path = "../hooteconf" }
 hooteproto = { path = "../hooteproto" }
 
 # ZMQ for internal IPC

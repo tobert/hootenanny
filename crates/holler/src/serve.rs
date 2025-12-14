@@ -57,23 +57,24 @@ pub async fn run(config: ServeConfig) -> Result<()> {
     info!("🎺 Holler MCP gateway starting");
     info!("   Port: {}", config.port);
 
-    // Connect to hootenanny (the unified backend that proxies to luanette and chaosgarden)
-    info!("   Connecting to Hootenanny at {}", config.hootenanny);
+    // Set up lazy connection to hootenanny (non-blocking startup)
+    // The heartbeat task will handle initial connection and retries
+    info!("   Will connect to Hootenanny at {} (lazy)", config.hootenanny);
     let mut backends = BackendPool::new();
-    backends
-        .connect_hootenanny(&config.hootenanny, 5000)
-        .await
-        .context("Failed to connect to Hootenanny")?;
-    info!("   ✅ Connected to Hootenanny");
+    backends.setup_hootenanny_lazy(&config.hootenanny, 5000);
 
     let backends = Arc::new(backends);
 
     // Create shared tool cache for dynamic refresh
     let tool_cache = new_tool_cache();
 
-    // Initial tool refresh on startup
+    // Try initial tool refresh, but don't fail if backend isn't ready yet
     let initial_tools = refresh_tools_into(&tool_cache, &backends).await;
-    info!("   📋 Loaded {} tools from hootenanny", initial_tools);
+    if initial_tools > 0 {
+        info!("   📋 Loaded {} tools from hootenanny", initial_tools);
+    } else {
+        info!("   📋 No tools loaded yet (backend connecting in background)");
+    }
 
     // Create shutdown channel for heartbeat tasks
     let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);

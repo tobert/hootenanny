@@ -1,7 +1,7 @@
 //! Configuration inspection tool
 
 use crate::api::service::EventDualityServer;
-use hoot_config::{ConfigSources, HootConfig};
+use hooteconf::{ConfigSources, HootConfig};
 use hooteproto::{ToolError, ToolOutput, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -5,7 +5,7 @@ members = [
     "crates/cas",
     "crates/chaosgarden",
     "crates/holler",
-    "crates/hoot-config",
+    "crates/hooteconf",
     "crates/hootenanny",
     "crates/hooteproto",
     "crates/hrcli",

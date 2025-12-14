@@ -17,7 +17,7 @@
 //! # Usage
 //!
 //! ```rust,no_run
-//! use hoot_config::HootConfig;
+//! use hooteconf::HootConfig;
 //!
 //! let config = HootConfig::load().expect("Failed to load config");
 //!
@@ -66,8 +66,8 @@ pub mod infra;
 pub mod loader;
 
 pub use bootstrap::{BootstrapConfig, ConnectionsConfig, DefaultsConfig, MediaConfig, ModelsConfig};
-pub use infra::{BindConfig, InfraConfig, PathsConfig, TelemetryConfig};
-pub use loader::ConfigSources;
+pub use infra::{BindConfig, GatewayConfig, InfraConfig, PathsConfig, TelemetryConfig};
+pub use loader::{ConfigSources, discover_config_files_with_override};
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -117,17 +117,33 @@ impl HootConfig {
     /// 4. `./hootenanny.toml`
     /// 5. Environment variables
     pub fn load() -> Result<Self, ConfigError> {
-        let (config, _sources) = Self::load_with_sources()?;
+        let (config, _sources) = Self::load_with_sources_from(None)?;
+        Ok(config)
+    }
+
+    /// Load configuration from a specific file path, then apply env overrides.
+    ///
+    /// If `config_path` is provided, it takes precedence over the local
+    /// `./hootenanny.toml` override. System and user configs still load first.
+    pub fn load_from(config_path: Option<&std::path::Path>) -> Result<Self, ConfigError> {
+        let (config, _sources) = Self::load_with_sources_from(config_path)?;
         Ok(config)
     }
 
     /// Load configuration and return information about sources.
     pub fn load_with_sources() -> Result<(Self, ConfigSources), ConfigError> {
+        Self::load_with_sources_from(None)
+    }
+
+    /// Load configuration from optional path and return information about sources.
+    pub fn load_with_sources_from(
+        config_path: Option<&std::path::Path>,
+    ) -> Result<(Self, ConfigSources), ConfigError> {
         let mut sources = ConfigSources::default();
         let mut config = HootConfig::default();
 
         // Load config files in order
-        for path in loader::discover_config_files() {
+        for path in loader::discover_config_files_with_override(config_path) {
             let file_config = loader::load_from_file(&path)?;
             config = loader::merge_configs(config, file_config);
             sources.files.push(path);
@@ -173,6 +189,17 @@ impl HootConfig {
         output.push_str(&format!(
             "log_level = \"{}\"\n",
             self.infra.telemetry.log_level
+        ));
+
+        output.push_str("\n[gateway]\n");
+        output.push_str(&format!("http_port = {}\n", self.infra.gateway.http_port));
+        output.push_str(&format!(
+            "hootenanny = \"{}\"\n",
+            self.infra.gateway.hootenanny
+        ));
+        output.push_str(&format!(
+            "hootenanny_pub = \"{}\"\n",
+            self.infra.gateway.hootenanny_pub
         ));
 
         output.push_str("\n[bootstrap.models]\n");

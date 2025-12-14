@@ -18,6 +18,14 @@ pub struct ConfigSources {
 /// Returns paths in load order (system, user, local).
 /// Only returns files that exist.
 pub fn discover_config_files() -> Vec<PathBuf> {
+    discover_config_files_with_override(None)
+}
+
+/// Discover config files, optionally with a CLI override path.
+///
+/// If `cli_path` is provided and exists, it replaces the local override.
+/// Returns paths in load order (system, user, local/cli).
+pub fn discover_config_files_with_override(cli_path: Option<&Path>) -> Vec<PathBuf> {
     let mut files = Vec::new();
 
     // System config
@@ -31,6 +39,14 @@ pub fn discover_config_files() -> Vec<PathBuf> {
         let user = config_dir.join("hootenanny/config.toml");
         if user.exists() {
             files.push(user);
+        }
+    }
+
+    // CLI override takes precedence over local
+    if let Some(path) = cli_path {
+        if path.exists() {
+            files.push(path.to_path_buf());
+            return files;
         }
     }
 
@@ -94,6 +110,18 @@ fn parse_toml(contents: &str, path: &Path) -> Result<HootConfig, ConfigError> {
             }
             if let Some(v) = telemetry.get("log_level").and_then(|v| v.as_str()) {
                 infra.telemetry.log_level = v.to_string();
+            }
+        }
+
+        if let Some(gateway) = table.get("gateway").and_then(|v| v.as_table()) {
+            if let Some(v) = gateway.get("http_port").and_then(|v| v.as_integer()) {
+                infra.gateway.http_port = v as u16;
+            }
+            if let Some(v) = gateway.get("hootenanny").and_then(|v| v.as_str()) {
+                infra.gateway.hootenanny = v.to_string();
+            }
+            if let Some(v) = gateway.get("hootenanny_pub").and_then(|v| v.as_str()) {
+                infra.gateway.hootenanny_pub = v.to_string();
             }
         }
 
@@ -211,12 +239,29 @@ pub fn merge_configs(base: HootConfig, overlay: HootConfig) -> HootConfig {
                     base.infra.telemetry.log_level
                 },
             },
+            gateway: crate::infra::GatewayConfig {
+                http_port: if overlay.infra.gateway.http_port != GatewayConfig::default().http_port {
+                    overlay.infra.gateway.http_port
+                } else {
+                    base.infra.gateway.http_port
+                },
+                hootenanny: if overlay.infra.gateway.hootenanny != GatewayConfig::default().hootenanny {
+                    overlay.infra.gateway.hootenanny
+                } else {
+                    base.infra.gateway.hootenanny
+                },
+                hootenanny_pub: if overlay.infra.gateway.hootenanny_pub != GatewayConfig::default().hootenanny_pub {
+                    overlay.infra.gateway.hootenanny_pub
+                } else {
+                    base.infra.gateway.hootenanny_pub
+                },
+            },
         },
         bootstrap: overlay.bootstrap, // Bootstrap fully replaces for now
     }
 }
 
-use crate::infra::{BindConfig, TelemetryConfig};
+use crate::infra::{BindConfig, GatewayConfig, TelemetryConfig};
 
 /// Apply environment variable overrides to config.
 pub fn apply_env_overrides(config: &mut HootConfig, sources: &mut ConfigSources) {
@@ -273,6 +318,22 @@ pub fn apply_env_overrides(config: &mut HootConfig, sources: &mut ConfigSources)
     if let Ok(v) = env::var("RUST_LOG") {
         config.infra.telemetry.log_level = v;
         sources.env_overrides.push("RUST_LOG".to_string());
+    }
+
+    // Gateway settings (for holler)
+    if let Ok(v) = env::var("HOLLER_HTTP_PORT") {
+        if let Ok(port) = v.parse() {
+            config.infra.gateway.http_port = port;
+            sources.env_overrides.push("HOLLER_HTTP_PORT".to_string());
+        }
+    }
+    if let Ok(v) = env::var("HOLLER_HOOTENANNY") {
+        config.infra.gateway.hootenanny = v;
+        sources.env_overrides.push("HOLLER_HOOTENANNY".to_string());
+    }
+    if let Ok(v) = env::var("HOLLER_HOOTENANNY_PUB") {
+        config.infra.gateway.hootenanny_pub = v;
+        sources.env_overrides.push("HOLLER_HOOTENANNY_PUB".to_string());
     }
 
     // Model endpoints (HOOTENANNY_MODEL_<NAME>)

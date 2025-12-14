@@ -126,6 +126,51 @@ impl Default for TelemetryConfig {
     }
 }
 
+/// Gateway (holler) configuration.
+///
+/// Settings for the MCP gateway that connects to hootenanny.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayConfig {
+    /// HTTP port for MCP and health endpoints.
+    /// Default: 8080
+    #[serde(default = "GatewayConfig::default_http_port")]
+    pub http_port: u16,
+
+    /// Hootenanny ZMQ ROUTER endpoint to connect to.
+    /// Default: tcp://localhost:5580
+    #[serde(default = "GatewayConfig::default_hootenanny")]
+    pub hootenanny: String,
+
+    /// Hootenanny ZMQ PUB endpoint for broadcasts.
+    /// Default: tcp://localhost:5581
+    #[serde(default = "GatewayConfig::default_hootenanny_pub")]
+    pub hootenanny_pub: String,
+}
+
+impl GatewayConfig {
+    fn default_http_port() -> u16 {
+        8080
+    }
+
+    fn default_hootenanny() -> String {
+        "tcp://localhost:5580".to_string()
+    }
+
+    fn default_hootenanny_pub() -> String {
+        "tcp://localhost:5581".to_string()
+    }
+}
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            http_port: Self::default_http_port(),
+            hootenanny: Self::default_hootenanny(),
+            hootenanny_pub: Self::default_hootenanny_pub(),
+        }
+    }
+}
+
 /// Infrastructure configuration - cannot change at runtime.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InfraConfig {
@@ -133,13 +178,17 @@ pub struct InfraConfig {
     #[serde(default)]
     pub paths: PathsConfig,
 
-    /// Network bind addresses.
+    /// Network bind addresses (for hootenanny server).
     #[serde(default)]
     pub bind: BindConfig,
 
     /// Telemetry settings.
     #[serde(default)]
     pub telemetry: TelemetryConfig,
+
+    /// Gateway (holler) settings.
+    #[serde(default)]
+    pub gateway: GatewayConfig,
 }
 
 #[cfg(test)]
