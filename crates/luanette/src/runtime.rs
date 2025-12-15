@@ -221,6 +221,10 @@ fn create_sandboxed_lua(
     if let Some(ctx) = mcp_context {
         register_tool_globals(&lua, ctx.clone())
             .context("Failed to register tool globals")?;
+
+        // Register artifact module after tool_globals (depends on hootenanny.*)
+        stdlib::register_artifact(&lua)
+            .context("Failed to register artifact globals")?;
     }
 
     Ok(lua)
