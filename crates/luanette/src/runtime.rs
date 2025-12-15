@@ -10,7 +10,7 @@ use tokio::time::timeout;
 use crate::clients::ClientManager;
 use crate::otel_bridge::{register_otel_globals, store_span_context, StoredSpanContext};
 use crate::stdlib;
-use crate::tool_bridge::{register_mcp_globals, McpBridgeContext};
+use crate::tool_bridge::{register_tool_globals, McpBridgeContext};
 
 /// Configuration for the Lua sandbox.
 #[derive(Debug, Clone)]
@@ -217,10 +217,10 @@ fn create_sandboxed_lua(
     stdlib::register_all(&lua)
         .context("Failed to register standard library")?;
 
-    // Register MCP globals if context is available
+    // Register tool globals if context is available (e.g., hootenanny.*, chaosgarden.*)
     if let Some(ctx) = mcp_context {
-        register_mcp_globals(&lua, ctx.clone())
-            .context("Failed to register MCP globals")?;
+        register_tool_globals(&lua, ctx.clone())
+            .context("Failed to register tool globals")?;
     }
 
     Ok(lua)

@@ -1,8 +1,8 @@
--- tool_call.lua - Example of calling upstream MCP tools
+-- tool_call.lua - Example of calling upstream tools
 --
--- This script demonstrates how to call Hootenanny's MCP tools
--- from within a Lua script. The mcp.* namespace is automatically
--- populated with tools discovered from connected upstream servers.
+-- This script demonstrates how to call Hootenanny's tools
+-- from within a Lua script. Namespaces like hootenanny.* are
+-- automatically populated with tools discovered from connected upstreams.
 
 function describe()
     return {
@@ -20,8 +20,8 @@ function main(params)
     log.info("Starting tool call demo")
 
     -- Store content in Hootenanny's CAS (Content Addressable Storage)
-    -- The mcp.hootenanny namespace contains all tools from the hootenanny server
-    local store_result = mcp.hootenanny.cas_store {
+    -- The hootenanny namespace contains all tools from the hootenanny server
+    local store_result = hootenanny.cas_store {
         content_base64 = require("string").gsub(
             params.content,
             ".",
@@ -33,7 +33,7 @@ function main(params)
     log.info("Stored content with hash: " .. (store_result.hash or "unknown"))
 
     -- List current jobs to show we can call multiple tools
-    local jobs = mcp.hootenanny.job_list {}
+    local jobs = hootenanny.job_list {}
 
     -- Return a summary
     return {

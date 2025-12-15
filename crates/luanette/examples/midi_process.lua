@@ -24,7 +24,7 @@ function main(params)
 
     -- Fetch MIDI from CAS
     otel.event("fetching_midi", { hash = params.input_hash })
-    local info = mcp.hootenanny.cas_inspect { hash = params.input_hash }
+    local info = hootenanny.cas_inspect { hash = params.input_hash }
 
     if not info or not info.local_path then
         log.error("Failed to fetch MIDI from CAS")
@@ -58,7 +58,7 @@ function main(params)
 
     -- Upload to CAS
     otel.event("uploading_result")
-    local result = mcp.hootenanny.cas_upload_file {
+    local result = hootenanny.cas_upload_file {
         file_path = output_path,
         mime_type = "audio/midi"
     }

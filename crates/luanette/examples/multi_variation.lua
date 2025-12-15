@@ -49,7 +49,7 @@ function main(params)
         table.insert(variation_tags, "variation:" .. i)
 
         -- Generate MIDI with Orpheus
-        local job = mcp.hootenanny.orpheus_generate {
+        local job = hootenanny.orpheus_generate {
             model = params.model or "base",
             temperature = temperature,
             max_tokens = params.max_tokens or 512,
@@ -69,7 +69,7 @@ function main(params)
     end
 
     -- Optionally poll for completion (commented out for async pattern)
-    -- local results = mcp.hootenanny.job_poll {
+    -- local results = hootenanny.job_poll {
     --     job_ids = job_ids,
     --     timeout_ms = 120000,
     --     mode = "all"

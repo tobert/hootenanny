@@ -278,7 +278,7 @@ fn generate_hints(kind: &LuaErrorKind, _error_string: &str) -> Vec<String> {
         LuaErrorKind::NilCall => vec![
             "The function or method doesn't exist".to_string(),
             "Check if the tool name is spelled correctly".to_string(),
-            "Verify the namespace is correct (e.g., mcp.hootenanny.tool_name)".to_string(),
+            "Verify the namespace is correct (e.g., hootenanny.tool_name)".to_string(),
         ],
         LuaErrorKind::TypeError => vec![
             "Check parameter types match what the function expects".to_string(),

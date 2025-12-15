@@ -13,7 +13,7 @@
 //! midi.write(path, track)
 //!
 //! -- Upload to CAS
-//! local result = mcp.hootenanny.cas_upload_file({
+//! local result = hootenanny.cas_upload_file({
 //!     file_path = path,
 //!     mime_type = "audio/midi"
 //! })

@@ -12,7 +12,7 @@ use zeromq::{DealerSocket, Socket, SocketRecv, SocketSend, ZmqMessage};
 /// Configuration for the upstream hootenanny connection.
 #[derive(Debug, Clone)]
 pub struct UpstreamConfig {
-    /// Namespace prefix for tools (e.g., "hootenanny" -> mcp.hootenanny.*)
+    /// Namespace prefix for tools (e.g., "hootenanny" -> hootenanny.*)
     pub namespace: String,
     /// ZMQ endpoint (e.g., "tcp://localhost:5580")
     pub endpoint: String,

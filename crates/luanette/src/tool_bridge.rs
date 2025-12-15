@@ -1,6 +1,6 @@
-//! Bridge between Lua scripts and upstream MCP tools.
+//! Bridge between Lua scripts and upstream tools.
 //!
-//! Registers `mcp.*` Lua globals that call upstream MCP servers via ClientManager.
+//! Registers namespace globals (e.g., `hootenanny.*`) that call upstream servers via ClientManager.
 //! Automatically propagates traceparent from stored span context to upstream calls.
 
 use anyhow::Result;
@@ -63,18 +63,15 @@ fn get_traceparent_from_lua(lua: &Lua) -> Option<String> {
     })
 }
 
-/// Register the `mcp` global table with namespace sub-tables.
+/// Register namespace globals with tool functions.
 ///
 /// Creates a structure like:
 /// ```lua
-/// mcp.hootenanny.orpheus_generate({ temperature = 1.0 })
-/// mcp.hootenanny.cas_inspect({ hash = "abc123" })
+/// hootenanny.orpheus_generate({ temperature = 1.0 })
+/// hootenanny.cas_inspect({ hash = "abc123" })
 /// ```
-pub fn register_mcp_globals(lua: &Lua, ctx: McpBridgeContext) -> Result<()> {
+pub fn register_tool_globals(lua: &Lua, ctx: McpBridgeContext) -> Result<()> {
     let globals = lua.globals();
-
-    // Create the root mcp table
-    let mcp_table = lua.create_table()?;
 
     // Get all namespaces and their tools
     let namespaces_and_tools = ctx.runtime_handle.block_on(async {
@@ -94,13 +91,11 @@ pub fn register_mcp_globals(lua: &Lua, ctx: McpBridgeContext) -> Result<()> {
         }
     }
 
-    // Create namespace sub-tables with tool functions
+    // Create namespace globals directly (e.g., hootenanny.*, chaosgarden.*)
     for (namespace, tools) in tools_by_namespace {
         let ns_table = create_namespace_table(lua, &ctx, &namespace, &tools)?;
-        mcp_table.set(namespace.as_str(), ns_table)?;
+        globals.set(namespace.as_str(), ns_table)?;
     }
-
-    globals.set("mcp", mcp_table)?;
 
     Ok(())
 }
