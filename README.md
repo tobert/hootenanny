@@ -25,10 +25,20 @@ cargo watch -x 'run -p hootenanny'
 orpheus_generate          Generate MIDI from scratch
 orpheus_generate_seeded   Generate from a seed MIDI
 orpheus_continue          Continue existing MIDI
-orpheus_bridge            Create bridges between sections
+orpheus_bridge            Create transitions between sections
+orpheus_loops             Generate loopable MIDI patterns
+orpheus_classify          Classify MIDI as human/AI generated
 ```
 
 All async - launch jobs, get `job_id` back instantly, poll when ready.
+
+### 🤖 Audio AI Models
+```
+musicgen_generate         Text-to-audio generation (Meta MusicGen)
+yue_generate              Lyrics-to-song with structure markers
+clap_analyze              Genre/mood classification, embeddings, similarity
+beatthis_analyze          Beat/downbeat detection, BPM estimation
+```
 
 ### 🎼 ABC Notation
 ```
@@ -43,14 +53,13 @@ abc_transpose             Transpose by semitones or to key
 convert_midi_to_wav       Render MIDI → WAV with SoundFont
 soundfont_inspect         List SoundFont presets
 soundfont_preset_inspect  Inspect specific preset
-beatthis_analyze          Detect beats/BPM in audio
 ```
 
 ### 💾 Content-Addressable Storage (CAS)
 ```
 cas_store                 Store base64 content → hash
 cas_inspect               Get metadata for hash
-cas_upload_file           Upload file from disk → hash
+cas_get                   Retrieve content by hash
 ```
 
 BLAKE3 hashing, automatic deduplication, all content addressable.
@@ -63,13 +72,20 @@ Artifacts wrap CAS content with context:
 - **Listing**: `GET /artifacts?tag=X&creator=Y` filters artifacts
 - **Tracking**: Access counts, last accessed timestamps
 
+```
+artifact_upload           Upload file from disk as artifact
+artifact_list             List artifacts (filter by tag, creator)
+artifact_get              Get artifact metadata by ID
+add_annotation            Add vibes/notes to artifacts
+```
+
 ```javascript
 // Generate something
 job = orpheus_generate({temperature: 1.0})
 result = job_poll({job_ids: [job.job_id], timeout_ms: 60000})
 
 // Share via artifact URL (not raw CAS hash!)
-// http://localhost:8080/artifact/artifact_abc123def456
+// http://localhost:8082/artifact/artifact_abc123def456
 ```
 
 ### ⚡ Async Job System
@@ -108,32 +124,53 @@ graph_bind                Bind identity to device
 graph_tag                 Tag an identity
 graph_connect             Connect nodes
 graph_find                Query identities
+graph_context             Get recent artifacts/context for LLM
+graph_query               Trustfall queries across artifacts & devices
 ```
 
-### 🤖 Agent Chat (LLM Sub-agents)
+### 🎬 Timeline (Chaosgarden)
 ```
-agent_chat_new            Create session with backend
-agent_chat_send           Send message
-agent_chat_poll           Poll for response
-agent_chat_cancel         Cancel session
-agent_chat_status         Get session status
-agent_chat_history        Get message history
-agent_chat_summary        Get AI summary
-agent_chat_list           List sessions
-agent_chat_backends       List available backends
+garden_status             Get playback state
+garden_play/pause/stop    Transport controls
+garden_seek               Seek to beat position
+garden_set_tempo          Set BPM
+garden_create_region      Place content on timeline
+garden_delete_region      Remove region
+garden_move_region        Reposition region
+garden_get_regions        Query timeline regions
+garden_query              Trustfall queries on garden state
 ```
+
+### ⚙️ Configuration
+```
+config_get                Get configuration values (paths, ports, models)
+```
+
+## 🚀 Deployment
+
+Systemd user units are provided for running the full suite as a service.
+See `systemd/README.md` for installation instructions.
 
 ## 🌐 HTTP Endpoints
 
+**Holler (MCP Gateway) - Port 8080**
 ```
-GET  /health                    Server health, uptime, stats
+POST /mcp                       MCP Streamable HTTP (recommended)
+GET  /mcp/sse                   MCP SSE transport (legacy)
+GET  /health                    Gateway health
+```
 
+**Hootenanny (Artifacts & Backend) - Port 8082**
+```
 GET  /artifact/{id}             Stream artifact content (MIME-typed)
 GET  /artifact/{id}/meta        Artifact metadata as JSON
 GET  /artifacts                 List artifacts (filterable)
+GET  /health                    Backend health
+```
 
-POST /mcp                       MCP Streamable HTTP (recommended)
-GET  /mcp/sse                   MCP SSE transport (legacy)
+**Luanette (Lua Scripts) - Port 8081**
+```
+POST /mcp                       MCP Streamable HTTP (for script tools)
 ```
 
 ## 🎯 Real-World Examples
@@ -189,12 +226,16 @@ result = job_poll({timeout_ms: 120000, job_ids: jobs, mode: "all"})
 ## 🏗️ Architecture
 
 **Crates:**
-- `hootenanny` - MCP server, tools, job system
+- `hootenanny` - Backend server: artifacts, CAS, Orpheus, audio graph
+- `holler` - MCP gateway: routes tools to backends via ZMQ
+- `hooteproto` - ZMQ protocol: Envelope, Payload, frame codec
+- `hooteconf` - Configuration: bootstrap and infrastructure settings
+- `chaosgarden` - Timeline engine: regions, transport, playback
+- `luanette` - Lua scripting: custom tools and automation
 - `baton` - MCP protocol implementation
 - `abc` - ABC notation parser and MIDI converter
 - `resonode` - Musical domain types
-- `audio-graph-mcp` - Audio routing graph
-
+- `audio-graph-mcp` - Audio routing graph with Trustfall
 
 **Key Patterns:**
 - **Async-by-design:** Slow tools return `job_id` immediately
@@ -231,15 +272,17 @@ jj git push -c @                    # Share your work
 ## 📊 Status
 
 ✅ Async job system with polling
-✅ Orpheus MIDI generation (4 modes)
+✅ Orpheus MIDI generation (6 modes including loops & classify)
 ✅ ABC notation → MIDI
 ✅ Audio rendering (MIDI → WAV)
 ✅ Artifact tracking with access logs
-✅ Audio graph for routing
-✅ LLM sub-agent support
+✅ Audio graph with Trustfall queries
 ✅ Beat detection (BeatThis)
+✅ Audio AI: MusicGen, CLAP analysis, YuE
+✅ Chaosgarden timeline/playback
+✅ ZMQ mesh: Holler ↔ Hootenanny ↔ Luanette ↔ Chaosgarden
 
 ---
 
 **Contributors**: Amy Tobey, Claude, Gemini
-**Last Updated**: 2025-12-02
+**Last Updated**: 2025-12-15
