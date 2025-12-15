@@ -39,7 +39,7 @@ fn init_store() -> FileStore {
 }
 
 /// Get or initialize the CAS store
-fn get_store() -> &'static FileStore {
+pub(super) fn get_store() -> &'static FileStore {
     CAS_STORE.get_or_init(init_store)
 }
 

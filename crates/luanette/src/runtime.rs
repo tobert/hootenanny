@@ -222,9 +222,9 @@ fn create_sandboxed_lua(
         register_tool_globals(&lua, ctx.clone())
             .context("Failed to register tool globals")?;
 
-        // Register artifact module after tool_globals (depends on hootenanny.*)
-        stdlib::register_artifact(&lua)
-            .context("Failed to register artifact globals")?;
+        // Register modules that depend on tool_globals (artifact.*, workflow.*)
+        stdlib::register_dependent_modules(&lua)
+            .context("Failed to register dependent modules")?;
     }
 
     Ok(lua)

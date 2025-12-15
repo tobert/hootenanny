@@ -69,7 +69,12 @@ fn get_traceparent_from_lua(lua: &Lua) -> Option<String> {
 /// ```lua
 /// hootenanny.orpheus_generate({ temperature = 1.0 })
 /// hootenanny.cas_inspect({ hash = "abc123" })
+/// chaosgarden.play()
+/// chaosgarden.set_tempo({ bpm = 120 })
 /// ```
+///
+/// Note: `garden_*` tools are split into a separate `chaosgarden` namespace
+/// for clarity, even though they route through hootenanny.
 pub fn register_tool_globals(lua: &Lua, ctx: McpBridgeContext) -> Result<()> {
     let globals = lua.globals();
 
@@ -78,26 +83,79 @@ pub fn register_tool_globals(lua: &Lua, ctx: McpBridgeContext) -> Result<()> {
         ctx.clients.all_tools().await
     });
 
-    // Group tools by namespace
+    // Group tools by namespace, splitting garden_* into chaosgarden
     let mut tools_by_namespace: std::collections::HashMap<String, Vec<(String, String)>> =
         std::collections::HashMap::new();
 
     for (qualified_name, tool) in namespaces_and_tools {
-        if let Some((namespace, _tool_name)) = ClientManager::parse_qualified_name(&qualified_name) {
+        if let Some((original_namespace, _tool_name)) = ClientManager::parse_qualified_name(&qualified_name) {
+            // Split garden_* tools into chaosgarden namespace
+            let (namespace, tool_name) = if tool.name.starts_with("garden_") {
+                // Strip "garden_" prefix for cleaner API: garden_play -> chaosgarden.play
+                let short_name = tool.name.strip_prefix("garden_")
+                    .unwrap_or(&tool.name)
+                    .to_string();
+                ("chaosgarden".to_string(), short_name)
+            } else {
+                (original_namespace.to_string(), tool.name.clone())
+            };
+
             tools_by_namespace
-                .entry(namespace.to_string())
+                .entry(namespace)
                 .or_default()
-                .push((tool.name.clone(), tool.description.clone()));
+                .push((tool_name, tool.description.clone()));
         }
     }
 
     // Create namespace globals directly (e.g., hootenanny.*, chaosgarden.*)
-    for (namespace, tools) in tools_by_namespace {
-        let ns_table = create_namespace_table(lua, &ctx, &namespace, &tools)?;
+    for (namespace, tools) in &tools_by_namespace {
+        // For chaosgarden, we need to route through hootenanny but use garden_ prefix
+        let ns_table = if namespace == "chaosgarden" {
+            create_chaosgarden_table(lua, &ctx, tools)?
+        } else {
+            create_namespace_table(lua, &ctx, namespace, tools)?
+        };
         globals.set(namespace.as_str(), ns_table)?;
     }
 
     Ok(())
+}
+
+/// Create the chaosgarden namespace table.
+/// Tools are called as `garden_{name}` on hootenanny but exposed as `{name}` on chaosgarden.
+fn create_chaosgarden_table(
+    lua: &Lua,
+    ctx: &McpBridgeContext,
+    tools: &[(String, String)],
+) -> Result<Table> {
+    let ns_table = lua.create_table()?;
+
+    for (short_name, _description) in tools {
+        let ctx_clone = ctx.clone();
+        // Map back to garden_* for the actual call
+        let actual_tool_name = format!("garden_{}", short_name);
+
+        let func = lua.create_function(move |lua, args: LuaValue| {
+            let json_args = lua_to_json(&args).map_err(mlua::Error::external)?;
+
+            let traceparent = get_traceparent_from_lua(lua);
+
+            let result = ctx_clone
+                .call_tool(
+                    "hootenanny",  // Route through hootenanny
+                    &actual_tool_name,
+                    json_args,
+                    traceparent.as_deref(),
+                )
+                .map_err(mlua::Error::external)?;
+
+            json_to_lua(lua, &result).map_err(mlua::Error::external)
+        })?;
+
+        ns_table.set(short_name.as_str(), func)?;
+    }
+
+    Ok(ns_table)
 }
 
 /// Create a namespace table with functions for each tool.
