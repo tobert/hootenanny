@@ -5,6 +5,8 @@ use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::types::{ArtifactId, ContentHash};
 use hooteproto::{ToolOutput, ToolResult, ToolError};
 use base64::{engine::general_purpose, Engine as _};
+use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
+use std::io::Cursor;
 
 /// Look up an artifact ID by its content hash
 fn find_artifact_by_hash<S: ArtifactStore>(store: &S, content_hash: &str) -> Option<String> {
@@ -76,9 +78,9 @@ impl EventDualityServer {
 
         span.record("audio.size_bytes", audio_bytes.len());
 
-        validate_wav_format(&audio_bytes)?;
+        let prepared_audio = prepare_audio_for_beatthis(&audio_bytes)?;
 
-        let audio_base64 = general_purpose::STANDARD.encode(&audio_bytes);
+        let audio_base64 = general_purpose::STANDARD.encode(&prepared_audio);
 
         let service_request = BeatThisServiceRequest {
             audio: audio_base64,
@@ -228,66 +230,117 @@ impl EventDualityServer {
     }
 }
 
-fn validate_wav_format(data: &[u8]) -> Result<(), ToolError> {
-    if data.len() < 44 {
-        return Err(ToolError::invalid_params("File too small to be a valid WAV"));
-    }
+/// Prepare audio for BeatThis: convert to mono 22050 Hz WAV
+///
+/// Handles:
+/// - Stereo → mono conversion (averages channels)
+/// - Sample rate conversion via rubato (high-quality sinc resampling)
+/// - Returns WAV bytes ready for the service
+fn prepare_audio_for_beatthis(data: &[u8]) -> Result<Vec<u8>, ToolError> {
+    let cursor = Cursor::new(data);
+    let reader = hound::WavReader::new(cursor)
+        .map_err(|e| ToolError::invalid_params(format!("Invalid WAV file: {}", e)))?;
 
-    if &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
-        return Err(ToolError::invalid_params(
-            "Not a valid WAV file (missing RIFF/WAVE header)",
-        ));
-    }
+    let spec = reader.spec();
+    let source_rate = spec.sample_rate;
+    let channels = spec.channels as usize;
 
-    let mut offset = 12;
-    while offset + 8 < data.len() {
-        let chunk_id = &data[offset..offset + 4];
-        let chunk_size = u32::from_le_bytes([
-            data[offset + 4],
-            data[offset + 5],
-            data[offset + 6],
-            data[offset + 7],
-        ]) as usize;
+    tracing::debug!(
+        source_rate,
+        channels,
+        bits = spec.bits_per_sample,
+        "Reading WAV for beat analysis"
+    );
 
-        if chunk_id == b"fmt " {
-            if chunk_size < 16 || offset + 8 + chunk_size > data.len() {
-                return Err(ToolError::invalid_params("Invalid fmt chunk"));
-            }
-
-            let fmt_data = &data[offset + 8..];
-
-            let audio_format = u16::from_le_bytes([fmt_data[0], fmt_data[1]]);
-            if audio_format != 1 {
-                return Err(ToolError::invalid_params(format!(
-                    "Unsupported audio format: {}. Only PCM (1) supported",
-                    audio_format
-                )));
-            }
-
-            let num_channels = u16::from_le_bytes([fmt_data[2], fmt_data[3]]);
-            if num_channels != 1 {
-                return Err(ToolError::invalid_params(format!(
-                    "Audio must be mono. Found {} channels",
-                    num_channels
-                )));
-            }
-
-            let sample_rate = u32::from_le_bytes([fmt_data[4], fmt_data[5], fmt_data[6], fmt_data[7]]);
-            if sample_rate != REQUIRED_SAMPLE_RATE {
-                return Err(ToolError::invalid_params(format!(
-                    "Sample rate must be {} Hz. Found {} Hz",
-                    REQUIRED_SAMPLE_RATE, sample_rate
-                )));
-            }
-
-            return Ok(());
+    // Read samples as f32
+    let samples: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Float => {
+            reader.into_samples::<f32>()
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| ToolError::internal(format!("Failed to read samples: {}", e)))?
         }
-
-        offset += 8 + chunk_size;
-        if chunk_size % 2 == 1 {
-            offset += 1;
+        hound::SampleFormat::Int => {
+            let bits = spec.bits_per_sample;
+            let max_val = (1i32 << (bits - 1)) as f32;
+            reader.into_samples::<i32>()
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| ToolError::internal(format!("Failed to read samples: {}", e)))?
+                .into_iter()
+                .map(|s| s as f32 / max_val)
+                .collect()
         }
+    };
+
+    // Convert to mono if stereo (average channels)
+    let mono_samples: Vec<f32> = if channels > 1 {
+        samples
+            .chunks(channels)
+            .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
+            .collect()
+    } else {
+        samples
+    };
+
+    // Resample if needed
+    let final_samples = if source_rate != REQUIRED_SAMPLE_RATE {
+        tracing::info!(
+            from = source_rate,
+            to = REQUIRED_SAMPLE_RATE,
+            "Resampling audio for BeatThis"
+        );
+        resample_audio(&mono_samples, source_rate, REQUIRED_SAMPLE_RATE)?
+    } else {
+        mono_samples
+    };
+
+    // Write output WAV
+    let mut output = Cursor::new(Vec::new());
+    let out_spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: REQUIRED_SAMPLE_RATE,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+
+    let mut writer = hound::WavWriter::new(&mut output, out_spec)
+        .map_err(|e| ToolError::internal(format!("Failed to create WAV writer: {}", e)))?;
+
+    for sample in final_samples {
+        let clamped = sample.clamp(-1.0, 1.0);
+        let int_sample = (clamped * 32767.0) as i16;
+        writer.write_sample(int_sample)
+            .map_err(|e| ToolError::internal(format!("Failed to write sample: {}", e)))?;
     }
 
-    Err(ToolError::invalid_params("WAV file missing fmt chunk"))
+    writer.finalize()
+        .map_err(|e| ToolError::internal(format!("Failed to finalize WAV: {}", e)))?;
+
+    Ok(output.into_inner())
+}
+
+/// Resample audio using rubato's high-quality sinc interpolation
+fn resample_audio(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32>, ToolError> {
+    let params = SincInterpolationParameters {
+        sinc_len: 256,
+        f_cutoff: 0.95,
+        interpolation: SincInterpolationType::Linear,
+        oversampling_factor: 256,
+        window: WindowFunction::BlackmanHarris2,
+    };
+
+    let ratio = to_rate as f64 / from_rate as f64;
+
+    let mut resampler = SincFixedIn::<f32>::new(
+        ratio,
+        2.0,  // max relative ratio (allows some flexibility)
+        params,
+        samples.len(),
+        1,    // mono
+    ).map_err(|e| ToolError::internal(format!("Failed to create resampler: {}", e)))?;
+
+    let input = vec![samples.to_vec()];
+    let output = resampler.process(&input, None)
+        .map_err(|e| ToolError::internal(format!("Resampling failed: {}", e)))?;
+
+    Ok(output.into_iter().next().unwrap_or_default())
 }
