@@ -333,7 +333,10 @@ impl HooteprotoServer {
 
         // Intercept tools that HooteprotoServer handles directly
         // This ensures they work even if dispatch_tool doesn't implement them
+        // CasStore is intercepted here because Payload::CasStore uses `data` field
+        // but dispatch_tool expects CasStoreRequest with `content_base64` field
         match &payload {
+            Payload::CasStore { data, mime_type } => return self.cas_store(data.clone(), Some(mime_type.clone())).await,
             Payload::CasGet { hash } => return self.cas_get(hash).await,
             Payload::ArtifactList { tag, creator } => return self.artifact_list(tag.clone(), creator.clone()).await,
             Payload::ArtifactGet { id } => return self.artifact_get(id).await,
@@ -702,6 +705,7 @@ fn payload_type_name(payload: &Payload) -> &'static str {
         Payload::GraphFind { .. } => "graph_find",
         Payload::GraphContext { .. } => "graph_context",
         Payload::AddAnnotation { .. } => "add_annotation",
+        Payload::ConfigGet { .. } => "config_get",
         Payload::OrpheusGenerate { .. } => "orpheus_generate",
         Payload::OrpheusGenerateSeeded { .. } => "orpheus_generate_seeded",
         Payload::OrpheusContinue { .. } => "orpheus_continue",

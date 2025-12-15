@@ -731,6 +731,12 @@ pub enum Payload {
         source: Option<String>,
     },
 
+    // === Config Tools (Holler → Hootenanny) ===
+    ConfigGet {
+        section: Option<String>,
+        key: Option<String>,
+    },
+
     // === Transport Tools (Holler → Chaosgarden) ===
     TransportPlay,
     TransportStop,

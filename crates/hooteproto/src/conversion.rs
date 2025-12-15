@@ -344,6 +344,12 @@ pub fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
             source: args.get("source").and_then(|v| v.as_str()).map(String::from),
         }),
 
+        // === Config Tools (Hootenanny) ===
+        "config_get" => Ok(Payload::ConfigGet {
+            section: args.get("section").and_then(|v| v.as_str()).map(String::from),
+            key: args.get("key").and_then(|v| v.as_str()).map(String::from),
+        }),
+
         // === Orpheus Tools (Hootenanny) ===
         "orpheus_generate" => Ok(Payload::OrpheusGenerate {
             model: args.get("model").and_then(|v| v.as_str()).map(String::from),
