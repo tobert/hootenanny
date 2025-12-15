@@ -360,7 +360,7 @@ impl LocalModels {
         let midi_bytes = self.resolve_cas(&midi_hash)?;
 
         let mut request_body = serde_json::Map::new();
-        request_body.insert("midi".to_string(), serde_json::json!(BASE64.encode(&midi_bytes)));
+        request_body.insert("midi_input".to_string(), serde_json::json!(BASE64.encode(&midi_bytes)));
 
         let builder = self.client.post("http://127.0.0.1:2001/predict")
             .json(&request_body);
