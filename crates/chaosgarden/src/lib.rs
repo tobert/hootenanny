@@ -53,4 +53,4 @@ pub use primitives::*;
 pub use query::ChaosgardenAdapter;
 pub use daemon::{DaemonConfig, GardenDaemon};
 #[cfg(feature = "pipewire")]
-pub use pipewire_output::{PipeWireOutputConfig, PipeWireOutputError, PipeWireOutputStream};
+pub use pipewire_output::{PipeWireOutputConfig, PipeWireOutputError, PipeWireOutputStream, StreamStats};

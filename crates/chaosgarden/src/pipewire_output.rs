@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::external_io::RingBuffer;
 
@@ -70,6 +70,16 @@ pub struct PipeWireOutputStream {
     thread_handle: Option<JoinHandle<()>>,
     config: PipeWireOutputConfig,
     started: bool,
+    // Stats for monitoring (updated by RT callback)
+    stats: Arc<StreamStats>,
+}
+
+/// Runtime statistics from the PipeWire callback
+#[derive(Debug, Default)]
+pub struct StreamStats {
+    pub callbacks: std::sync::atomic::AtomicU64,
+    pub samples_written: std::sync::atomic::AtomicU64,
+    pub underruns: std::sync::atomic::AtomicU64,
 }
 
 impl PipeWireOutputStream {
@@ -114,6 +124,7 @@ impl PipeWireOutputStream {
         );
 
         let running = Arc::new(AtomicBool::new(true));
+        let stats = Arc::new(StreamStats::default());
 
         info!(
             "PipeWire output stream created (paused): {} @ {}Hz, {} channels",
@@ -126,6 +137,7 @@ impl PipeWireOutputStream {
             thread_handle: None,
             config,
             started: false,
+            stats,
         })
     }
 
@@ -144,13 +156,18 @@ impl PipeWireOutputStream {
 
         let ring_for_thread = Arc::clone(&self.ring_buffer);
         let running_for_thread = Arc::clone(&self.running);
+        let stats_for_thread = Arc::clone(&self.stats);
         let config_clone = self.config.clone();
 
         let thread_handle = thread::Builder::new()
             .name("pipewire-output".to_string())
             .spawn(move || {
-                if let Err(e) = run_pipewire_loop(config_clone, ring_for_thread, running_for_thread)
-                {
+                if let Err(e) = run_pipewire_loop(
+                    config_clone,
+                    ring_for_thread,
+                    running_for_thread,
+                    stats_for_thread,
+                ) {
                     error!("PipeWire output thread failed: {}", e);
                 }
             })
@@ -188,6 +205,11 @@ impl PipeWireOutputStream {
         &self.config
     }
 
+    /// Get runtime statistics (callbacks, samples written, underruns)
+    pub fn stats(&self) -> &Arc<StreamStats> {
+        &self.stats
+    }
+
     /// Stop the stream
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::Release);
@@ -211,6 +233,7 @@ fn run_pipewire_loop(
     config: PipeWireOutputConfig,
     ring_buffer: Arc<Mutex<RingBuffer>>,
     running: Arc<AtomicBool>,
+    stats: Arc<StreamStats>,
 ) -> Result<(), PipeWireOutputError> {
     use pipewire as pw;
     use pw::spa::pod::Pod;
@@ -255,99 +278,66 @@ fn run_pipewire_loop(
     let stride = sample_size * channels;
     let target_frames = config.latency_frames as usize;
 
-    // Track callback stats for debugging
-    use std::sync::atomic::AtomicU64;
-    let callback_count = Arc::new(AtomicU64::new(0));
-    let samples_written = Arc::new(AtomicU64::new(0));
-    let underruns = Arc::new(AtomicU64::new(0));
-
-    let cb_count = Arc::clone(&callback_count);
-    let sw = Arc::clone(&samples_written);
-    let ur = Arc::clone(&underruns);
-
-    // Register process callback
-    // The callback reads from the ring buffer and writes to PipeWire's buffer
-    // We write at most target_frames per callback for consistent latency
+    // Register process callback - runs in PipeWire's RT thread
     let _listener = stream
-        .add_local_listener_with_user_data(ring_buffer)
-        .process(move |stream, ring| {
-            let count = cb_count.fetch_add(1, Ordering::Relaxed);
+        .add_local_listener_with_user_data((ring_buffer, stats))
+        .process(move |stream, (ring, stats)| {
+            stats.callbacks.fetch_add(1, Ordering::Relaxed);
 
-            match stream.dequeue_buffer() {
-                None => {
-                    if count % 100 == 0 {
-                        warn!("PipeWire: no buffer available (callback #{})", count);
-                    }
-                }
-                Some(mut buffer) => {
-                    // Check what PipeWire requested vs max buffer capacity
-                    let requested = buffer.requested() as usize;
-                    let datas = buffer.datas_mut();
-                    if let Some(data) = datas.first_mut() {
-                        if let Some(slice) = data.data() {
-                            let max_frames = slice.len() / stride;
+            let Some(mut buffer) = stream.dequeue_buffer() else {
+                return;
+            };
 
-                            // Use the minimum of: our target, what PipeWire requested, max capacity
-                            // If requested is 0, PipeWire didn't specify - use our target
-                            let n_frames = if requested > 0 {
-                                target_frames.min(requested).min(max_frames)
-                            } else {
-                                target_frames.min(max_frames)
-                            };
+            let requested = buffer.requested() as usize;
+            let datas = buffer.datas_mut();
+            let Some(data) = datas.first_mut() else {
+                return;
+            };
+            let Some(slice) = data.data() else {
+                return;
+            };
 
-                            // Try to read from ring buffer
-                            let samples_needed = n_frames * channels;
-                            let mut temp_buffer = vec![0.0f32; samples_needed];
+            let max_frames = slice.len() / stride;
+            let n_frames = if requested > 0 {
+                target_frames.min(requested).min(max_frames)
+            } else {
+                target_frames.min(max_frames)
+            };
 
-                            let samples_read = if let Ok(mut ring) = ring.try_lock() {
-                                ring.read(&mut temp_buffer)
-                            } else {
-                                0
-                            };
+            let samples_needed = n_frames * channels;
+            let mut temp_buffer = vec![0.0f32; samples_needed];
 
-                            if samples_read == 0 {
-                                ur.fetch_add(1, Ordering::Relaxed);
-                            } else {
-                                sw.fetch_add(samples_read as u64, Ordering::Relaxed);
-                            }
+            let samples_read = ring
+                .try_lock()
+                .map(|mut r| r.read(&mut temp_buffer))
+                .unwrap_or(0);
 
-                            // Log periodically or on underrun
-                            if samples_read == 0 || count % 100 == 0 {
-                                debug!(
-                                    "PipeWire callback #{}: read {}/{} samples (target {} frames, requested {}, max {}), underruns: {}",
-                                    count, samples_read, samples_needed,
-                                    target_frames, requested, max_frames,
-                                    ur.load(Ordering::Relaxed)
-                                );
-                            }
+            if samples_read > 0 {
+                stats
+                    .samples_written
+                    .fetch_add(samples_read as u64, Ordering::Relaxed);
+            } else {
+                stats.underruns.fetch_add(1, Ordering::Relaxed);
+            }
 
-                            // Fill output buffer (only n_frames worth)
-                            for i in 0..n_frames {
-                                for c in 0..channels {
-                                    let sample_idx = i * channels + c;
-                                    let sample = if sample_idx < samples_read {
-                                        temp_buffer[sample_idx]
-                                    } else {
-                                        0.0 // Silence if underrun
-                                    };
-
-                                    let start = i * stride + c * sample_size;
-                                    let end = start + sample_size;
-                                    if end <= slice.len() {
-                                        slice[start..end].copy_from_slice(&sample.to_le_bytes());
-                                    }
-                                }
-                            }
-
-                            // Update chunk metadata - size reflects actual data written
-                            let chunk = data.chunk_mut();
-                            *chunk.offset_mut() = 0;
-                            *chunk.stride_mut() = stride as i32;
-                            *chunk.size_mut() = (stride * n_frames) as u32;
-                        }
-                    }
+            // Fill output buffer
+            for i in 0..n_frames {
+                for c in 0..channels {
+                    let sample_idx = i * channels + c;
+                    let sample = if sample_idx < samples_read {
+                        temp_buffer[sample_idx]
+                    } else {
+                        0.0
+                    };
+                    let start = i * stride + c * sample_size;
+                    slice[start..start + sample_size].copy_from_slice(&sample.to_le_bytes());
                 }
             }
+
+            let chunk = data.chunk_mut();
+            *chunk.offset_mut() = 0;
+            *chunk.stride_mut() = stride as i32;
+            *chunk.size_mut() = (stride * n_frames) as u32;
         })
         .register()
         .map_err(|e| PipeWireOutputError::Init(format!("Failed to register listener: {}", e)))?;
