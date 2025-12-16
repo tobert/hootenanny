@@ -1037,7 +1037,10 @@ pub fn capnp_envelope_to_payload(
         // Variants not yet implemented
         envelope_capnp::payload::Register(_) |
         envelope_capnp::payload::Pong(_) |
-        envelope_capnp::payload::TimelineEvent(_) => {
+        envelope_capnp::payload::TimelineEvent(_) |
+        envelope_capnp::payload::StreamStart(_) |
+        envelope_capnp::payload::StreamSwitchChunk(_) |
+        envelope_capnp::payload::StreamStop(_) => {
             Err(capnp::Error::failed("Payload variant not yet implemented for capnp conversion".to_string()))
         }
     }
@@ -1701,7 +1704,7 @@ fn payload_to_capnp_payload(
         }
 
         Payload::ToolList { tools } => {
-            let mut tool_list = builder.reborrow().init_tool_list();
+            let tool_list = builder.reborrow().init_tool_list();
             let mut tools_builder = tool_list.init_tools(tools.len() as u32);
 
             for (i, tool) in tools.iter().enumerate() {

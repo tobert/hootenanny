@@ -25,6 +25,7 @@ use anyhow::{Context, Result};
 use crate::config::CasConfig;
 use crate::hash::ContentHash;
 use crate::metadata::{CasMetadata, CasReference};
+use crate::staging::{CasAddress, SealResult, StagingChunk, StagingId};
 
 /// Trait for content storage backends.
 ///
@@ -108,6 +109,144 @@ impl FileStore {
             .metadata_dir()
             .join(hash.prefix())
             .join(format!("{}.json", hash.remainder()))
+    }
+
+    /// Get the path where a staging file would be stored.
+    fn staging_path(&self, id: &StagingId) -> PathBuf {
+        self.config
+            .staging_dir()
+            .join(id.prefix())
+            .join(id.remainder())
+    }
+
+    /// Create a new staging chunk for incremental writes.
+    ///
+    /// Returns a handle that can be written to. Call `seal()` when done
+    /// to compute the content hash and move to the objects directory.
+    pub fn create_staging(&self) -> Result<StagingChunk> {
+        if self.config.read_only {
+            anyhow::bail!("CAS is in read-only mode");
+        }
+
+        let id = StagingId::new();
+        let path = self.staging_path(&id);
+        StagingChunk::create(id, path)
+    }
+
+    /// Create a staging chunk with a specific ID.
+    ///
+    /// Useful when the ID needs to be known before creation (e.g., for coordination).
+    pub fn create_staging_with_id(&self, id: StagingId) -> Result<StagingChunk> {
+        if self.config.read_only {
+            anyhow::bail!("CAS is in read-only mode");
+        }
+
+        let path = self.staging_path(&id);
+        StagingChunk::create(id, path)
+    }
+
+    /// Get the path for a staging file by ID.
+    pub fn staging_path_for(&self, id: &StagingId) -> PathBuf {
+        self.staging_path(id)
+    }
+
+    /// Seal a staging chunk: compute hash and move to objects directory.
+    ///
+    /// This attempts a rename() first (O(1) on same filesystem).
+    /// Falls back to copy+delete if cross-filesystem.
+    pub fn seal(&self, chunk: &StagingChunk, mime_type: &str) -> Result<SealResult> {
+        self.seal_path(&chunk.path, mime_type)
+    }
+
+    /// Seal a staging file by path.
+    ///
+    /// Use this when the staging file was written by another process (e.g., chaosgarden).
+    pub fn seal_path(&self, staging_path: &PathBuf, mime_type: &str) -> Result<SealResult> {
+        if self.config.read_only {
+            anyhow::bail!("CAS is in read-only mode");
+        }
+
+        // Read and hash the content
+        let data = fs::read(staging_path).context("failed to read staging file")?;
+        let content_hash = ContentHash::from_data(&data);
+        let size_bytes = data.len() as u64;
+
+        let obj_path = self.object_path(&content_hash);
+
+        // Create prefix directory if needed
+        if let Some(parent) = obj_path.parent() {
+            fs::create_dir_all(parent).context("failed to create object prefix directory")?;
+        }
+
+        // Try rename first (O(1) on same filesystem)
+        if !obj_path.exists() {
+            match fs::rename(staging_path, &obj_path) {
+                Ok(()) => {}
+                Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
+                    // Cross-filesystem: fall back to copy + delete
+                    fs::copy(staging_path, &obj_path).context("failed to copy staging file")?;
+                    fs::remove_file(staging_path).context("failed to remove staging file")?;
+                }
+                Err(e) => {
+                    return Err(e).context("failed to rename staging file");
+                }
+            }
+        } else {
+            // Content already exists (dedup), just remove staging
+            fs::remove_file(staging_path).context("failed to remove staging file")?;
+        }
+
+        // Write metadata if configured
+        if self.config.store_metadata {
+            let meta_path = self.metadata_path(&content_hash);
+            if let Some(parent) = meta_path.parent() {
+                fs::create_dir_all(parent).context("failed to create metadata prefix directory")?;
+            }
+
+            if !meta_path.exists() {
+                let metadata = CasMetadata {
+                    mime_type: mime_type.to_string(),
+                    size: size_bytes,
+                };
+                let json = serde_json::to_string(&metadata).context("failed to serialize metadata")?;
+                fs::write(&meta_path, json).context("failed to write metadata file")?;
+            }
+        }
+
+        Ok(SealResult {
+            content_hash,
+            content_path: obj_path,
+            size_bytes,
+        })
+    }
+
+    /// Check if a staging file exists.
+    pub fn staging_exists(&self, id: &StagingId) -> bool {
+        self.staging_path(id).exists()
+    }
+
+    /// Get the path for an address (content or staging).
+    pub fn address_path(&self, address: &CasAddress) -> Option<PathBuf> {
+        match address {
+            CasAddress::Content(hash) => self.path(hash),
+            CasAddress::Staging(id) => {
+                let path = self.staging_path(id);
+                if path.exists() {
+                    Some(path)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Remove a staging file (cleanup).
+    pub fn remove_staging(&self, id: &StagingId) -> Result<()> {
+        let path = self.staging_path(id);
+        if path.exists() {
+            fs::remove_file(&path).context("failed to remove staging file")?;
+        }
+        Ok(())
     }
 }
 
@@ -392,6 +531,135 @@ mod tests {
             duration.as_secs() < 5,
             "should write 10MB in under 5 seconds"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_staging_create_and_write() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let store = FileStore::at_path(temp_dir.path())?;
+
+        let mut chunk = store.create_staging()?;
+
+        // Write some data
+        chunk.write(b"Hello, ")?;
+        chunk.write(b"World!")?;
+        chunk.flush()?;
+
+        assert_eq!(chunk.bytes_written(), 13);
+        assert!(chunk.path().exists());
+        assert!(store.staging_exists(chunk.id()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_staging_seal() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let store = FileStore::at_path(temp_dir.path())?;
+
+        let mut chunk = store.create_staging()?;
+        chunk.write(b"Seal me!")?;
+        chunk.flush()?;
+
+        let staging_id = chunk.id().clone();
+        let staging_path = chunk.path().clone();
+
+        // Seal it
+        let result = store.seal(&chunk, "text/plain")?;
+
+        // Staging file should be gone
+        assert!(!staging_path.exists());
+        assert!(!store.staging_exists(&staging_id));
+
+        // Content should exist
+        assert!(store.exists(&result.content_hash));
+        let data = store.retrieve(&result.content_hash)?.expect("should exist");
+        assert_eq!(data, b"Seal me!");
+        assert_eq!(result.size_bytes, 8);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_staging_seal_dedup() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let store = FileStore::at_path(temp_dir.path())?;
+
+        let data = b"Duplicate staging content";
+
+        // Store via normal path first
+        let hash1 = store.store(data, "text/plain")?;
+
+        // Now stage the same content
+        let mut chunk = store.create_staging()?;
+        chunk.write(data)?;
+        chunk.flush()?;
+
+        // Seal should recognize duplicate and clean up staging
+        let result = store.seal(&chunk, "text/plain")?;
+
+        assert_eq!(result.content_hash, hash1);
+        assert!(!chunk.path().exists()); // Staging cleaned up
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_staging_with_id() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let store = FileStore::at_path(temp_dir.path())?;
+
+        // Create ID ahead of time
+        let id = StagingId::new();
+        let expected_path = store.staging_path_for(&id);
+
+        let chunk = store.create_staging_with_id(id.clone())?;
+
+        assert_eq!(chunk.id(), &id);
+        assert_eq!(chunk.path(), &expected_path);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_staging_address_path() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let store = FileStore::at_path(temp_dir.path())?;
+
+        // Create some content
+        let hash = store.store(b"content", "text/plain")?;
+
+        // Create staging
+        let mut chunk = store.create_staging()?;
+        chunk.write(b"staging")?;
+        chunk.flush()?;
+
+        // Check address_path works for both
+        let content_addr = CasAddress::Content(hash.clone());
+        let staging_addr = CasAddress::Staging(chunk.id().clone());
+
+        assert!(store.address_path(&content_addr).is_some());
+        assert!(store.address_path(&staging_addr).is_some());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_staging_remove() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let store = FileStore::at_path(temp_dir.path())?;
+
+        let mut chunk = store.create_staging()?;
+        chunk.write(b"to be removed")?;
+        chunk.flush()?;
+
+        let id = chunk.id().clone();
+        assert!(store.staging_exists(&id));
+
+        store.remove_staging(&id)?;
+        assert!(!store.staging_exists(&id));
 
         Ok(())
     }

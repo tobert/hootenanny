@@ -1,6 +1,7 @@
 @0xab20a00d32798739;
 
 using Common = import "common.capnp";
+using Streams = import "streams.capnp";
 
 # Broadcast messages via PUB/SUB
 struct Broadcast {
@@ -15,6 +16,11 @@ struct Broadcast {
     markerReached @7 :MarkerReached;
     beatTick @8 :BeatTick;
     log @9 :Log;
+
+    # === Stream Capture Events (Chaosgarden → Hootenanny) ===
+    streamHeadPosition @10 :Streams.StreamHeadPosition;
+    streamChunkFull @11 :Streams.StreamChunkFull;
+    streamError @12 :Streams.StreamError;
   }
 }
 
@@ -74,3 +80,5 @@ struct Log {
   message @1 :Text;
   source @2 :Text;
 }
+
+# Note: Stream events added to Broadcast union above (indices 10-12)

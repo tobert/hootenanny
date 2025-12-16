@@ -3,6 +3,7 @@
 using Common = import "common.capnp";
 using Tools = import "tools.capnp";
 using Garden = import "garden.capnp";
+using Streams = import "streams.capnp";
 
 # Message envelope for all ZMQ communication
 struct Envelope {
@@ -52,6 +53,11 @@ struct Payload {
     success @24 :Success;
     error @25 :Common.Error;
     toolList @26 :ToolList;
+
+    # === Stream Capture (Hootenanny → Chaosgarden) ===
+    streamStart @27 :Streams.StreamStart;
+    streamSwitchChunk @28 :Streams.StreamSwitchChunk;
+    streamStop @29 :Streams.StreamStop;
   }
 }
 

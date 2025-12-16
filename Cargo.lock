@@ -557,11 +557,13 @@ dependencies = [
  "blake3",
  "directories",
  "hex",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.17",
  "toml 0.8.23",
+ "uuid",
 ]
 
 [[package]]

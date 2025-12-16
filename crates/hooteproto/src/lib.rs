@@ -73,6 +73,12 @@ pub mod tools_capnp {
 
 #[allow(clippy::all)]
 #[allow(dead_code)]
+pub mod streams_capnp {
+    include!(concat!(env!("OUT_DIR"), "/streams_capnp.rs"));
+}
+
+#[allow(clippy::all)]
+#[allow(dead_code)]
 pub mod envelope_capnp {
     include!(concat!(env!("OUT_DIR"), "/envelope_capnp.rs"));
 }

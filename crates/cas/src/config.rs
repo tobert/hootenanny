@@ -129,6 +129,11 @@ impl CasConfig {
     pub fn metadata_dir(&self) -> PathBuf {
         self.base_path.join("metadata")
     }
+
+    /// Get the staging directory path.
+    pub fn staging_dir(&self) -> PathBuf {
+        self.base_path.join("staging")
+    }
 }
 
 #[cfg(test)]
