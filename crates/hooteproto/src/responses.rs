@@ -1,7 +1,7 @@
 //! Typed response types for tool dispatch.
 //!
 //! These types replace `serde_json::Value` in `Payload::Success` for internal
-//! communication. JSON conversion happens only at the MCP edge.
+//! communication. JSON conversion happens only at gateway edges.
 //!
 //! ## Design Principles
 //!
@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// Unified response type for all tools.
 ///
 /// Each variant corresponds to a tool or tool category.
-/// MCP layer converts this to JSON; internal layers use MsgPack.
+/// Gateway layer converts this to JSON; internal layers use MsgPack.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolResponse {
@@ -479,11 +479,11 @@ pub struct AnnotationAddedResponse {
 }
 
 // =============================================================================
-// Conversion to JSON (for MCP edge)
+// Conversion to JSON (for gateway edge)
 // =============================================================================
 
 impl ToolResponse {
-    /// Convert to JSON for MCP responses.
+    /// Convert to JSON for gateway responses.
     ///
     /// This is the ONLY place JSON conversion should happen for responses.
     pub fn to_json(&self) -> serde_json::Value {

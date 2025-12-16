@@ -3,15 +3,15 @@
 //! This module defines how tools should be dispatched based on their
 //! execution characteristics. The dispatch layer uses this to decide:
 //! - Whether to create a job or return immediately
-//! - What timeout to use for MCP polling
+//! - What timeout to use for gateway polling
 //! - Whether to return job_id to client for long operations
 //!
 //! # Categories
 //!
 //! - **Sync**: Pure compute or in-memory queries. No job created.
-//! - **AsyncShort**: IO-bound, moderate timeouts. MCP polls internally.
-//! - **AsyncMedium**: GPU inference, ~2 minute timeout. MCP polls internally.
-//! - **AsyncLong**: Long-running (10+ minutes). MCP returns job_id.
+//! - **AsyncShort**: IO-bound, moderate timeouts. Gateway polls internally.
+//! - **AsyncMedium**: GPU inference, ~2 minute timeout. Gateway polls internally.
+//! - **AsyncLong**: Long-running (10+ minutes). Gateway returns job_id.
 //! - **FireAndForget**: Control commands. Returns ack, errors go to logs.
 
 use serde::{Deserialize, Serialize};
@@ -26,15 +26,15 @@ pub enum ToolTiming {
     Sync,
 
     /// IO-bound operation (file read/write).
-    /// Job created, MCP polls with ~30s timeout.
+    /// Job created, gateway polls with ~30s timeout.
     AsyncShort,
 
     /// GPU inference or moderate compute.
-    /// Job created, MCP polls with ~120s timeout.
+    /// Job created, gateway polls with ~120s timeout.
     AsyncMedium,
 
     /// Long-running operation (musicgen, yue).
-    /// Job created, MCP returns job_id immediately.
+    /// Job created, gateway returns job_id immediately.
     /// Client manages polling.
     AsyncLong,
 
@@ -45,9 +45,9 @@ pub enum ToolTiming {
 }
 
 impl ToolTiming {
-    /// Get the timeout duration for MCP polling.
+    /// Get the timeout duration for gateway polling.
     /// Returns None for Sync, FireAndForget, and AsyncLong.
-    pub fn mcp_timeout(&self) -> Option<Duration> {
+    pub fn gateway_timeout(&self) -> Option<Duration> {
         match self {
             ToolTiming::Sync => None,
             ToolTiming::AsyncShort => Some(Duration::from_secs(30)),
@@ -57,8 +57,8 @@ impl ToolTiming {
         }
     }
 
-    /// Should MCP return job_id instead of polling?
-    pub fn mcp_returns_job_id(&self) -> bool {
+    /// Should gateway return job_id instead of polling?
+    pub fn returns_job_id_immediately(&self) -> bool {
         matches!(self, ToolTiming::AsyncLong)
     }
 
@@ -129,15 +129,15 @@ mod tests {
 
     #[test]
     fn sync_tools_have_no_timeout() {
-        assert_eq!(tool_timing("abc_parse").mcp_timeout(), None);
-        assert_eq!(tool_timing("garden_status").mcp_timeout(), None);
+        assert_eq!(tool_timing("abc_parse").gateway_timeout(), None);
+        assert_eq!(tool_timing("garden_status").gateway_timeout(), None);
         assert!(!tool_timing("abc_parse").creates_job());
     }
 
     #[test]
     fn async_short_has_30s_timeout() {
         assert_eq!(
-            tool_timing("cas_store").mcp_timeout(),
+            tool_timing("cas_store").gateway_timeout(),
             Some(Duration::from_secs(30))
         );
         assert!(tool_timing("cas_store").creates_job());
@@ -146,7 +146,7 @@ mod tests {
     #[test]
     fn async_medium_has_120s_timeout() {
         assert_eq!(
-            tool_timing("orpheus_generate").mcp_timeout(),
+            tool_timing("orpheus_generate").gateway_timeout(),
             Some(Duration::from_secs(120))
         );
         assert!(tool_timing("orpheus_generate").creates_job());
@@ -154,15 +154,15 @@ mod tests {
 
     #[test]
     fn async_long_returns_job_id() {
-        assert!(tool_timing("musicgen_generate").mcp_returns_job_id());
-        assert!(tool_timing("yue_generate").mcp_returns_job_id());
+        assert!(tool_timing("musicgen_generate").returns_job_id_immediately());
+        assert!(tool_timing("yue_generate").returns_job_id_immediately());
         assert!(tool_timing("musicgen_generate").creates_job());
     }
 
     #[test]
     fn fire_and_forget_no_job() {
         assert!(!tool_timing("garden_play").creates_job());
-        assert_eq!(tool_timing("garden_play").mcp_timeout(), None);
+        assert_eq!(tool_timing("garden_play").gateway_timeout(), None);
     }
 
     #[test]

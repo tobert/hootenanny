@@ -1,6 +1,6 @@
 //! Tool parameter types with JSON Schema derivation
 //!
-//! These types are used by holler to generate accurate MCP tool schemas.
+//! These types are used by holler to generate accurate tool schemas.
 //! They mirror the Payload variants but as separate structs that can derive JsonSchema.
 
 use schemars::JsonSchema;

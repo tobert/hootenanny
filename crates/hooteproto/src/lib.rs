@@ -3,6 +3,21 @@
 //! This crate defines the message types exchanged between Hootenanny services
 //! over ZMQ. All messages are wrapped in an Envelope for tracing and routing.
 //!
+//! ## MCP Alignment
+//!
+//! hooteproto is **aligned to MCP** but specialized for our internal workflows:
+//! - Tool naming follows MCP conventions (snake_case, domain prefixes)
+//! - Request/response patterns match MCP tool call semantics
+//! - Resources and completions follow MCP patterns
+//!
+//! However, hooteproto is **loosely coupled** to MCP:
+//! - Internal transport uses MsgPack over ZMQ (not JSON-RPC)
+//! - Typed dispatch avoids JSON in the core path
+//! - Timing semantics (sync/async/fire-and-forget) are richer than MCP
+//!
+//! The `holler` crate **exposes hooteproto over MCP** - it's the bridge between
+//! the MCP world (Claude, other LLM tools) and the Hootenanny internal protocol.
+//!
 //! ## HOOT01 Frame Protocol
 //!
 //! The `frame` module implements the HOOT01 wire protocol - a hybrid frame-based
@@ -42,7 +57,6 @@ pub use responses::ToolResponse;
 pub use timing::ToolTiming;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use uuid::Uuid;
 
 // ============================================================================
@@ -294,7 +308,7 @@ impl Envelope {
 /// - **Music Processing**: ABC, MIDI conversion, soundfonts
 /// - **Analysis**: Audio analysis (BeatThis, CLAP)
 /// - **Playback**: Chaosgarden timeline and transport
-/// - **MCP Compatibility**: Resources, prompts, completions
+/// - **Gateway**: Resources, completions
 /// - **Lua**: Script execution and storage
 ///
 /// Many variants include artifact tracking fields. See `ArtifactMetadata`.
@@ -352,20 +366,13 @@ pub enum Payload {
         status: Option<String>,
     },
 
-    // === MCP Resources ===
+    // === Resources ===
     ReadResource {
         uri: String,
     },
     ListResources,
 
-    // === MCP Prompts ===
-    GetPrompt {
-        name: String,
-        arguments: HashMap<String, String>,
-    },
-    ListPrompts,
-
-    // === MCP Completions ===
+    // === Completions ===
     Complete {
         context: String,
         partial: String,
@@ -751,7 +758,7 @@ pub enum TimelineEventType {
     GenerateTransition,
 }
 
-/// MCP tool information for discovery
+/// Tool information for discovery and schema generation
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolInfo {
     pub name: String,

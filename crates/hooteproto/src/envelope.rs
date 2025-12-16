@@ -60,7 +60,7 @@ impl ResponseEnvelope {
         }
     }
 
-    /// Convert to JSON for MCP edge
+    /// Convert to JSON for gateway edge
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap_or_else(|e| {
             serde_json::json!({

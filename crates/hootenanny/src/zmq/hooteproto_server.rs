@@ -714,8 +714,6 @@ fn payload_type_name(payload: &Payload) -> &'static str {
         Payload::JobSleep { .. } => "job_sleep",
         Payload::ReadResource { .. } => "read_resource",
         Payload::ListResources => "list_resources",
-        Payload::GetPrompt { .. } => "get_prompt",
-        Payload::ListPrompts => "list_prompts",
         Payload::Complete { .. } => "complete",
         Payload::TimelineEvent { .. } => "timeline_event",
         Payload::CasStore { .. } => "cas_store",

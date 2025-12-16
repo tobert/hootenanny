@@ -1,14 +1,14 @@
 //! Tool name to Payload conversion
 //!
-//! Converts MCP-style tool calls (name + JSON arguments) to strongly-typed Payload variants.
-//! Used by both holler (MCP gateway) and luanette (Lua scripting).
+//! Converts tool calls (name + JSON arguments) to strongly-typed Payload variants.
+//! Used by both holler (gateway) and luanette (Lua scripting).
 
 use crate::{GraphHint, Payload, PollMode};
 use serde_json::Value;
 
 /// Convert a tool name and JSON arguments to a Payload variant.
 ///
-/// This is the canonical mapping from MCP tool calls to hooteproto messages.
+/// This is the canonical mapping from tool calls to hooteproto messages.
 pub fn tool_to_payload(name: &str, args: &Value) -> anyhow::Result<Payload> {
     match name {
         // === Lua Tools (Luanette) ===
