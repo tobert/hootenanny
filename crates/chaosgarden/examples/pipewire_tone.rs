@@ -3,6 +3,7 @@
 //! Run with: cargo run -p chaosgarden --features pipewire --example pipewire_tone
 
 use std::f32::consts::PI;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 fn main() -> anyhow::Result<()> {
@@ -112,8 +113,21 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
+        let stats = stream.stats();
+        let callbacks = stats.callbacks.load(Ordering::Relaxed);
+        let samples = stats.samples_written.load(Ordering::Relaxed);
+        let underruns = stats.underruns.load(Ordering::Relaxed);
+        let elapsed = start.elapsed().as_secs_f64();
+
         println!("Done! Stopping stream...");
-        // Stream stops when dropped
+        println!();
+        println!("Stats:");
+        println!("  Callbacks:       {}", callbacks);
+        println!("  Samples written: {}", samples);
+        println!("  Underruns:       {}", underruns);
+        println!("  Duration:        {:.2}s", elapsed);
+        println!("  Callbacks/sec:   {:.1}", callbacks as f64 / elapsed);
+        println!("  Samples/sec:     {:.0}", samples as f64 / elapsed);
     }
 
     Ok(())
