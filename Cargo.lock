@@ -623,6 +623,7 @@ dependencies = [
  "hound",
  "midly",
  "petgraph",
+ "pipewire",
  "rmp-serde",
  "rustysynth",
  "serde",

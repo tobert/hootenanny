@@ -85,8 +85,7 @@ pub struct ExternalIOManager {
     sample_rate: u32,
     buffer_size: usize,
     #[cfg(feature = "pipewire")]
-    #[allow(dead_code)]
-    pw_initialized: bool,
+    active_output_streams: HashMap<Uuid, crate::pipewire_output::PipeWireOutputStream>,
 }
 
 impl ExternalIOManager {
@@ -102,11 +101,14 @@ impl ExternalIOManager {
             sample_rate,
             buffer_size,
             #[cfg(feature = "pipewire")]
-            pw_initialized: false,
+            active_output_streams: HashMap::new(),
         })
     }
 
     /// Create an audio output stream
+    ///
+    /// With `pipewire` feature enabled, this creates an actual PipeWire stream
+    /// that will output audio to the system's default sink.
     pub fn create_output(&mut self, name: &str, channels: u8) -> Result<Uuid, ExternalIOError> {
         let id = Uuid::new_v4();
         let output = PipeWireOutput {
@@ -118,8 +120,19 @@ impl ExternalIOManager {
 
         #[cfg(feature = "pipewire")]
         {
-            // PipeWire stream creation would go here
-            // For now, just register the output
+            use crate::pipewire_output::{PipeWireOutputConfig, PipeWireOutputStream};
+
+            let config = PipeWireOutputConfig {
+                name: name.to_string(),
+                sample_rate: self.sample_rate,
+                channels: channels as u32,
+                latency_frames: self.buffer_size as u32,
+            };
+
+            let stream = PipeWireOutputStream::new(config)
+                .map_err(|e| ExternalIOError::StreamError(e.to_string()))?;
+
+            self.active_output_streams.insert(id, stream);
         }
 
         self.outputs.insert(id, output);
@@ -227,6 +240,10 @@ impl ExternalIOManager {
     }
 
     /// Create an ExternalOutputNode for use in the graph
+    ///
+    /// With `pipewire` feature enabled, the returned node shares its ring buffer
+    /// with the active PipeWire stream, so audio written to the node will be
+    /// output through PipeWire.
     pub fn create_output_node(
         &self,
         output_id: Uuid,
@@ -236,6 +253,23 @@ impl ExternalIOManager {
             .get(&output_id)
             .ok_or(ExternalIOError::DeviceNotFound(output_id))?;
 
+        #[cfg(feature = "pipewire")]
+        {
+            // If we have an active stream, create a node that shares its ring buffer
+            if let Some(stream) = self.active_output_streams.get(&output_id) {
+                let mut node = ExternalOutputNode::new(
+                    output.name.clone(),
+                    output.channels,
+                    self.buffer_size,
+                );
+                // Replace the node's ring buffer with the stream's shared one
+                node.set_ring_buffer(stream.ring_buffer());
+                node.set_active(true);
+                return Ok(node);
+            }
+        }
+
+        // Fallback: create a standalone node (won't actually output audio)
         Ok(ExternalOutputNode::new(
             output.name.clone(),
             output.channels,
@@ -389,6 +423,11 @@ impl ExternalOutputNode {
     /// Get access to the ring buffer for PipeWire callback
     pub fn ring_buffer(&self) -> Arc<Mutex<RingBuffer>> {
         Arc::clone(&self.ring_buffer)
+    }
+
+    /// Replace the ring buffer with a shared one (used by PipeWire integration)
+    pub fn set_ring_buffer(&mut self, ring_buffer: Arc<Mutex<RingBuffer>>) {
+        self.ring_buffer = ring_buffer;
     }
 
     /// Mark the node as active (connected to PipeWire)
