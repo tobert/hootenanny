@@ -38,6 +38,16 @@ luanette scripts/orpheus_loop.lua
 
 ## Luanette API Reference
 
+**Existing workflow helpers** (in `stdlib/workflow.rs`):
+- `workflow.wait_job(job_id, timeout_ms)` — poll until complete
+- `workflow.orpheus_generate(params)` — generate + wait
+- `workflow.orpheus_to_wav(params)` — generate + render in one call
+- `workflow.abc_to_wav(params)` — ABC → MIDI → WAV
+
+**May need to add for this script:**
+- `workflow.midi_to_wav(params)` — render existing MIDI (or use raw `hootenanny.convert_midi_to_wav`)
+- `workflow.sleep(ms)` — simple delay (or use `hootenanny.job_sleep`)
+
 Check `crates/luanette/src/stdlib/` for available modules:
 
 ```lua

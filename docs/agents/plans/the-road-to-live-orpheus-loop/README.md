@@ -116,6 +116,16 @@ When complete, report:
 - **Simple summing for mixing** — no per-track gain/pan for v1
 - **Configurable sample rate** — default 48kHz, all content must match session rate for v1
 
+## Prerequisites / Dependencies
+
+- Soundfont uploaded to artifacts (tag: `type:soundfont`)
+- Chaosgarden daemon running with PipeWire
+- Hootenanny MCP server running
+
+**Luanette helpers that may need adding:**
+- `workflow.midi_to_wav` — or use `hootenanny.convert_midi_to_wav` + `workflow.wait_job`
+- `workflow.sleep` — or use `hootenanny.job_sleep`
+
 ## Open Questions
 
 - [ ] Loop point handling: explicit loop regions or auto-loop timeline?
