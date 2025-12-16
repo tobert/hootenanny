@@ -24,9 +24,9 @@ pub struct DispatchError {
 impl From<ToolError> for DispatchError {
     fn from(e: ToolError) -> Self {
         Self {
-            code: e.code,
-            message: e.message,
-            details: e.details,
+            code: e.code().to_string(),
+            message: e.message(),
+            details: None,
         }
     }
 }

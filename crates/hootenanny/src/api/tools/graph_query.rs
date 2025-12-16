@@ -20,12 +20,12 @@ impl EventDualityServer {
         request: GraphQueryRequest,
     ) -> ToolResult {
         let variables = json_to_variables(&request.variables)
-            .map_err(|e| ToolError::invalid_params(format!("Invalid variables: {}", e)))?;
+            .map_err(|e| ToolError::validation("invalid_params", format!("Invalid variables: {}", e)))?;
 
         let schema = self.graph_adapter.schema();
         let adapter_arc: Arc<_> = Arc::clone(&self.graph_adapter);
         let results_iter = execute_query(schema, adapter_arc, &request.query, variables)
-            .map_err(|e| ToolError::invalid_params(format!("Query execution failed: {}", e)))?;
+            .map_err(|e| ToolError::validation("invalid_params", format!("Query execution failed: {}", e)))?;
 
         let limit = request.limit.unwrap_or(100);
         let results: Vec<_> = results_iter

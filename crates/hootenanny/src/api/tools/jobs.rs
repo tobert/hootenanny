@@ -20,7 +20,7 @@ impl EventDualityServer {
         let job_id = JobId::from(request.job_id);
 
         let job_info = self.job_store.get_job(&job_id)
-            .map_err(|e| ToolError::invalid_params(e.to_string()))?;
+            .map_err(|e| ToolError::not_found("job", e.to_string()))?;
 
         tracing::Span::current().record("job.status", format!("{:?}", job_info.status));
 
@@ -138,7 +138,8 @@ impl EventDualityServer {
         let mode = request.mode.as_deref().unwrap_or("any");
 
         if mode != "any" && mode != "all" {
-            return Err(ToolError::invalid_params(
+            return Err(ToolError::validation(
+                "invalid_params",
                 format!("mode must be 'any' or 'all', got '{}'", mode)
             ));
         }

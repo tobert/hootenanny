@@ -134,10 +134,10 @@ impl EventDualityServer {
                     "session_expiration": config.bootstrap.defaults.session_expiration,
                     "max_concurrent_jobs": config.bootstrap.defaults.max_concurrent_jobs,
                 }),
-                _ => return Err(ToolError::invalid_params(format!(
-                    "Unknown section: {}. Valid: paths, bind, telemetry, models, connections, media, defaults",
-                    section
-                ))),
+                _ => return Err(ToolError::validation(
+                    "invalid_params",
+                    format!("Unknown section: {}. Valid: paths, bind, telemetry, models, connections, media, defaults", section)
+                )),
             },
 
             // Section + key
@@ -170,10 +170,10 @@ impl EventDualityServer {
                             .map(|url| serde_json::json!(url))
                             .unwrap_or(Value::Null)
                     }
-                    _ => return Err(ToolError::invalid_params(format!(
-                        "Unknown key '{}' in section '{}'",
-                        key, section
-                    ))),
+                    _ => return Err(ToolError::validation(
+                        "invalid_params",
+                        format!("Unknown key '{}' in section '{}'", key, section)
+                    )),
                 };
 
                 serde_json::json!({
@@ -185,7 +185,8 @@ impl EventDualityServer {
 
             // Key without section doesn't make sense
             (None, Some(_)) => {
-                return Err(ToolError::invalid_params(
+                return Err(ToolError::validation(
+                    "invalid_params",
                     "Cannot specify key without section"
                 ));
             }

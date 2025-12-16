@@ -31,7 +31,7 @@ impl EventDualityServer {
         request: CasStoreRequest,
     ) -> ToolResult {
         let decoded_content = general_purpose::STANDARD.decode(&request.content_base64)
-            .map_err(|e| ToolError::invalid_params(format!("Failed to base64 decode content: {}", e)))?;
+            .map_err(|e| ToolError::validation("invalid_params", format!("Failed to base64 decode content: {}", e)))?;
 
         let hash = self.local_models.store_cas_content(&decoded_content, &request.mime_type)
             .await

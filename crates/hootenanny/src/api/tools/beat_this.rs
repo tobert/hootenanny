@@ -65,13 +65,15 @@ impl EventDualityServer {
                     .map_err(|e| ToolError::internal(format!("Failed to read CAS audio: {}", e)))?
             }
             (Some(_), Some(_)) => {
-                return Err(ToolError::invalid_params(
-                    "Provide either audio_path or audio_hash, not both",
+                return Err(ToolError::validation(
+                    "invalid_params",
+                    "Provide either audio_path or audio_hash, not both"
                 ));
             }
             (None, None) => {
-                return Err(ToolError::invalid_params(
-                    "Either audio_path or audio_hash is required",
+                return Err(ToolError::validation(
+                    "invalid_params",
+                    "Either audio_path or audio_hash is required"
                 ));
             }
         };
@@ -110,10 +112,10 @@ impl EventDualityServer {
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
             return Err(match status.as_u16() {
-                422 => ToolError::invalid_params(format!(
-                    "Invalid audio format: {}. Required: 22050 Hz mono WAV, ≤30s",
-                    error_text
-                )),
+                422 => ToolError::validation(
+                    "invalid_params",
+                    format!("Invalid audio format: {}. Required: 22050 Hz mono WAV, ≤30s", error_text)
+                ),
                 429 => ToolError::internal(
                     "beat-this service busy (already processing another request)",
                 ),
@@ -239,7 +241,7 @@ impl EventDualityServer {
 fn prepare_audio_for_beatthis(data: &[u8]) -> Result<Vec<u8>, ToolError> {
     let cursor = Cursor::new(data);
     let reader = hound::WavReader::new(cursor)
-        .map_err(|e| ToolError::invalid_params(format!("Invalid WAV file: {}", e)))?;
+        .map_err(|e| ToolError::validation("invalid_params", format!("Invalid WAV file: {}", e)))?;
 
     let spec = reader.spec();
     let source_rate = spec.sample_rate;

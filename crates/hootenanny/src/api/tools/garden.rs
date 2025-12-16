@@ -89,7 +89,8 @@ pub struct GardenGetRegionsRequest {
 impl EventDualityServer {
     fn require_garden(&self) -> Result<(), ToolError> {
         if self.garden_manager.is_none() {
-            return Err(ToolError::invalid_params(
+            return Err(ToolError::validation(
+                "not_connected",
                 "Not connected to chaosgarden. Start hootenanny with --chaosgarden=local or --chaosgarden=tcp://host:port"
             ));
         }
@@ -236,7 +237,7 @@ impl EventDualityServer {
         let manager = self.garden_manager.as_ref().unwrap();
 
         if request.bpm <= 0.0 || request.bpm > 999.0 {
-            return Err(ToolError::invalid_params("BPM must be between 0 and 999"));
+            return Err(ToolError::validation("invalid_params", "BPM must be between 0 and 999"));
         }
 
         match manager.set_tempo(request.bpm).await {
@@ -264,7 +265,7 @@ impl EventDualityServer {
         let variables: std::collections::HashMap<String, serde_json::Value> = match request.variables {
             serde_json::Value::Object(map) => map.into_iter().collect(),
             serde_json::Value::Null => std::collections::HashMap::new(),
-            _ => return Err(ToolError::invalid_params("variables must be a JSON object")),
+            _ => return Err(ToolError::validation("invalid_params", "variables must be a JSON object")),
         };
 
         match manager.query(&request.query, variables).await {
@@ -320,7 +321,7 @@ impl EventDualityServer {
         let behavior = match request.behavior_type.as_str() {
             "play_content" => Behavior::PlayContent { artifact_id: request.content_id },
             "latent" => Behavior::Latent { job_id: request.content_id },
-            other => return Err(ToolError::invalid_params(format!("Unknown behavior_type: {}. Use 'play_content' or 'latent'", other))),
+            other => return Err(ToolError::validation("invalid_params", format!("Unknown behavior_type: {}. Use 'play_content' or 'latent'", other))),
         };
 
         let shell_req = ShellRequest::CreateRegion {
@@ -358,7 +359,7 @@ impl EventDualityServer {
         use uuid::Uuid;
 
         let region_id = Uuid::parse_str(&request.region_id)
-            .map_err(|e| ToolError::invalid_params(format!("Invalid region_id: {}", e)))?;
+            .map_err(|e| ToolError::validation("invalid_params", format!("Invalid region_id: {}", e)))?;
 
         match manager.request(ShellRequest::DeleteRegion { region_id }).await {
             Ok(chaosgarden::ipc::ShellReply::Ok { .. }) => {
@@ -388,7 +389,7 @@ impl EventDualityServer {
         use uuid::Uuid;
 
         let region_id = Uuid::parse_str(&request.region_id)
-            .map_err(|e| ToolError::invalid_params(format!("Invalid region_id: {}", e)))?;
+            .map_err(|e| ToolError::validation("invalid_params", format!("Invalid region_id: {}", e)))?;
 
         match manager.request(ShellRequest::MoveRegion {
             region_id,

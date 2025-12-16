@@ -44,7 +44,8 @@ impl EventDualityServer {
 
         if parse_result.has_errors() {
             let errors: Vec<_> = parse_result.errors().collect();
-            return Err(ToolError::invalid_params(
+            return Err(ToolError::validation(
+                "invalid_params",
                 format!("ABC parse errors: {:?}", errors)
             ));
         }
@@ -182,7 +183,8 @@ impl EventDualityServer {
 
         if parse_result.has_errors() {
             let errors: Vec<_> = parse_result.errors().collect();
-            return Err(ToolError::invalid_params(
+            return Err(ToolError::validation(
+                "invalid_params",
                 format!("ABC parse errors: {:?}", errors)
             ));
         }
@@ -191,9 +193,10 @@ impl EventDualityServer {
             s
         } else if let Some(target) = &request.target_key {
             abc::semitones_to_key(&parse_result.value.header.key, target)
-                .map_err(ToolError::invalid_params)?
+                .map_err(|e| ToolError::validation("invalid_params", e))?
         } else {
-            return Err(ToolError::invalid_params(
+            return Err(ToolError::validation(
+                "invalid_params",
                 "Must specify either semitones or target_key"
             ));
         };

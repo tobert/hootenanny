@@ -160,10 +160,7 @@ impl EventDualityServer {
             .is_some();
 
         if !artifact_exists {
-            return Err(ToolError::invalid_params(format!(
-                "Artifact not found: {}",
-                request.artifact_id
-            )));
+            return Err(ToolError::not_found("artifact", &request.artifact_id));
         }
 
         let source = request.source.unwrap_or_else(|| "agent".to_string());

@@ -19,14 +19,16 @@ impl EventDualityServer {
     fn validate_sampling_params(temperature: Option<f32>, top_p: Option<f32>) -> Result<(), ToolError> {
         if let Some(temp) = temperature {
             if !(0.0..=2.0).contains(&temp) {
-                return Err(ToolError::invalid_params(
+                return Err(ToolError::validation(
+                    "invalid_params",
                     format!("temperature must be 0.0-2.0, got {}", temp)
                 ));
             }
         }
         if let Some(p) = top_p {
             if !(0.0..=1.0).contains(&p) {
-                return Err(ToolError::invalid_params(
+                return Err(ToolError::validation(
+                    "invalid_params",
                     format!("top_p must be 0.0-1.0, got {}", p)
                 ));
             }
