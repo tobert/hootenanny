@@ -19,8 +19,9 @@ Write a Luanette script that orchestrates the full workflow:
 **Why last?** This is the integration test. All prior tasks must work for this to succeed.
 
 **Deliverables:**
-1. Working Lua script demonstrating the workflow
-2. Documentation of the pattern for future use
+1. Implementation of `workflow.midi_to_wav` and `workflow.sleep`
+2. Working Lua script demonstrating the workflow
+3. Documentation of the pattern for future use
 
 **Definition of Done:**
 ```bash
@@ -44,14 +45,14 @@ luanette scripts/orpheus_loop.lua
 - `workflow.orpheus_to_wav(params)` — generate + render in one call
 - `workflow.abc_to_wav(params)` — ABC → MIDI → WAV
 
-**May need to add for this script:**
-- `workflow.midi_to_wav(params)` — render existing MIDI (or use raw `hootenanny.convert_midi_to_wav`)
-- `workflow.sleep(ms)` — simple delay (or use `hootenanny.job_sleep`)
+**Helpers to implement in `crates/luanette/src/stdlib/workflow.rs`:**
+- `workflow.midi_to_wav(params)` — render existing MIDI (wraps `hootenanny.convert_midi_to_wav`)
+- `workflow.sleep(ms)` — simple delay (wraps `hootenanny.job_sleep`)
 
 Check `crates/luanette/src/stdlib/` for available modules:
 
 ```lua
--- Namespaces: hootenanny.* (MCP tools), chaosgarden.* (garden_* tools), workflow.* (helpers)
+-- Namespaces: hootenanny.* (tools via ZMQ), chaosgarden.* (garden tools), workflow.* (helpers)
 
 -- CAS / Artifacts (via hootenanny namespace)
 local hash = hootenanny.cas_store({ content = content })

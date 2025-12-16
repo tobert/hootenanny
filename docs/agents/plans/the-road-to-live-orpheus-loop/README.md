@@ -71,7 +71,7 @@ When complete, report:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        MCP Tools                             │
+│                   Tools (via holler MCP)                     │
 │  orpheus_generate → convert_midi_to_wav → garden_create_region │
 └─────────────────────────────────────────────────────────────┘
                               │
@@ -108,7 +108,7 @@ When complete, report:
 | `chaosgarden/src/playback.rs` | PlaybackEngine, render logic |
 | `chaosgarden/src/daemon.rs` | GardenDaemon, ZMQ handling |
 | `chaosgarden/src/nodes.rs` | AudioFileNode, decode_wav |
-| `hootenanny/src/api/tools/garden.rs` | MCP garden_* tools |
+| `hootenanny/src/api/tools/garden.rs` | garden_* tool implementations |
 
 ## Design Decisions (see DETAIL.md)
 
@@ -122,9 +122,9 @@ When complete, report:
 - Chaosgarden daemon running with PipeWire
 - Hootenanny MCP server running
 
-**Luanette helpers that may need adding:**
-- `workflow.midi_to_wav` — or use `hootenanny.convert_midi_to_wav` + `workflow.wait_job`
-- `workflow.sleep` — or use `hootenanny.job_sleep`
+**Luanette helpers to implement (Task 04):**
+- `workflow.midi_to_wav` — wraps `hootenanny.convert_midi_to_wav` + polling
+- `workflow.sleep` — wraps `hootenanny.job_sleep` + polling
 
 ## Open Questions
 
