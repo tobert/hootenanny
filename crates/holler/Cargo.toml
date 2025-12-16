@@ -17,6 +17,7 @@ path = "src/main.rs"
 baton = { path = "../baton" }
 hooteconf = { path = "../hooteconf" }
 hooteproto = { path = "../hooteproto" }
+capnp = "0.20"
 anyhow = "1.0"
 async-trait = "0.1"
 base64 = "0.22"

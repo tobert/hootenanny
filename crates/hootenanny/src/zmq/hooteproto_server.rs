@@ -18,7 +18,10 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use cas::ContentStore;
-use hooteproto::{Command, ContentType, Envelope, HootFrame, Payload, ReadyPayload, ToolInfo, PROTOCOL_VERSION};
+use hooteproto::{
+    capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope, Command, ContentType,
+    Envelope, HootFrame, Payload, ReadyPayload, ToolInfo, PROTOCOL_VERSION,
+};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tracing::{debug, error, info, warn, Instrument};
@@ -139,13 +142,14 @@ impl HooteprotoServer {
         // Convert ZmqMessage frames to Bytes for parsing
         let frames: Vec<Bytes> = msg.iter().map(|f| Bytes::copy_from_slice(f)).collect();
 
-        // Try HOOT01 frame protocol first (scan for protocol marker)
+        // Only accept HOOT01 frame protocol (scan for protocol marker)
         if frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
             return self.handle_hoot_frame(socket, &frames).await;
         }
 
-        // Fall back to legacy MsgPack envelope
-        self.handle_legacy_envelope(socket, &frames).await
+        // Reject non-HOOT01 frames
+        warn!("Received non-HOOT01 message, rejecting");
+        Err(anyhow::anyhow!("Only HOOT01 protocol is supported"))
     }
 
     /// Handle HOOT01 frame protocol message
@@ -190,47 +194,75 @@ impl HooteprotoServer {
 
                 // Dispatch based on content type
                 let response = match frame.content_type {
-                    ContentType::MsgPack => {
-                        // Deserialize payload and dispatch
-                        match frame.payload::<Payload>() {
+                    ContentType::CapnProto => {
+                        // First, parse the entire capnp message to Payload
+                        // (must complete before await to avoid holding reader across await point)
+                        let payload_result: Result<Payload, capnp::Error> = match frame.read_capnp() {
+                            Ok(reader) => {
+                                match reader.get_root::<envelope_capnp::envelope::Reader>() {
+                                    Ok(envelope_reader) => capnp_envelope_to_payload(envelope_reader),
+                                    Err(e) => Err(e),
+                                }
+                            }
+                            Err(e) => Err(capnp::Error::failed(format!("Failed to read capnp: {}", e))),
+                        };
+
+                        // Reader is dropped here, now we can safely await
+                        match payload_result {
                             Ok(payload) => {
+                                // Dispatch the request
                                 let result = self.dispatch(payload).instrument(span).await;
-                                HootFrame::reply(frame.request_id, &result)
-                                    .unwrap_or_else(|e| {
+
+                                                // Convert response back to capnp
+                                match payload_to_capnp_envelope(frame.request_id, &result) {
+                                    Ok(response_msg) => {
+                                        // Serialize to bytes
+                                        let bytes = capnp::serialize::write_message_to_words(&response_msg);
+                                        HootFrame {
+                                            command: Command::Reply,
+                                            content_type: ContentType::CapnProto,
+                                            request_id: frame.request_id,
+                                            service: "hootenanny".to_string(),
+                                            traceparent: None,
+                                            body: bytes.into(),
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to convert response to capnp: {}", e);
                                         let error_payload = Payload::Error {
-                                            code: "serialize_error".to_string(),
+                                            code: "capnp_serialize_error".to_string(),
                                             message: e.to_string(),
                                             details: None,
                                         };
-                                        HootFrame::reply(frame.request_id, &error_payload).unwrap()
-                                    })
+                                        let error_msg = payload_to_capnp_envelope(frame.request_id, &error_payload)
+                                            .expect("Failed to serialize error");
+                                        HootFrame::reply_capnp(frame.request_id, &error_msg)
+                                    }
+                                }
                             }
                             Err(e) => {
+                                error!("Failed to parse capnp envelope: {}", e);
                                 let error_payload = Payload::Error {
-                                    code: "parse_error".to_string(),
+                                    code: "capnp_parse_error".to_string(),
                                     message: e.to_string(),
                                     details: None,
                                 };
-                                HootFrame::reply(frame.request_id, &error_payload)?
+                                let error_msg = payload_to_capnp_envelope(frame.request_id, &error_payload)
+                                    .expect("Failed to serialize error");
+                                HootFrame::reply_capnp(frame.request_id, &error_msg)
                             }
                         }
                     }
-                    ContentType::RawBinary => {
-                        // For now, we don't support raw binary requests
+                    ContentType::RawBinary | ContentType::Empty | ContentType::Json => {
+                        // Not supported - return error
                         let error_payload = Payload::Error {
-                            code: "unsupported".to_string(),
-                            message: "Raw binary requests not yet implemented".to_string(),
+                            code: "unsupported_content_type".to_string(),
+                            message: format!("Content type {:?} not supported. Use CapnProto.", frame.content_type),
                             details: None,
                         };
-                        HootFrame::reply(frame.request_id, &error_payload)?
-                    }
-                    ContentType::Empty | ContentType::Json => {
-                        let error_payload = Payload::Error {
-                            code: "invalid_content_type".to_string(),
-                            message: format!("Unexpected content type: {:?}", frame.content_type),
-                            details: None,
-                        };
-                        HootFrame::reply(frame.request_id, &error_payload)?
+                        let error_msg = payload_to_capnp_envelope(frame.request_id, &error_payload)
+                            .expect("Failed to serialize error");
+                        HootFrame::reply_capnp(frame.request_id, &error_msg)
                     }
                 };
 
@@ -248,14 +280,7 @@ impl HooteprotoServer {
                         .await;
                 }
 
-                if let Ok(caps) = frame.payload::<ReadyPayload>() {
-                    info!(
-                        "Client registered: service={} tools={:?} binary={}",
-                        service, caps.tools, caps.accepts_binary
-                    );
-                } else {
-                    info!("Client registered: service={}", service);
-                }
+                info!("Client registered: service={}", service);
             }
 
             Command::Disconnect => {
@@ -275,46 +300,6 @@ impl HooteprotoServer {
         Ok(())
     }
 
-    /// Handle legacy MsgPack envelope format
-    async fn handle_legacy_envelope(&self, socket: &mut RouterSocket, frames: &[Bytes]) -> Result<()> {
-        let identity = frames.first().context("Missing identity frame")?.clone();
-        let payload_bytes = frames.get(1).context("Missing payload frame")?;
-
-        debug!("Legacy envelope: {} bytes", payload_bytes.len());
-
-        let envelope: Envelope = rmp_serde::from_slice(payload_bytes)
-            .with_context(|| "Failed to parse MsgPack envelope")?;
-
-        // Create a span with the incoming traceparent as the parent
-        let span = tracing::info_span!(
-            "zmq_request",
-            otel.name = payload_type_name(&envelope.payload),
-            message_id = %envelope.id,
-        );
-
-        // If we have a traceparent, set it as the parent context
-        if let Some(parent_ctx) = telemetry::parse_traceparent(envelope.traceparent.as_deref()) {
-            span.set_parent(parent_ctx);
-        }
-
-        // Execute dispatch within the span
-        let response_payload = self.dispatch(envelope.payload).instrument(span).await;
-
-        let response = Envelope {
-            id: envelope.id,
-            traceparent: envelope.traceparent,
-            payload: response_payload,
-        };
-
-        let response_bytes = rmp_serde::to_vec(&response)?;
-        debug!("Sending {} bytes", response_bytes.len());
-
-        let mut reply = ZmqMessage::from(identity.to_vec());
-        reply.push_back(response_bytes.into());
-        socket.send(reply).await?;
-
-        Ok(())
-    }
 
     async fn dispatch(&self, payload: Payload) -> Payload {
         // Handle administrative messages first

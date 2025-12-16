@@ -13,7 +13,7 @@
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use hooteproto::{garden, Command, Envelope, HootFrame, Payload, ReadyPayload, PROTOCOL_VERSION};
+use hooteproto::{garden, Command, HootFrame, Payload, PROTOCOL_VERSION};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -192,14 +192,14 @@ impl Backend {
         match Self::create_and_connect(&self.config, self.reconnect_config.connect_timeout).await {
             Ok(mut new_socket) => {
                 // Send Ready command to re-register with broker
-                let ready = HootFrame::ready(
-                    &self.config.name,
-                    &ReadyPayload {
-                        protocol: "HOOT01".to_string(),
-                        tools: vec![], // Client doesn't advertise tools
-                        accepts_binary: true,
-                    },
-                )?;
+                let ready = HootFrame {
+                    command: Command::Ready,
+                    content_type: hooteproto::ContentType::Empty,
+                    request_id: Uuid::new_v4(),
+                    service: self.config.name.clone(),
+                    traceparent: None,
+                    body: Bytes::new(),
+                };
                 let msg = frames_to_zmq_message(&ready.to_frames());
 
                 if let Err(e) = new_socket.send(msg).await {
@@ -329,15 +329,33 @@ impl Backend {
         payload: Payload,
         traceparent: Option<String>,
     ) -> Result<Payload> {
-        let mut envelope = Envelope::new(payload);
-        if let Some(tp) = traceparent {
-            envelope = envelope.with_traceparent(tp);
-        }
+        use hooteproto::{payload_to_capnp_envelope, capnp_envelope_to_payload, ContentType};
 
-        // Serialize to MsgPack
-        let bytes = rmp_serde::to_vec(&envelope)?;
+        // Generate request ID
+        let request_id = Uuid::new_v4();
 
-        debug!("Sending to {} ({} bytes)", self.config.name, bytes.len());
+        // Convert payload to Cap'n Proto envelope
+        let message = payload_to_capnp_envelope(request_id, &payload)
+            .context("Failed to convert payload to capnp")?;
+
+        // Serialize to bytes
+        let body_bytes = capnp::serialize::write_message_to_words(&message);
+
+        // Create HootFrame
+        let frame = HootFrame {
+            command: Command::Request,
+            content_type: ContentType::CapnProto,
+            request_id,
+            service: "hootenanny".to_string(),
+            traceparent,
+            body: Bytes::from(body_bytes),
+        };
+
+        // Serialize HootFrame to ZMQ message
+        let frames = frame.to_frames();
+        let zmq_msg = frames_to_zmq_message(&frames);
+
+        debug!("Sending capnp request to {} ({} bytes)", self.config.name, frame.body.len());
 
         let mut socket_guard = self.socket.write().await;
         let socket = socket_guard
@@ -345,10 +363,9 @@ impl Backend {
             .context("Socket disconnected - backend is dead")?;
 
         // Send
-        let msg = ZmqMessage::from(bytes);
         let timeout = Duration::from_millis(self.config.timeout_ms);
 
-        tokio::time::timeout(timeout, socket.send(msg))
+        tokio::time::timeout(timeout, socket.send(zmq_msg))
             .await
             .context("Send timeout")?
             .context("Failed to send")?;
@@ -359,13 +376,27 @@ impl Backend {
             .context("Receive timeout")?
             .context("Failed to receive")?;
 
-        let response_bytes = response.get(0).context("Empty response")?;
+        // Parse HootFrame from response
+        let response_frames: Vec<Bytes> = response
+            .into_vec()
+            .into_iter()
+            .map(|bytes| Bytes::from(bytes))
+            .collect();
 
-        // Deserialize from MsgPack
-        let response_envelope: Envelope = rmp_serde::from_slice(response_bytes)
-            .with_context(|| "Failed to deserialize MsgPack response")?;
+        let response_frame = HootFrame::from_frames(&response_frames)
+            .context("Failed to parse response HootFrame")?;
 
-        Ok(response_envelope.payload)
+        // Parse Cap'n Proto response
+        let reader = response_frame.read_capnp()
+            .context("Failed to read capnp from response")?;
+
+        let envelope_reader = reader.get_root::<hooteproto::envelope_capnp::envelope::Reader>()
+            .context("Failed to get envelope root")?;
+
+        let response_payload = capnp_envelope_to_payload(envelope_reader)
+            .context("Failed to convert capnp to payload")?;
+
+        Ok(response_payload)
     }
 
     async fn request_chaosgarden(

@@ -26,20 +26,71 @@
 //! - Efficient heartbeats (no MsgPack overhead)
 //! - Native binary payloads (no base64 encoding)
 //!
-//! ## Job System Types
+//! ## Domain Types
 //!
-//! The canonical job types live here and are used by both hootenanny and luanette:
-//! - `JobId` - Unique identifier for background jobs
-//! - `JobStatus` - State machine for job lifecycle
-//! - `JobInfo` - Complete job metadata and results
-//! - `JobStoreStats` - Aggregate statistics
+//! Domain types are defined in Cap'n Proto schemas for cross-language compatibility:
+//! - `JobId` - Rust newtype wrapper for type safety (Text on wire)
+//! - `JobStatus` - Enum defined in common.capnp
+//! - `JobInfo` - Struct with Rust ergonomics, backed by jobs.capnp
+//! - `JobStoreStats` - Direct capnp type re-export
+//!
+//! See the `domain` module for Rust wrappers and helpers.
+//!
+//! ## Python/Lua Clients
+//!
+//! Non-Rust clients use the generated Cap'n Proto types directly:
+//! ```python
+//! import capnp
+//! common = capnp.load('hooteproto/schemas/common.capnp')
+//!
+//! # Use generated enums/structs
+//! status = common.JobStatus.running
+//! ```
 //!
 //! ## Tool Parameter Types
 //!
-//! The `params` module contains types with JsonSchema derives for functionality generation.
+//! The `params` module contains types with JsonSchema derives for MCP compatibility.
 //! Use with `baton::schema_for::<ParamType>()` to generate tool input schemas.
 
+// Cap'n Proto generated modules (must be at crate root for cross-references)
+#[allow(clippy::all)]
+#[allow(dead_code)]
+pub mod common_capnp {
+    include!(concat!(env!("OUT_DIR"), "/common_capnp.rs"));
+}
+
+#[allow(clippy::all)]
+#[allow(dead_code)]
+pub mod jobs_capnp {
+    include!(concat!(env!("OUT_DIR"), "/jobs_capnp.rs"));
+}
+
+#[allow(clippy::all)]
+#[allow(dead_code)]
+pub mod tools_capnp {
+    include!(concat!(env!("OUT_DIR"), "/tools_capnp.rs"));
+}
+
+#[allow(clippy::all)]
+#[allow(dead_code)]
+pub mod envelope_capnp {
+    include!(concat!(env!("OUT_DIR"), "/envelope_capnp.rs"));
+}
+
+#[allow(clippy::all)]
+#[allow(dead_code)]
+pub mod garden_capnp {
+    include!(concat!(env!("OUT_DIR"), "/garden_capnp.rs"));
+}
+
+#[allow(clippy::all)]
+#[allow(dead_code)]
+pub mod broadcast_capnp {
+    include!(concat!(env!("OUT_DIR"), "/broadcast_capnp.rs"));
+}
+
 pub mod conversion;
+pub mod domain;
 pub mod envelope;
 pub mod frame;
 pub mod garden;
@@ -49,7 +100,11 @@ pub mod responses;
 pub mod schema_helpers;
 pub mod timing;
 
-pub use conversion::{envelope_to_payload, payload_to_request, tool_to_payload};
+pub use conversion::{
+    capnp_envelope_to_payload, envelope_to_payload, payload_to_capnp_envelope,
+    payload_to_request, tool_to_payload,
+};
+pub use domain::{JobId, JobInfo, JobStatus, JobStoreStats};
 pub use envelope::{ResponseEnvelope, ToolError};
 pub use frame::{Command, ContentType, FrameError, HootFrame, ReadyPayload, PROTOCOL_VERSION};
 pub use request::ToolRequest;
@@ -58,164 +113,6 @@ pub use timing::ToolTiming;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-// ============================================================================
-// Job System Types (canonical, shared by hootenanny + luanette)
-// ============================================================================
-
-/// Unique identifier for a background job
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct JobId(String);
-
-impl JobId {
-    pub fn new() -> Self {
-        Self(Uuid::new_v4().to_string())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Default for JobId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::fmt::Display for JobId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<String> for JobId {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl From<&str> for JobId {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
-    }
-}
-
-/// Current status of a background job
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum JobStatus {
-    /// Job is queued but not yet started
-    Pending,
-    /// Job is currently executing
-    Running,
-    /// Job completed successfully
-    Complete,
-    /// Job failed with an error
-    Failed,
-    /// Job was cancelled
-    Cancelled,
-}
-
-/// Information about a job and its result
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JobInfo {
-    pub job_id: JobId,
-    pub status: JobStatus,
-    /// Source identifier (tool name in hootenanny, script hash in luanette)
-    pub source: String,
-    pub result: Option<serde_json::Value>,
-    pub error: Option<String>,
-    pub created_at: u64,
-    pub started_at: Option<u64>,
-    pub completed_at: Option<u64>,
-}
-
-impl JobInfo {
-    pub fn new(job_id: JobId, source: String) -> Self {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        Self {
-            job_id,
-            status: JobStatus::Pending,
-            source,
-            result: None,
-            error: None,
-            created_at: now,
-            started_at: None,
-            completed_at: None,
-        }
-    }
-
-    pub fn mark_running(&mut self) {
-        self.status = JobStatus::Running;
-        self.started_at = Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        );
-    }
-
-    pub fn mark_complete(&mut self, result: serde_json::Value) {
-        self.status = JobStatus::Complete;
-        self.result = Some(result);
-        self.completed_at = Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        );
-    }
-
-    pub fn mark_failed(&mut self, error: String) {
-        self.status = JobStatus::Failed;
-        self.error = Some(error);
-        self.completed_at = Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        );
-    }
-
-    pub fn mark_cancelled(&mut self) {
-        self.status = JobStatus::Cancelled;
-        self.completed_at = Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        );
-    }
-
-    /// Duration in seconds if job has started
-    pub fn duration_secs(&self) -> Option<u64> {
-        self.started_at.map(|started| {
-            let end = self.completed_at.unwrap_or_else(|| {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()
-            });
-            end.saturating_sub(started)
-        })
-    }
-}
-
-/// Statistics about job store state
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct JobStoreStats {
-    pub total: usize,
-    pub pending: usize,
-    pub running: usize,
-    pub completed: usize,
-    pub failed: usize,
-    pub cancelled: usize,
-}
 
 // ============================================================================
 // Artifact Lineage Types (shared across tools)

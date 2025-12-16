@@ -1,9 +1,10 @@
 //! ZMQ PUB socket for broadcasting events to holler
 //!
 //! Broadcasts Broadcast messages to subscribed clients (holler SUB sockets).
+//! Messages are serialized using Cap'n Proto for cross-language compatibility.
 
 use anyhow::{Context, Result};
-use hooteproto::Broadcast;
+use hooteproto::{broadcast_capnp, common_capnp, Broadcast};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use zeromq::{PubSocket, Socket, SocketSend, ZmqMessage};
@@ -92,21 +93,126 @@ impl PublisherServer {
         info!("Hootenanny PUB socket listening on {}", self.bind_address);
 
         while let Some(broadcast) = self.rx.recv().await {
-            match serde_json::to_string(&broadcast) {
-                Ok(json) => {
-                    debug!("Publishing broadcast: {}", json);
-                    let msg = ZmqMessage::from(json.into_bytes());
-                    if let Err(e) = socket.send(msg).await {
-                        warn!("Failed to publish broadcast: {}", e);
-                    }
+            // Serialize to Cap'n Proto
+            let mut message = capnp::message::Builder::new_default();
+            {
+                let mut builder = message.init_root::<broadcast_capnp::broadcast::Builder>();
+                if let Err(e) = broadcast_to_capnp(&broadcast, &mut builder) {
+                    error!("Failed to serialize broadcast to capnp: {}", e);
+                    continue;
                 }
-                Err(e) => {
-                    error!("Failed to serialize broadcast: {}", e);
-                }
+            }
+
+            // Write to bytes
+            let bytes = capnp::serialize::write_message_to_words(&message);
+            debug!("Publishing broadcast: {:?}", broadcast_variant_name(&broadcast));
+            let msg = ZmqMessage::from(bytes);
+            if let Err(e) = socket.send(msg).await {
+                warn!("Failed to publish broadcast: {}", e);
             }
         }
 
         info!("Publisher shutting down");
         Ok(())
+    }
+}
+
+/// Convert Broadcast enum to Cap'n Proto builder
+fn broadcast_to_capnp(
+    broadcast: &Broadcast,
+    builder: &mut broadcast_capnp::broadcast::Builder,
+) -> Result<()> {
+    match broadcast {
+        Broadcast::ConfigUpdate { key, value } => {
+            let mut update = builder.reborrow().init_config_update();
+            update.set_key(key);
+            update.set_value(&serde_json::to_string(value)?);
+        }
+        Broadcast::Shutdown { reason } => {
+            let mut shutdown = builder.reborrow().init_shutdown();
+            shutdown.set_reason(reason);
+        }
+        Broadcast::ScriptInvalidate { hash } => {
+            let mut invalidate = builder.reborrow().init_script_invalidate();
+            invalidate.set_hash(hash);
+        }
+        Broadcast::JobStateChanged { job_id, state, result } => {
+            let mut job = builder.reborrow().init_job_state_changed();
+            job.set_job_id(job_id);
+            job.set_state(state);
+            if let Some(ref res) = result {
+                job.set_result(&serde_json::to_string(res)?);
+            } else {
+                job.set_result("");
+            }
+        }
+        Broadcast::Progress { job_id, percent, message } => {
+            let mut prog = builder.reborrow().init_progress();
+            prog.set_job_id(job_id);
+            prog.set_percent(*percent);
+            prog.set_message(message);
+        }
+        Broadcast::ArtifactCreated { artifact_id, content_hash, tags, creator } => {
+            let mut artifact = builder.reborrow().init_artifact_created();
+            artifact.set_artifact_id(artifact_id);
+            artifact.set_content_hash(content_hash);
+
+            let mut tag_list = artifact.reborrow().init_tags(tags.len() as u32);
+            for (i, tag) in tags.iter().enumerate() {
+                tag_list.reborrow().set(i as u32, tag);
+            }
+
+            artifact.set_creator(creator.as_deref().unwrap_or(""));
+        }
+        Broadcast::TransportStateChanged { state, position_beats, tempo_bpm } => {
+            let mut transport = builder.reborrow().init_transport_state_changed();
+            transport.set_state(state);
+            transport.set_position_beats(*position_beats);
+            transport.set_tempo_bpm(*tempo_bpm);
+        }
+        Broadcast::MarkerReached { position_beats, marker_type, metadata } => {
+            let mut marker = builder.reborrow().init_marker_reached();
+            marker.set_position_beats(*position_beats);
+            marker.set_marker_type(marker_type);
+            marker.set_metadata(&serde_json::to_string(metadata)?);
+        }
+        Broadcast::BeatTick { beat, position_beats, tempo_bpm } => {
+            let mut tick = builder.reborrow().init_beat_tick();
+
+            // Set timestamp to current time
+            let mut ts = tick.reborrow().init_timestamp();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64;
+            ts.set_nanos(now);
+
+            tick.set_beat(*beat);
+            tick.set_position_beats(*position_beats);
+            tick.set_tempo_bpm(*tempo_bpm);
+        }
+        Broadcast::Log { level, message, source } => {
+            let mut log = builder.reborrow().init_log();
+            log.set_level(level);
+            log.set_message(message);
+            log.set_source(source);
+        }
+    }
+    Ok(())
+}
+
+/// Get the variant name for logging
+fn broadcast_variant_name(broadcast: &Broadcast) -> &'static str {
+    match broadcast {
+        Broadcast::ConfigUpdate { .. } => "ConfigUpdate",
+        Broadcast::Shutdown { .. } => "Shutdown",
+        Broadcast::ScriptInvalidate { .. } => "ScriptInvalidate",
+        Broadcast::JobStateChanged { .. } => "JobStateChanged",
+        Broadcast::Progress { .. } => "Progress",
+        Broadcast::ArtifactCreated { .. } => "ArtifactCreated",
+        Broadcast::TransportStateChanged { .. } => "TransportStateChanged",
+        Broadcast::MarkerReached { .. } => "MarkerReached",
+        Broadcast::BeatTick { .. } => "BeatTick",
+        Broadcast::Log { .. } => "Log",
     }
 }

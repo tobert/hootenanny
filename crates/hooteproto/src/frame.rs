@@ -24,7 +24,7 @@
 //! to find frame 0, preserving identity frames for reply routing.
 
 use bytes::{BufMut, Bytes, BytesMut};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Protocol version - bump on breaking changes
@@ -81,8 +81,8 @@ impl Command {
 pub enum ContentType {
     /// No body (heartbeats, simple acks)
     Empty = 0x0000,
-    /// MsgPack-encoded payload
-    MsgPack = 0x0001,
+    /// Cap'n Proto-encoded payload
+    CapnProto = 0x0001,
     /// Raw binary (MIDI, audio, etc.)
     RawBinary = 0x0002,
     /// JSON (for debugging, future)
@@ -94,7 +94,7 @@ impl ContentType {
     pub fn from_u16(value: u16) -> Result<Self, FrameError> {
         match value {
             0x0000 => Ok(ContentType::Empty),
-            0x0001 => Ok(ContentType::MsgPack),
+            0x0001 => Ok(ContentType::CapnProto),
             0x0002 => Ok(ContentType::RawBinary),
             0x0003 => Ok(ContentType::Json),
             other => Err(FrameError::InvalidContentType(other)),
@@ -155,10 +155,8 @@ pub enum FrameError {
     InvalidUtf8(&'static str),
     #[error("Invalid UUID in request ID")]
     InvalidUuid,
-    #[error("MsgPack decode error: {0}")]
-    MsgPackDecode(#[from] rmp_serde::decode::Error),
-    #[error("MsgPack encode error: {0}")]
-    MsgPackEncode(#[from] rmp_serde::encode::Error),
+    #[error("Cap'n Proto error: {0}")]
+    CapnProto(#[from] capnp::Error),
     #[error("Content type mismatch: expected {expected:?}, got {actual:?}")]
     ContentTypeMismatch {
         expected: ContentType,
@@ -319,30 +317,21 @@ impl HootFrame {
         }
     }
 
-    /// Create a ready frame (worker registration)
-    pub fn ready(service: &str, capabilities: &ReadyPayload) -> Result<Self, FrameError> {
-        let body = rmp_serde::to_vec(capabilities)?;
-        Ok(Self {
-            command: Command::Ready,
-            content_type: ContentType::MsgPack,
-            request_id: Uuid::new_v4(),
-            service: service.to_string(),
-            traceparent: None,
-            body: Bytes::from(body),
-        })
-    }
-
-    /// Create a request frame with MsgPack payload
-    pub fn request<T: Serialize>(service: &str, payload: &T) -> Result<Self, FrameError> {
-        let body = rmp_serde::to_vec(payload)?;
-        Ok(Self {
+    /// Create a request frame with Cap'n Proto payload
+    pub fn request_capnp(
+        service: &str,
+        message: &capnp::message::Builder<capnp::message::HeapAllocator>,
+    ) -> Self {
+        // Serialize to bytes (capnp's write_message_to_words returns Vec<u8>)
+        let bytes = capnp::serialize::write_message_to_words(message);
+        Self {
             command: Command::Request,
-            content_type: ContentType::MsgPack,
+            content_type: ContentType::CapnProto,
             request_id: Uuid::new_v4(),
             service: service.to_string(),
             traceparent: None,
-            body: Bytes::from(body),
-        })
+            body: Bytes::from(bytes),
+        }
     }
 
     /// Create a request frame with raw binary body
@@ -357,17 +346,21 @@ impl HootFrame {
         }
     }
 
-    /// Create a reply frame with MsgPack payload
-    pub fn reply<T: Serialize>(request_id: Uuid, payload: &T) -> Result<Self, FrameError> {
-        let body = rmp_serde::to_vec(payload)?;
-        Ok(Self {
+    /// Create a reply frame with Cap'n Proto payload
+    pub fn reply_capnp(
+        request_id: Uuid,
+        message: &capnp::message::Builder<capnp::message::HeapAllocator>,
+    ) -> Self {
+        // Serialize to bytes (capnp's write_message_to_words returns Vec<u8>)
+        let bytes = capnp::serialize::write_message_to_words(message);
+        Self {
             command: Command::Reply,
-            content_type: ContentType::MsgPack,
+            content_type: ContentType::CapnProto,
             request_id,
-            service: String::new(), // Service not needed for replies
+            service: String::new(),
             traceparent: None,
-            body: Bytes::from(body),
-        })
+            body: Bytes::from(bytes),
+        }
     }
 
     /// Create a reply frame with raw binary body
@@ -400,16 +393,21 @@ impl HootFrame {
         self
     }
 
-    /// Extract typed payload from MsgPack body (checks content_type)
-    pub fn payload<T: DeserializeOwned>(&self) -> Result<T, FrameError> {
-        if self.content_type != ContentType::MsgPack {
+    /// Read Cap'n Proto payload (zero-copy from body)
+    ///
+    /// Returns an owned Reader that borrows from the frame's body
+    pub fn read_capnp(&self) -> Result<capnp::message::Reader<capnp::serialize::OwnedSegments>, FrameError> {
+        if self.content_type != ContentType::CapnProto {
             return Err(FrameError::ContentTypeMismatch {
-                expected: ContentType::MsgPack,
+                expected: ContentType::CapnProto,
                 actual: self.content_type,
             });
         }
-        let payload: T = rmp_serde::from_slice(&self.body)?;
-        Ok(payload)
+        let reader = capnp::serialize::read_message(
+            &mut self.body.as_ref(),
+            capnp::message::ReaderOptions::default(),
+        )?;
+        Ok(reader)
     }
 
     /// Get raw body bytes (checks for RawBinary content type)
@@ -456,11 +454,12 @@ mod tests {
     #[test]
     fn content_type_roundtrip() {
         assert_eq!(ContentType::Empty.to_u16(), 0x0000);
-        assert_eq!(ContentType::MsgPack.to_u16(), 0x0001);
+        assert_eq!(ContentType::CapnProto.to_u16(), 0x0001);
         assert_eq!(ContentType::RawBinary.to_u16(), 0x0002);
         assert_eq!(ContentType::Json.to_u16(), 0x0003);
 
         assert_eq!(ContentType::from_u16(0x0000).unwrap(), ContentType::Empty);
+        assert_eq!(ContentType::from_u16(0x0001).unwrap(), ContentType::CapnProto);
         assert_eq!(ContentType::from_u16(0x0002).unwrap(), ContentType::RawBinary);
         assert!(ContentType::from_u16(0xFFFF).is_err());
     }
@@ -481,21 +480,28 @@ mod tests {
     }
 
     #[test]
-    fn request_with_payload_roundtrip() {
-        use crate::Payload;
+    fn capnp_roundtrip() {
+        use crate::common_capnp;
 
-        let payload = Payload::Ping;
-        let frame = HootFrame::request("hootenanny", &payload).unwrap();
+        // Build a message
+        let mut message = capnp::message::Builder::new_default();
+        {
+            let mut timestamp = message.init_root::<common_capnp::timestamp::Builder>();
+            timestamp.set_nanos(1234567890);
+        }
+
+        // Create frame
+        let frame = HootFrame::request_capnp("test", &message);
+        assert_eq!(frame.content_type, ContentType::CapnProto);
+
+        // Roundtrip through wire format
         let frames = frame.to_frames();
-
-        assert_eq!(frames.len(), FRAME_COUNT);
-
         let parsed = HootFrame::from_frames(&frames).unwrap();
-        assert_eq!(parsed.command, Command::Request);
-        assert_eq!(parsed.content_type, ContentType::MsgPack);
 
-        let recovered: Payload = parsed.payload().unwrap();
-        assert_eq!(recovered, Payload::Ping);
+        // Read back
+        let reader = parsed.read_capnp().unwrap();
+        let ts = reader.get_root::<common_capnp::timestamp::Reader>().unwrap();
+        assert_eq!(ts.get_nanos(), 1234567890);
     }
 
     #[test]
@@ -513,11 +519,13 @@ mod tests {
 
     #[test]
     fn content_type_explicit() {
-        use crate::Payload;
+        use crate::common_capnp;
 
-        // MsgPack frame
-        let frame = HootFrame::request("hootenanny", &Payload::Ping).unwrap();
-        assert_eq!(frame.content_type, ContentType::MsgPack);
+        // CapnProto frame
+        let mut message = capnp::message::Builder::new_default();
+        message.init_root::<common_capnp::timestamp::Builder>();
+        let frame = HootFrame::request_capnp("hootenanny", &message);
+        assert_eq!(frame.content_type, ContentType::CapnProto);
 
         // Empty frame (heartbeat)
         let hb = HootFrame::heartbeat("hootenanny");
@@ -530,22 +538,31 @@ mod tests {
     }
 
     #[test]
-    fn ready_with_capabilities() {
-        let caps = ReadyPayload {
-            protocol: "HOOT01".into(),
-            tools: vec!["orpheus_generate".into(), "cas_store".into()],
-            accepts_binary: true,
-        };
-        let frame = HootFrame::ready("hootenanny", &caps).unwrap();
-        assert_eq!(frame.command, Command::Ready);
-        assert_eq!(frame.content_type, ContentType::MsgPack);
+    fn capnp_reply_roundtrip() {
+        use crate::common_capnp;
 
+        let request_id = Uuid::new_v4();
+
+        // Build a message for reply
+        let mut message = capnp::message::Builder::new_default();
+        {
+            let mut timestamp = message.init_root::<common_capnp::timestamp::Builder>();
+            timestamp.set_nanos(9876543210);
+        }
+
+        // Create reply frame
+        let frame = HootFrame::reply_capnp(request_id, &message);
+        assert_eq!(frame.command, Command::Reply);
+        assert_eq!(frame.content_type, ContentType::CapnProto);
+        assert_eq!(frame.request_id, request_id);
+
+        // Roundtrip
         let frames = frame.to_frames();
         let parsed = HootFrame::from_frames(&frames).unwrap();
 
-        let recovered: ReadyPayload = parsed.payload().unwrap();
-        assert_eq!(recovered.tools.len(), 2);
-        assert!(recovered.accepts_binary);
+        let reader = parsed.read_capnp().unwrap();
+        let ts = reader.get_root::<common_capnp::timestamp::Reader>().unwrap();
+        assert_eq!(ts.get_nanos(), 9876543210);
     }
 
     #[test]
@@ -581,11 +598,11 @@ mod tests {
     #[test]
     fn content_type_mismatch_error() {
         let frame = HootFrame::heartbeat("hootenanny"); // ContentType::Empty
-        let result: Result<ReadyPayload, _> = frame.payload();
+        let result = frame.read_capnp();
         assert!(matches!(
             result,
             Err(FrameError::ContentTypeMismatch {
-                expected: ContentType::MsgPack,
+                expected: ContentType::CapnProto,
                 actual: ContentType::Empty
             })
         ));
@@ -593,9 +610,14 @@ mod tests {
 
     #[test]
     fn liveness_indication() {
+        use crate::common_capnp;
+
+        let mut message = capnp::message::Builder::new_default();
+        message.init_root::<common_capnp::timestamp::Builder>();
+
         assert!(HootFrame::heartbeat("test").indicates_liveness());
-        assert!(HootFrame::request::<()>("test", &()).unwrap().indicates_liveness());
-        assert!(HootFrame::reply::<()>(Uuid::new_v4(), &()).unwrap().indicates_liveness());
+        assert!(HootFrame::request_capnp("test", &message).indicates_liveness());
+        assert!(HootFrame::reply_capnp(Uuid::new_v4(), &message).indicates_liveness());
         assert!(!HootFrame::disconnect("test").indicates_liveness());
     }
 
