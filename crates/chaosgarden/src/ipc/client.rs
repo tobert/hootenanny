@@ -90,7 +90,26 @@ impl GardenClient {
 
     /// Send a shell request and wait for reply
     pub async fn request(&mut self, req: ShellRequest) -> Result<ShellReply> {
-        let msg = Message::new(self.session, "shell_request", req);
+        self.request_with_job_id(req, None).await
+    }
+
+    /// Send a shell request with job_id in metadata for correlation
+    ///
+    /// The job_id is passed to chaosgarden as opaque data. Chaosgarden will
+    /// include it in any response or IOPub events related to this request,
+    /// allowing hootenanny to correlate async results back to jobs.
+    pub async fn request_with_job_id(
+        &mut self,
+        req: ShellRequest,
+        job_id: Option<&str>,
+    ) -> Result<ShellReply> {
+        let mut msg = Message::new(self.session, "shell_request", req);
+
+        if let Some(id) = job_id {
+            msg.metadata
+                .insert("job_id".to_string(), serde_json::json!(id));
+        }
+
         let bytes = wire::serialize(&msg)?;
 
         self.shell.send(ZmqMessage::from(bytes)).await?;

@@ -385,10 +385,38 @@ impl HooteprotoServer {
     }
 
     /// Dispatch via EventDualityServer for full tool functionality
+    ///
+    /// Tries the typed dispatch path first (Protocol v2), falling back to
+    /// JSON dispatch for tools not yet converted.
     async fn dispatch_via_server(&self, server: &EventDualityServer, payload: Payload) -> Payload {
         use crate::api::dispatch::{dispatch_tool, DispatchError};
+        use crate::api::typed_dispatcher::TypedDispatcher;
+        use hooteproto::{envelope_to_payload, payload_to_request};
 
-        // Convert Payload to tool name and arguments
+        // Try typed dispatch path first (Protocol v2)
+        match payload_to_request(&payload) {
+            Ok(Some(request)) => {
+                // Typed path available - use TypedDispatcher
+                debug!("Using typed dispatch for: {}", request.name());
+                let dispatcher = TypedDispatcher::new(std::sync::Arc::new(server.clone()));
+                let envelope = dispatcher.dispatch(request).await;
+                return envelope_to_payload(envelope);
+            }
+            Ok(None) => {
+                // Tool not yet converted - fall back to JSON dispatch
+                debug!("Falling back to JSON dispatch for: {:?}", payload_type_name(&payload));
+            }
+            Err(e) => {
+                // Conversion error
+                return Payload::Error {
+                    code: e.code().to_string(),
+                    message: e.message().to_string(),
+                    details: None,
+                };
+            }
+        }
+
+        // Fall back to legacy JSON dispatch
         let (tool_name, args) = match payload_to_tool_args(payload) {
             Ok(v) => v,
             Err(e) => {

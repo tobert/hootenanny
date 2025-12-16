@@ -712,3 +712,210 @@ fn extract_string_array(args: &Value, key: &str) -> Vec<String> {
         })
         .unwrap_or_default()
 }
+
+// =============================================================================
+// Typed Protocol Conversions (Protocol v2)
+// =============================================================================
+
+use crate::envelope::ResponseEnvelope;
+use crate::request::*;
+use crate::ToolError;
+
+/// Convert a Payload to a ToolRequest for typed dispatch.
+///
+/// Returns Ok(Some(request)) for supported tools, Ok(None) for tools that
+/// should use the legacy JSON path, and Err for invalid requests.
+pub fn payload_to_request(payload: &Payload) -> Result<Option<ToolRequest>, ToolError> {
+    match payload {
+        // === ABC Notation (Sync) ===
+        Payload::AbcParse { abc } => Ok(Some(ToolRequest::AbcParse(AbcParseRequest {
+            abc: abc.clone(),
+        }))),
+        Payload::AbcValidate { abc } => Ok(Some(ToolRequest::AbcValidate(AbcValidateRequest {
+            abc: abc.clone(),
+        }))),
+        Payload::AbcTranspose {
+            abc,
+            semitones,
+            target_key,
+        } => Ok(Some(ToolRequest::AbcTranspose(AbcTransposeRequest {
+            abc: abc.clone(),
+            semitones: *semitones,
+            target_key: target_key.clone(),
+        }))),
+
+        // === SoundFont (Sync) ===
+        Payload::SoundfontInspect {
+            soundfont_hash,
+            include_drum_map,
+        } => Ok(Some(ToolRequest::SoundfontInspect(SoundfontInspectRequest {
+            soundfont_hash: soundfont_hash.clone(),
+            include_drum_map: *include_drum_map,
+        }))),
+        Payload::SoundfontPresetInspect {
+            soundfont_hash,
+            bank,
+            program,
+        } => Ok(Some(ToolRequest::SoundfontPresetInspect(
+            SoundfontPresetInspectRequest {
+                soundfont_hash: soundfont_hash.clone(),
+                bank: *bank as u16,
+                program: *program as u16,
+            },
+        ))),
+
+        // === Garden (Sync status, FireAndForget controls) ===
+        Payload::GardenStatus => Ok(Some(ToolRequest::GardenStatus)),
+        Payload::GardenPlay => Ok(Some(ToolRequest::GardenPlay)),
+        Payload::GardenPause => Ok(Some(ToolRequest::GardenPause)),
+        Payload::GardenStop => Ok(Some(ToolRequest::GardenStop)),
+        Payload::GardenSeek { beat } => Ok(Some(ToolRequest::GardenSeek(GardenSeekRequest {
+            beat: *beat,
+        }))),
+        Payload::GardenSetTempo { bpm } => {
+            Ok(Some(ToolRequest::GardenSetTempo(GardenSetTempoRequest {
+                bpm: *bpm,
+            })))
+        }
+        Payload::GardenGetRegions { start, end } => Ok(Some(ToolRequest::GardenGetRegions(
+            GardenGetRegionsRequest {
+                start: *start,
+                end: *end,
+            },
+        ))),
+        Payload::GardenCreateRegion {
+            position,
+            duration,
+            behavior_type,
+            content_id,
+        } => Ok(Some(ToolRequest::GardenCreateRegion(
+            GardenCreateRegionRequest {
+                position: *position,
+                duration: *duration,
+                behavior_type: behavior_type.clone(),
+                content_id: content_id.clone(),
+            },
+        ))),
+        Payload::GardenDeleteRegion { region_id } => Ok(Some(ToolRequest::GardenDeleteRegion(
+            GardenDeleteRegionRequest {
+                region_id: region_id.clone(),
+            },
+        ))),
+        Payload::GardenMoveRegion {
+            region_id,
+            new_position,
+        } => Ok(Some(ToolRequest::GardenMoveRegion(GardenMoveRegionRequest {
+            region_id: region_id.clone(),
+            new_position: *new_position,
+        }))),
+        Payload::GardenEmergencyPause => Ok(Some(ToolRequest::GardenEmergencyPause)),
+
+        // === Jobs (Sync) ===
+        Payload::JobStatus { job_id } => Ok(Some(ToolRequest::JobStatus(JobStatusRequest {
+            job_id: job_id.clone(),
+        }))),
+        Payload::JobList { status } => Ok(Some(ToolRequest::JobList(JobListRequest {
+            status: status.clone(),
+        }))),
+
+        // === Config (Sync) ===
+        Payload::ConfigGet { section, key } => Ok(Some(ToolRequest::ConfigGet(ConfigGetRequest {
+            section: section.clone(),
+            key: key.clone(),
+        }))),
+
+        // === Admin (Sync) ===
+        Payload::Ping => Ok(Some(ToolRequest::Ping)),
+        Payload::ListTools => Ok(Some(ToolRequest::ListTools)),
+
+        // === Tools not yet converted - use legacy path ===
+        _ => Ok(None),
+    }
+}
+
+/// Convert a ResponseEnvelope back to Payload for ZMQ transport.
+pub fn envelope_to_payload(envelope: ResponseEnvelope) -> Payload {
+    match envelope {
+        ResponseEnvelope::Success { response } => {
+            // Convert typed response to JSON for legacy Payload::Success
+            let result = response.to_json();
+            Payload::Success { result }
+        }
+        ResponseEnvelope::JobStarted { job_id, tool, .. } => Payload::Success {
+            result: serde_json::json!({
+                "job_id": job_id,
+                "tool": tool,
+                "status": "started",
+            }),
+        },
+        ResponseEnvelope::Ack { message } => Payload::Success {
+            result: serde_json::json!({
+                "status": "ok",
+                "message": message,
+            }),
+        },
+        ResponseEnvelope::Error(err) => Payload::Error {
+            code: err.code().to_string(),
+            message: err.message().to_string(),
+            details: None,
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_abc_parse_conversion() {
+        let payload = Payload::AbcParse {
+            abc: "X:1\nT:Test\nK:C\nCDEF".to_string(),
+        };
+
+        let request = payload_to_request(&payload).unwrap();
+        assert!(matches!(request, Some(ToolRequest::AbcParse(_))));
+
+        if let Some(ToolRequest::AbcParse(req)) = request {
+            assert_eq!(req.abc, "X:1\nT:Test\nK:C\nCDEF");
+        }
+    }
+
+    #[test]
+    fn test_garden_status_conversion() {
+        let payload = Payload::GardenStatus;
+        let request = payload_to_request(&payload).unwrap();
+        assert!(matches!(request, Some(ToolRequest::GardenStatus)));
+    }
+
+    #[test]
+    fn test_unsupported_returns_none() {
+        let payload = Payload::OrpheusGenerate {
+            max_tokens: Some(1024),
+            num_variations: Some(1),
+            temperature: None,
+            top_p: None,
+            model: None,
+            tags: vec![],
+            creator: None,
+            parent_id: None,
+            variation_set_id: None,
+        };
+
+        let request = payload_to_request(&payload).unwrap();
+        assert!(request.is_none());
+    }
+
+    #[test]
+    fn test_envelope_to_payload_ack() {
+        let envelope = ResponseEnvelope::ack("test");
+        let payload = envelope_to_payload(envelope);
+
+        match payload {
+            Payload::Success { result } => {
+                assert_eq!(result["status"], "ok");
+                assert_eq!(result["message"], "test");
+            }
+            _ => panic!("Expected Success payload"),
+        }
+    }
+}

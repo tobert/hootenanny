@@ -121,7 +121,10 @@ async fn main() -> Result<()> {
     // --- Job Store Initialization ---
     info!("⚙️  Initializing shared Job Store...");
     let job_store = Arc::new(job_system::JobStore::new());
-    info!("   Job store ready (shared across connections)");
+
+    // Spawn background cleanup task (runs every 60s)
+    let _cleanup_handle = job_system::spawn_cleanup_task(job_store.as_ref().clone(), 60);
+    info!("   Job store ready (cleanup task spawned, TTL: garden=60s, other=300s)");
 
     // --- GPU Observer Client ---
     info!("🎮 Initializing GPU observer client...");

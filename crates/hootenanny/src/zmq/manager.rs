@@ -110,12 +110,24 @@ impl GardenManager {
 
     /// Send a shell request
     pub async fn request(&self, req: ShellRequest) -> Result<ShellReply> {
+        self.request_with_job_id(req, None).await
+    }
+
+    /// Send a shell request with job_id for correlation
+    ///
+    /// The job_id is passed to chaosgarden as opaque metadata. Chaosgarden will
+    /// include it in any response or IOPub events related to this request.
+    pub async fn request_with_job_id(
+        &self,
+        req: ShellRequest,
+        job_id: Option<&str>,
+    ) -> Result<ShellReply> {
         let mut client_guard = self.client.write().await;
         let client = client_guard
             .as_mut()
             .context("not connected to chaosgarden")?;
 
-        client.request(req).await
+        client.request_with_job_id(req, job_id).await
     }
 
     /// Send a control request (priority channel)

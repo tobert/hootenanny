@@ -25,13 +25,21 @@
 //! Use with `baton::schema_for::<ParamType>()` to generate tool input schemas.
 
 pub mod conversion;
+pub mod envelope;
 pub mod frame;
 pub mod garden;
 pub mod params;
+pub mod request;
+pub mod responses;
 pub mod schema_helpers;
+pub mod timing;
 
-pub use conversion::tool_to_payload;
+pub use conversion::{envelope_to_payload, payload_to_request, tool_to_payload};
+pub use envelope::{ResponseEnvelope, ToolError};
 pub use frame::{Command, ContentType, FrameError, HootFrame, ReadyPayload, PROTOCOL_VERSION};
+pub use request::ToolRequest;
+pub use responses::ToolResponse;
+pub use timing::ToolTiming;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -244,72 +252,7 @@ impl ToolOutput {
     }
 }
 
-/// Tool execution error
-///
-/// Represents an error that occurred during tool execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolError {
-    /// Error code for programmatic handling
-    pub code: String,
-    /// Human-readable error message
-    pub message: String,
-    /// Optional additional error details
-    pub details: Option<serde_json::Value>,
-}
-
-impl ToolError {
-    /// Create an invalid parameters error
-    pub fn invalid_params(msg: impl Into<String>) -> Self {
-        Self {
-            code: "invalid_params".into(),
-            message: msg.into(),
-            details: None,
-        }
-    }
-
-    /// Create a tool not found error
-    pub fn not_found(tool: &str) -> Self {
-        Self {
-            code: "tool_not_found".into(),
-            message: format!("Unknown tool: {}", tool),
-            details: None,
-        }
-    }
-
-    /// Create an internal error
-    pub fn internal(msg: impl Into<String>) -> Self {
-        Self {
-            code: "internal_error".into(),
-            message: msg.into(),
-            details: None,
-        }
-    }
-
-    /// Create an error with a custom code
-    pub fn with_code(code: impl Into<String>, msg: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            message: msg.into(),
-            details: None,
-        }
-    }
-
-    /// Add details to this error
-    pub fn with_details(mut self, details: impl serde::Serialize) -> Self {
-        self.details = serde_json::to_value(details).ok();
-        self
-    }
-}
-
-impl std::fmt::Display for ToolError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}] {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for ToolError {}
-
-/// Result type for tool execution
+/// Result type for tool execution (uses typed ToolError from envelope module)
 pub type ToolResult = Result<ToolOutput, ToolError>;
 
 // ============================================================================
