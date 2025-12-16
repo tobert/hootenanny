@@ -41,26 +41,30 @@ luanette scripts/orpheus_loop.lua
 Check `crates/luanette/src/stdlib/` for available modules:
 
 ```lua
--- CAS / Artifacts
-local hash = cas.store(content)
-local data = cas.get(hash)
-local artifact = artifact.upload(path, mime_type)
+-- Namespaces: hootenanny.* (MCP tools), chaosgarden.* (garden_* tools), workflow.* (helpers)
 
--- Orpheus (returns job object)
-local job = orpheus.generate({ max_tokens = 512, temperature = 0.9 })
-local result = job:poll(60000)  -- Wait up to 60s (colon = method call)
-local midi_artifact = result.artifact_id
+-- CAS / Artifacts (via hootenanny namespace)
+local hash = hootenanny.cas_store({ content = content })
+local artifact = hootenanny.artifact_upload({ file_path = path, mime_type = mime_type })
 
--- MIDI to WAV
-local wav_job = convert.midi_to_wav(midi_hash, soundfont_hash, sample_rate)
-local wav_result = wav_job:poll(30000)
+-- Orpheus via workflow helpers (handles job polling internally)
+local midi = workflow.orpheus_generate({ max_tokens = 512, temperature = 0.9 })
+-- Returns: midi.artifact_id, midi.content_hash
 
--- Garden (chaosgarden control)
-garden.set_tempo(120)
-garden.create_region(position, duration, "play_content", artifact_id)
-garden.play()
-garden.stop()
-garden.seek(beat)
+-- MIDI to WAV via hootenanny
+local wav_job = hootenanny.convert_midi_to_wav({
+    input_hash = midi_hash,
+    soundfont_hash = soundfont_hash,
+    sample_rate = sample_rate
+})
+-- Poll manually or use workflow helpers
+
+-- Chaosgarden control (garden_* tools)
+chaosgarden.set_tempo({ bpm = 120 })
+chaosgarden.create_region({ position = 0, duration = 16, behavior_type = "play_content", content_id = artifact_id })
+chaosgarden.play()
+chaosgarden.stop()
+chaosgarden.seek({ beat = 0 })
 ```
 
 ---
@@ -76,76 +80,84 @@ local DURATION_BEATS = 16  -- 8 bars of 4/4
 local SAMPLE_RATE = 48000  -- Match chaosgarden config (48000 or 96000)
 
 -- Find or use default soundfont
-local soundfont = artifact.find_by_tag("type:soundfont")[1]
-if not soundfont then
+local soundfonts = hootenanny.artifact_list({ tag = "type:soundfont" })
+if #soundfonts == 0 then
     error("No soundfont found. Upload one first.")
 end
+local soundfont = soundfonts[1]
 print("Using soundfont: " .. soundfont.id)
 
--- Generate drums
+-- Generate drums (workflow helper handles job polling)
 print("Generating drums...")
-local drums_job = orpheus.generate({
+local drums_midi = workflow.orpheus_generate({
     max_tokens = 256,
     temperature = 0.7,  -- Lower = more predictable rhythm
     tags = { "drums", "rhythm" }
 })
-local drums_midi = drums_job:poll(60000)
 print("Drums MIDI: " .. drums_midi.artifact_id)
 
 -- Generate melody
 print("Generating melody...")
-local melody_job = orpheus.generate({
+local melody_midi = workflow.orpheus_generate({
     max_tokens = 512,
     temperature = 1.0,  -- Higher = more variation
     tags = { "melody", "lead" }
 })
-local melody_midi = melody_job:poll(60000)
 print("Melody MIDI: " .. melody_midi.artifact_id)
 
 -- Render both to WAV (must match chaosgarden session rate)
 print("Rendering drums to WAV...")
-local drums_wav_job = convert.midi_to_wav(
-    drums_midi.content_hash,
-    soundfont.content_hash,
-    SAMPLE_RATE
-)
-local drums_wav = drums_wav_job:poll(30000)
+local drums_wav = workflow.midi_to_wav({
+    input_hash = drums_midi.content_hash,
+    soundfont_hash = soundfont.content_hash,
+    sample_rate = SAMPLE_RATE
+})
 print("Drums WAV: " .. drums_wav.artifact_id)
 
 print("Rendering melody to WAV...")
-local melody_wav_job = convert.midi_to_wav(
-    melody_midi.content_hash,
-    soundfont.content_hash,
-    SAMPLE_RATE
-)
-local melody_wav = melody_wav_job:poll(30000)
+local melody_wav = workflow.midi_to_wav({
+    input_hash = melody_midi.content_hash,
+    soundfont_hash = soundfont.content_hash,
+    sample_rate = SAMPLE_RATE
+})
 print("Melody WAV: " .. melody_wav.artifact_id)
 
 -- Setup timeline
 print("Setting up timeline...")
-garden.stop()
-garden.seek(0)
-garden.set_tempo(TEMPO)
+chaosgarden.stop()
+chaosgarden.seek({ beat = 0 })
+chaosgarden.set_tempo({ bpm = TEMPO })
 
 -- Clear existing regions (optional)
-for _, region in ipairs(garden.get_regions()) do
-    garden.delete_region(region.region_id)
+local regions = chaosgarden.get_regions()
+for _, region in ipairs(regions.data.regions or {}) do
+    chaosgarden.delete_region({ region_id = region.region_id })
 end
 
 -- Create regions for both tracks at beat 0
-garden.create_region(0, DURATION_BEATS, "play_content", drums_wav.artifact_id)
-garden.create_region(0, DURATION_BEATS, "play_content", melody_wav.artifact_id)
+chaosgarden.create_region({
+    position = 0,
+    duration = DURATION_BEATS,
+    behavior_type = "play_content",
+    content_id = drums_wav.artifact_id
+})
+chaosgarden.create_region({
+    position = 0,
+    duration = DURATION_BEATS,
+    behavior_type = "play_content",
+    content_id = melody_wav.artifact_id
+})
 
 -- Play!
 print("Playing...")
-garden.play()
+chaosgarden.play()
 
 -- Let it play for the duration
 local duration_seconds = (DURATION_BEATS / TEMPO) * 60
 print(string.format("Playing for %.1f seconds...", duration_seconds))
-os.sleep(duration_seconds)
+workflow.sleep(duration_seconds * 1000)  -- sleep takes ms
 
-garden.stop()
+chaosgarden.stop()
 print("Done!")
 ```
 
@@ -157,15 +169,15 @@ For continuous looping, modify the script:
 
 ```lua
 -- After creating regions, loop forever
-garden.play()
+chaosgarden.play()
 
 while true do
-    local status = garden.status()
+    local status = chaosgarden.status()
     -- When position exceeds duration, seek back to 0
-    if status.position >= DURATION_BEATS then
-        garden.seek(0)
+    if status.data.position >= DURATION_BEATS then
+        chaosgarden.seek({ beat = 0 })
     end
-    os.sleep(0.1)
+    workflow.sleep(100)  -- 100ms
 end
 ```
 
