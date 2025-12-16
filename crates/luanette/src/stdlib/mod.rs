@@ -7,6 +7,7 @@
 //!
 //! - `abc.*` - ABC notation parsing (local, no ZMQ)
 //! - `artifact.*` - Artifact convenience functions (wraps cas + hootenanny)
+//! - `audio.*` - Audio processing (WAV I/O, resample, normalize)
 //! - `cas.*` - Content Addressable Storage (local filesystem access)
 //! - `midi.*` - MIDI read/write/transform
 //! - `soundfont.*` - SoundFont inspection (local, no ZMQ)
@@ -15,6 +16,7 @@
 
 pub mod abc;
 pub mod artifact;
+pub mod audio;
 pub mod cas;
 pub mod midi;
 pub mod soundfont;
@@ -27,6 +29,7 @@ use mlua::Lua;
 /// Register all stdlib modules in the Lua VM.
 pub fn register_all(lua: &Lua) -> Result<()> {
     abc::register_abc_globals(lua)?;
+    audio::register_audio_globals(lua)?;
     cas::register_cas_globals(lua)?;
     midi::register_midi_globals(lua)?;
     soundfont::register_soundfont_globals(lua)?;
