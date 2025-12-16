@@ -1,6 +1,7 @@
 //! Bridge between Lua scripts and upstream tools.
 //!
-//! Registers namespace globals (e.g., `hootenanny.*`) that call upstream servers via ClientManager.
+//! Registers namespace globals (e.g., `hootenanny.*`) that call upstream servers via ZMQ.
+//! Uses hooteproto over ZeroMQ DEALER sockets for communication with hootenanny.
 //! Automatically propagates traceparent from stored span context to upstream calls.
 
 use anyhow::Result;
@@ -14,12 +15,12 @@ use crate::clients::ClientManager;
 /// Lua registry key for stored span context (must match otel_bridge.rs).
 const SPAN_CONTEXT_KEY: &str = "otel_span_context";
 
-/// Context passed to Lua for MCP tool calls.
+/// Context passed to Lua for ZMQ tool calls.
 ///
-/// Contains everything needed to make async MCP calls from synchronous Lua code.
+/// Contains everything needed to make async ZMQ calls from synchronous Lua code.
 #[derive(Clone)]
 pub struct McpBridgeContext {
-    /// The client manager for upstream MCP servers.
+    /// The client manager for upstream ZMQ servers.
     pub clients: Arc<ClientManager>,
 
     /// Tokio runtime handle for running async code from blocking context.
@@ -27,7 +28,7 @@ pub struct McpBridgeContext {
 }
 
 impl McpBridgeContext {
-    /// Create a new MCP bridge context.
+    /// Create a new ZMQ bridge context.
     pub fn new(clients: Arc<ClientManager>, runtime_handle: Handle) -> Self {
         Self {
             clients,
@@ -35,7 +36,7 @@ impl McpBridgeContext {
         }
     }
 
-    /// Call an upstream MCP tool synchronously (blocks on async).
+    /// Call an upstream tool synchronously via ZMQ (blocks on async).
     pub fn call_tool(
         &self,
         namespace: &str,
