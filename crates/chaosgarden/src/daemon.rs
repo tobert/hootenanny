@@ -6,20 +6,16 @@
 //! - Trustfall queries over graph state
 //! - Latent lifecycle management
 
-use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use tracing::{debug, info, warn};
-use trustfall::execute_query;
 use uuid::Uuid;
 
 use crate::ipc::{
-    Beat as IpcBeat, PendingApproval as IpcPendingApproval, RegionSummary,
-    SampleFormat as IpcSampleFormat, StreamDefinition as IpcStreamDefinition,
-    StreamFormat as IpcStreamFormat,
+    Beat as IpcBeat, ContentType as IpcContentType, PendingApproval as IpcPendingApproval,
+    RegionSummary, SampleFormat as IpcSampleFormat, ShellReply, ShellRequest,
+    StreamDefinition as IpcStreamDefinition, StreamFormat as IpcStreamFormat,
 };
-#[cfg(test)]
-use crate::ipc::{ContentType as IpcContentType, QueryReply, ShellReply, ShellRequest};
 use crate::primitives::{Behavior, ContentType};
 use crate::stream_io::{
     SampleFormat, StreamDefinition, StreamFormat, StreamManager, StreamUri,
@@ -319,7 +315,6 @@ impl GardenDaemon {
         Ok(())
     }
 
-    #[cfg(test)]
     fn get_pending_approvals(&self) -> Vec<IpcPendingApproval> {
         let latent_manager = self.latent_manager.read().unwrap();
         latent_manager
@@ -506,11 +501,10 @@ impl Default for GardenDaemon {
 }
 
 impl GardenDaemon {
-    /// Handle shell requests (for testing)
+    /// Handle shell requests
     ///
     /// This method dispatches ShellRequest variants to the appropriate internal handlers.
-    /// It's primarily used by tests and is not part of the public API.
-    #[cfg(test)]
+    /// Used by the ZMQ server to process incoming requests.
     pub fn handle_shell(&self, req: ShellRequest) -> ShellReply {
         match req {
             ShellRequest::Play => {
@@ -687,7 +681,6 @@ fn convert_ipc_behavior_to_internal(ipc: &crate::ipc::Behavior) -> Behavior {
 }
 
 /// Convert IPC ContentType to internal ContentType
-#[cfg(test)]
 fn convert_ipc_content_type_to_internal(ipc: &IpcContentType) -> ContentType {
     match ipc {
         IpcContentType::Audio => ContentType::Audio,
@@ -697,7 +690,6 @@ fn convert_ipc_content_type_to_internal(ipc: &IpcContentType) -> ContentType {
 }
 
 /// Convert internal ContentType to IPC ContentType
-#[cfg(test)]
 fn convert_content_type_to_ipc(internal: ContentType) -> IpcContentType {
     match internal {
         ContentType::Audio => IpcContentType::Audio,
