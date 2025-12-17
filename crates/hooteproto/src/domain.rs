@@ -123,6 +123,25 @@ pub struct JobInfo {
     pub completed_at: Option<u64>,
 }
 
+impl serde::Serialize for JobInfo {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("JobInfo", 8)?;
+        state.serialize_field("job_id", &self.job_id.to_string())?;
+        state.serialize_field("status", self.status.to_string_lower())?;
+        state.serialize_field("source", &self.source)?;
+        state.serialize_field("result", &self.result)?;
+        state.serialize_field("error", &self.error)?;
+        state.serialize_field("created_at", &self.created_at)?;
+        state.serialize_field("started_at", &self.started_at)?;
+        state.serialize_field("completed_at", &self.completed_at)?;
+        state.end()
+    }
+}
+
 impl JobInfo {
     pub fn new(job_id: JobId, source: String) -> Self {
         let now = std::time::SystemTime::now()
