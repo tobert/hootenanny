@@ -2,6 +2,8 @@
 //!
 //! Connects to OTLP endpoint (default localhost:4317) for traces, logs, metrics.
 
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::{global, KeyValue};
@@ -9,6 +11,9 @@ use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler};
 use opentelemetry_sdk::Resource;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+/// Timeout for OTLP exports - prevents blocking on unavailable endpoints
+const EXPORT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Initialize OpenTelemetry with OTLP exporters.
 ///
@@ -28,10 +33,11 @@ pub fn init(otlp_endpoint: &str) -> Result<()> {
         format!("http://{}", otlp_endpoint)
     };
 
-    // Configure OTLP trace exporter
+    // Configure OTLP trace exporter with timeout
     let trace_exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint.clone())
+        .with_timeout(EXPORT_TIMEOUT)
         .build()
         .context("Failed to create OTLP span exporter")?;
 
@@ -48,10 +54,11 @@ pub fn init(otlp_endpoint: &str) -> Result<()> {
     let tracer = tracer_provider.tracer("holler");
     global::set_tracer_provider(tracer_provider);
 
-    // Configure OTLP log exporter
+    // Configure OTLP log exporter with timeout
     let log_exporter = opentelemetry_otlp::LogExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint.clone())
+        .with_timeout(EXPORT_TIMEOUT)
         .build()
         .context("Failed to create OTLP log exporter")?;
 
@@ -63,10 +70,11 @@ pub fn init(otlp_endpoint: &str) -> Result<()> {
         .with_resource(resource.clone())
         .build();
 
-    // Configure OTLP metrics exporter
+    // Configure OTLP metrics exporter with timeout
     let metric_exporter = opentelemetry_otlp::MetricExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint)
+        .with_timeout(EXPORT_TIMEOUT)
         .build()
         .context("Failed to create OTLP metric exporter")?;
 
@@ -101,5 +109,15 @@ pub fn init(otlp_endpoint: &str) -> Result<()> {
         otlp_endpoint
     );
 
+    Ok(())
+}
+
+/// Shutdown OpenTelemetry gracefully, flushing any pending data.
+///
+/// With the export timeouts configured during init (5s per exporter), the Drop
+/// handlers will complete in bounded time. No explicit shutdown call is needed
+/// in opentelemetry 0.28 - the providers flush on drop.
+pub fn shutdown() -> anyhow::Result<()> {
+    tracing::info!("🔭 Shutting down OpenTelemetry (providers will flush on drop with 5s timeout)...");
     Ok(())
 }

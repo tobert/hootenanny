@@ -1,15 +1,16 @@
 [Unit]
 Description=Hootenanny Backend (artifacts, CAS, Orpheus, audio graph)
+Documentation=https://github.com/halfremembered/hootenanny
 
 [Service]
 Type=simple
 WorkingDirectory=%h/src/hootenanny
-ExecStart=%h/src/hootenanny/target/release/hootenanny --port 8082 --zmq-bind tcp://0.0.0.0:5580 --zmq-pub tcp://0.0.0.0:5581 --chaosgarden local
+ExecStart=%h/src/hootenanny/target/release/hootenanny
 Restart=always
 RestartSec=5
+TimeoutStopSec=30
 
 Environment=RUST_LOG=info
-Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 
 [Install]
 WantedBy=default.target

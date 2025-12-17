@@ -1,5 +1,6 @@
 [Unit]
 Description=Luanette Lua Scripting Server
+Documentation=https://github.com/halfremembered/hootenanny
 
 [Service]
 Type=simple
@@ -7,9 +8,9 @@ WorkingDirectory=%h/src/hootenanny
 ExecStart=%h/src/hootenanny/target/release/luanette zmq --bind tcp://0.0.0.0:5570 --hootenanny tcp://localhost:5580
 Restart=always
 RestartSec=5
+TimeoutStopSec=30
 
 Environment=RUST_LOG=info
-Environment=OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317
 
 [Install]
 WantedBy=default.target

@@ -3,11 +3,14 @@
 //! Converts tool calls (name + JSON arguments) to strongly-typed Payload variants.
 //! Used by both holler (gateway) and luanette (Lua scripting).
 
-use crate::{GraphHint, Payload, PollMode};
+use crate::{
+    GraphHint, Payload, PollMode, SampleFormat, StreamDefinition, StreamFormat,
+    TimelineEventType, WorkerType,
+};
 use serde_json::Value;
 
 // Cap'n Proto imports for reading requests
-use crate::{envelope_capnp, tools_capnp};
+use crate::{common_capnp, envelope_capnp, streams_capnp, tools_capnp};
 
 /// Convert a tool name and JSON arguments to a Payload variant.
 ///
@@ -1705,6 +1708,79 @@ fn capnp_optional_string(text: capnp::text::Reader) -> Option<String> {
     }
 }
 
+/// Helper: Convert WorkerType to capnp enum
+fn worker_type_to_capnp(wt: &WorkerType) -> common_capnp::WorkerType {
+    match wt {
+        WorkerType::Luanette => common_capnp::WorkerType::Luanette,
+        WorkerType::Hootenanny => common_capnp::WorkerType::Hootenanny,
+        WorkerType::Chaosgarden => common_capnp::WorkerType::Chaosgarden,
+    }
+}
+
+/// Helper: Convert PollMode to capnp enum
+fn poll_mode_to_capnp(mode: &PollMode) -> common_capnp::PollMode {
+    match mode {
+        PollMode::Any => common_capnp::PollMode::Any,
+        PollMode::All => common_capnp::PollMode::All,
+    }
+}
+
+/// Helper: Convert TimelineEventType to capnp enum
+fn timeline_event_type_to_capnp(et: &TimelineEventType) -> common_capnp::TimelineEventType {
+    match et {
+        TimelineEventType::SectionChange => common_capnp::TimelineEventType::SectionChange,
+        TimelineEventType::BeatMarker => common_capnp::TimelineEventType::BeatMarker,
+        TimelineEventType::CuePoint => common_capnp::TimelineEventType::CuePoint,
+        TimelineEventType::GenerateTransition => common_capnp::TimelineEventType::GenerateTransition,
+    }
+}
+
+/// Helper: Set artifact metadata on a capnp builder
+fn set_artifact_metadata(
+    builder: &mut common_capnp::artifact_metadata::Builder,
+    variation_set_id: &Option<String>,
+    parent_id: &Option<String>,
+    tags: &[String],
+    creator: &Option<String>,
+) {
+    builder.set_variation_set_id(variation_set_id.as_deref().unwrap_or(""));
+    builder.set_parent_id(parent_id.as_deref().unwrap_or(""));
+    {
+        let mut tags_builder = builder.reborrow().init_tags(tags.len() as u32);
+        for (i, tag) in tags.iter().enumerate() {
+            tags_builder.set(i as u32, tag);
+        }
+    }
+    builder.set_creator(creator.as_deref().unwrap_or(""));
+}
+
+/// Helper: Set StreamDefinition on a capnp builder
+fn set_stream_definition(
+    builder: &mut streams_capnp::stream_definition::Builder,
+    def: &StreamDefinition,
+) {
+    builder.set_uri(&def.uri);
+    builder.set_device_identity(&def.device_identity);
+    builder.set_chunk_size_bytes(def.chunk_size_bytes);
+
+    let mut format = builder.reborrow().init_format();
+    match &def.format {
+        StreamFormat::Audio { sample_rate, channels, sample_format } => {
+            let mut audio = format.init_audio();
+            audio.set_sample_rate(*sample_rate);
+            audio.set_channels(*channels);
+            audio.set_sample_format(match sample_format {
+                SampleFormat::F32 => streams_capnp::SampleFormat::F32,
+                SampleFormat::I16 => streams_capnp::SampleFormat::I16,
+                SampleFormat::I24 => streams_capnp::SampleFormat::I24,
+            });
+        }
+        StreamFormat::Midi => {
+            format.set_midi(());
+        }
+    }
+}
+
 /// Convert a Payload response to Cap'n Proto Envelope
 pub fn payload_to_capnp_envelope(
     request_id: uuid::Uuid,
@@ -1845,11 +1921,511 @@ fn payload_to_capnp_payload(
             regions.set_end(end.unwrap_or(0.0));
         }
 
-        // For other payloads, we'd need to handle each variant
-        // For now, convert to JSON in Success wrapper
-        other => {
-            let mut success = builder.reborrow().init_success();
-            success.set_result(&serde_json::to_string(other).unwrap_or_default());
+        // === Transport Commands (Direct envelope) ===
+        Payload::TransportPlay => {
+            builder.reborrow().set_transport_play(());
+        }
+
+        Payload::TransportStop => {
+            builder.reborrow().set_transport_stop(());
+        }
+
+        Payload::TransportSeek { position_beats } => {
+            let mut seek = builder.reborrow().init_transport_seek();
+            seek.set_position_beats(*position_beats);
+        }
+
+        Payload::TransportStatus => {
+            builder.reborrow().set_transport_status(());
+        }
+
+        // === Timeline Commands (Direct envelope) ===
+        Payload::TimelineQuery { from_beats, to_beats } => {
+            let mut q = builder.reborrow().init_timeline_query();
+            q.set_from_beats(from_beats.unwrap_or(0.0));
+            q.set_to_beats(to_beats.unwrap_or(0.0));
+        }
+
+        Payload::TimelineAddMarker { position_beats, marker_type, metadata } => {
+            let mut marker = builder.reborrow().init_timeline_add_marker();
+            marker.set_position_beats(*position_beats);
+            marker.set_marker_type(marker_type);
+            marker.set_metadata(&serde_json::to_string(metadata).unwrap_or_default());
+        }
+
+        Payload::TimelineEvent { event_type, position_beats, tempo, metadata } => {
+            let mut event = builder.reborrow().init_timeline_event();
+            event.set_event_type(timeline_event_type_to_capnp(event_type));
+            event.set_position_beats(*position_beats);
+            event.set_tempo(*tempo);
+            event.set_metadata(&serde_json::to_string(metadata).unwrap_or_default());
+        }
+
+        // === Stream Commands (Direct envelope) ===
+        Payload::StreamStart { uri, definition, chunk_path } => {
+            let mut start = builder.reborrow().init_stream_start();
+            start.set_uri(uri);
+            set_stream_definition(&mut start.reborrow().init_definition(), definition);
+            start.set_chunk_path(chunk_path);
+        }
+
+        Payload::StreamSwitchChunk { uri, new_chunk_path } => {
+            let mut switch = builder.reborrow().init_stream_switch_chunk();
+            switch.set_uri(uri);
+            switch.set_new_chunk_path(new_chunk_path);
+        }
+
+        Payload::StreamStop { uri } => {
+            let mut stop = builder.reborrow().init_stream_stop();
+            stop.set_uri(uri);
+        }
+
+        // === CAS Tools (ToolRequest) ===
+        Payload::CasStore { data, mime_type } => {
+            let mut req = builder.reborrow().init_tool_request().init_cas_store();
+            req.set_data(data);
+            req.set_mime_type(mime_type);
+        }
+
+        Payload::CasInspect { hash } => {
+            let mut req = builder.reborrow().init_tool_request().init_cas_inspect();
+            req.set_hash(hash);
+        }
+
+        Payload::CasGet { hash } => {
+            let mut req = builder.reborrow().init_tool_request().init_cas_get();
+            req.set_hash(hash);
+        }
+
+        Payload::CasUploadFile { file_path, mime_type } => {
+            let mut req = builder.reborrow().init_tool_request().init_cas_upload_file();
+            req.set_file_path(file_path);
+            req.set_mime_type(mime_type);
+        }
+
+        // === Orpheus Tools (ToolRequest) ===
+        Payload::OrpheusGenerate {
+            model, temperature, top_p, max_tokens, num_variations,
+            variation_set_id, parent_id, tags, creator
+        } => {
+            let mut req = builder.reborrow().init_tool_request().init_orpheus_generate();
+            req.set_model(model.as_deref().unwrap_or(""));
+            req.set_temperature(temperature.unwrap_or(1.0));
+            req.set_top_p(top_p.unwrap_or(0.95));
+            req.set_max_tokens(max_tokens.unwrap_or(1024));
+            req.set_num_variations(num_variations.unwrap_or(1));
+            set_artifact_metadata(&mut req.reborrow().init_metadata(), variation_set_id, parent_id, tags, creator);
+        }
+
+        Payload::OrpheusGenerateSeeded {
+            seed_hash, model, temperature, top_p, max_tokens, num_variations,
+            variation_set_id, parent_id, tags, creator
+        } => {
+            let mut req = builder.reborrow().init_tool_request().init_orpheus_generate_seeded();
+            req.set_seed_hash(seed_hash);
+            req.set_model(model.as_deref().unwrap_or(""));
+            req.set_temperature(temperature.unwrap_or(1.0));
+            req.set_top_p(top_p.unwrap_or(0.95));
+            req.set_max_tokens(max_tokens.unwrap_or(1024));
+            req.set_num_variations(num_variations.unwrap_or(1));
+            set_artifact_metadata(&mut req.reborrow().init_metadata(), variation_set_id, parent_id, tags, creator);
+        }
+
+        Payload::OrpheusContinue {
+            input_hash, model, temperature, top_p, max_tokens, num_variations,
+            variation_set_id, parent_id, tags, creator
+        } => {
+            let mut req = builder.reborrow().init_tool_request().init_orpheus_continue();
+            req.set_input_hash(input_hash);
+            req.set_model(model.as_deref().unwrap_or(""));
+            req.set_temperature(temperature.unwrap_or(1.0));
+            req.set_top_p(top_p.unwrap_or(0.95));
+            req.set_max_tokens(max_tokens.unwrap_or(1024));
+            req.set_num_variations(num_variations.unwrap_or(1));
+            set_artifact_metadata(&mut req.reborrow().init_metadata(), variation_set_id, parent_id, tags, creator);
+        }
+
+        Payload::OrpheusBridge {
+            section_a_hash, section_b_hash, model, temperature, top_p, max_tokens,
+            variation_set_id, parent_id, tags, creator
+        } => {
+            let mut req = builder.reborrow().init_tool_request().init_orpheus_bridge();
+            req.set_section_a_hash(section_a_hash);
+            req.set_section_b_hash(section_b_hash.as_deref().unwrap_or(""));
+            req.set_model(model.as_deref().unwrap_or(""));
+            req.set_temperature(temperature.unwrap_or(1.0));
+            req.set_top_p(top_p.unwrap_or(0.95));
+            req.set_max_tokens(max_tokens.unwrap_or(1024));
+            set_artifact_metadata(&mut req.reborrow().init_metadata(), variation_set_id, parent_id, tags, creator);
+        }
+
+        Payload::OrpheusLoops {
+            temperature, top_p, max_tokens, num_variations, seed_hash,
+            variation_set_id, parent_id, tags, creator
+        } => {
+            let mut req = builder.reborrow().init_tool_request().init_orpheus_loops();
+            req.set_temperature(temperature.unwrap_or(1.0));
+            req.set_top_p(top_p.unwrap_or(0.95));
+            req.set_max_tokens(max_tokens.unwrap_or(1024));
+            req.set_num_variations(num_variations.unwrap_or(1));
+            req.set_seed_hash(seed_hash.as_deref().unwrap_or(""));
+            set_artifact_metadata(&mut req.reborrow().init_metadata(), variation_set_id, parent_id, tags, creator);
+        }
+
+        Payload::OrpheusClassify { midi_hash } => {
+            let mut req = builder.reborrow().init_tool_request().init_orpheus_classify();
+            req.set_midi_hash(midi_hash);
+        }
+
+        // === ABC Tools (ToolRequest) ===
+        Payload::AbcParse { abc } => {
+            let mut req = builder.reborrow().init_tool_request().init_abc_parse();
+            req.set_abc(abc);
+        }
+
+        Payload::AbcToMidi {
+            abc, tempo_override, transpose, velocity, channel,
+            variation_set_id, parent_id, tags, creator
+        } => {
+            let mut req = builder.reborrow().init_tool_request().init_abc_to_midi();
+            req.set_abc(abc);
+            req.set_tempo_override(tempo_override.unwrap_or(0));
+            req.set_transpose(transpose.unwrap_or(0));
+            req.set_velocity(velocity.unwrap_or(80));
+            req.set_channel(channel.unwrap_or(0));
+            set_artifact_metadata(&mut req.reborrow().init_metadata(), variation_set_id, parent_id, tags, creator);
+        }
+
+        Payload::AbcValidate { abc } => {
+            let mut req = builder.reborrow().init_tool_request().init_abc_validate();
+            req.set_abc(abc);
+        }
+
+        Payload::AbcTranspose { abc, semitones, target_key } => {
+            let mut req = builder.reborrow().init_tool_request().init_abc_transpose();
+            req.set_abc(abc);
+            req.set_semitones(semitones.unwrap_or(0));
+            req.set_target_key(target_key.as_deref().unwrap_or(""));
+        }
+
+        // === MIDI/Audio Tools (ToolRequest) ===
+        Payload::ConvertMidiToWav {
+            input_hash, soundfont_hash, sample_rate,
+            variation_set_id, parent_id, tags, creator
+        } => {
+            let mut req = builder.reborrow().init_tool_request().init_convert_midi_to_wav();
+            req.set_input_hash(input_hash);
+            req.set_soundfont_hash(soundfont_hash);
+            req.set_sample_rate(sample_rate.unwrap_or(44100));
+            set_artifact_metadata(&mut req.reborrow().init_metadata(), variation_set_id, parent_id, tags, creator);
+        }
+
+        Payload::SoundfontInspect { soundfont_hash, include_drum_map } => {
+            let mut req = builder.reborrow().init_tool_request().init_soundfont_inspect();
+            req.set_soundfont_hash(soundfont_hash);
+            req.set_include_drum_map(*include_drum_map);
+        }
+
+        Payload::SoundfontPresetInspect { soundfont_hash, bank, program } => {
+            let mut req = builder.reborrow().init_tool_request().init_soundfont_preset_inspect();
+            req.set_soundfont_hash(soundfont_hash);
+            req.set_bank(*bank);
+            req.set_program(*program);
+        }
+
+        // === Analysis Tools (ToolRequest) ===
+        Payload::BeatthisAnalyze { audio_path, audio_hash, include_frames } => {
+            let mut req = builder.reborrow().init_tool_request().init_beatthis_analyze();
+            req.set_audio_path(audio_path.as_deref().unwrap_or(""));
+            req.set_audio_hash(audio_hash.as_deref().unwrap_or(""));
+            req.set_include_frames(*include_frames);
+        }
+
+        Payload::ClapAnalyze {
+            audio_hash, tasks, audio_b_hash, text_candidates, parent_id, creator
+        } => {
+            let mut req = builder.reborrow().init_tool_request().init_clap_analyze();
+            req.set_audio_hash(audio_hash);
+            {
+                let mut tasks_builder = req.reborrow().init_tasks(tasks.len() as u32);
+                for (i, task) in tasks.iter().enumerate() {
+                    tasks_builder.set(i as u32, task);
+                }
+            }
+            req.set_audio_b_hash(audio_b_hash.as_deref().unwrap_or(""));
+            {
+                let mut candidates = req.reborrow().init_text_candidates(text_candidates.len() as u32);
+                for (i, c) in text_candidates.iter().enumerate() {
+                    candidates.set(i as u32, c);
+                }
+            }
+            req.set_parent_id(parent_id.as_deref().unwrap_or(""));
+            req.set_creator(creator.as_deref().unwrap_or(""));
+        }
+
+        // === Generation Tools (ToolRequest) ===
+        Payload::MusicgenGenerate {
+            prompt, duration, temperature, top_k, top_p, guidance_scale, do_sample,
+            variation_set_id, parent_id, tags, creator
+        } => {
+            let mut req = builder.reborrow().init_tool_request().init_musicgen_generate();
+            req.set_prompt(prompt.as_deref().unwrap_or(""));
+            req.set_duration(duration.unwrap_or(10.0));
+            req.set_temperature(temperature.unwrap_or(1.0));
+            req.set_top_k(top_k.unwrap_or(250));
+            req.set_top_p(top_p.unwrap_or(0.9));
+            req.set_guidance_scale(guidance_scale.unwrap_or(3.0));
+            req.set_do_sample(do_sample.unwrap_or(true));
+            set_artifact_metadata(&mut req.reborrow().init_metadata(), variation_set_id, parent_id, tags, creator);
+        }
+
+        Payload::YueGenerate {
+            lyrics, genre, max_new_tokens, run_n_segments, seed,
+            variation_set_id, parent_id, tags, creator
+        } => {
+            let mut req = builder.reborrow().init_tool_request().init_yue_generate();
+            req.set_lyrics(lyrics);
+            req.set_genre(genre.as_deref().unwrap_or("Pop"));
+            req.set_max_new_tokens(max_new_tokens.unwrap_or(3000));
+            req.set_run_n_segments(run_n_segments.unwrap_or(2));
+            req.set_seed(seed.unwrap_or(42));
+            set_artifact_metadata(&mut req.reborrow().init_metadata(), variation_set_id, parent_id, tags, creator);
+        }
+
+        // === Artifact Tools (ToolRequest) ===
+        Payload::ArtifactUpload {
+            file_path, mime_type, variation_set_id, parent_id, tags, creator
+        } => {
+            let mut req = builder.reborrow().init_tool_request().init_artifact_upload();
+            req.set_file_path(file_path);
+            req.set_mime_type(mime_type);
+            set_artifact_metadata(&mut req.reborrow().init_metadata(), variation_set_id, parent_id, tags, creator);
+        }
+
+        Payload::ArtifactGet { id } => {
+            let mut req = builder.reborrow().init_tool_request().init_artifact_get();
+            req.set_id(id);
+        }
+
+        Payload::ArtifactList { tag, creator } => {
+            let mut req = builder.reborrow().init_tool_request().init_artifact_list();
+            req.set_tag(tag.as_deref().unwrap_or(""));
+            req.set_creator(creator.as_deref().unwrap_or(""));
+        }
+
+        Payload::ArtifactCreate { cas_hash, tags, creator, metadata } => {
+            let mut req = builder.reborrow().init_tool_request().init_artifact_create();
+            req.set_cas_hash(cas_hash);
+            {
+                let mut tags_builder = req.reborrow().init_tags(tags.len() as u32);
+                for (i, tag) in tags.iter().enumerate() {
+                    tags_builder.set(i as u32, tag);
+                }
+            }
+            req.set_creator(creator.as_deref().unwrap_or(""));
+            req.set_metadata(&serde_json::to_string(metadata).unwrap_or_default());
+        }
+
+        // === Graph Tools (ToolRequest) ===
+        Payload::GraphQuery { query, variables, limit } => {
+            let mut req = builder.reborrow().init_tool_request().init_graph_query();
+            req.set_query(query);
+            req.set_variables(&serde_json::to_string(variables).unwrap_or_default());
+            req.set_limit(limit.unwrap_or(100) as u32);
+        }
+
+        Payload::GraphBind { id, name, hints } => {
+            let mut req = builder.reborrow().init_tool_request().init_graph_bind();
+            req.set_id(id);
+            req.set_name(name);
+            {
+                let mut hints_builder = req.reborrow().init_hints(hints.len() as u32);
+                for (i, hint) in hints.iter().enumerate() {
+                    let mut h = hints_builder.reborrow().get(i as u32);
+                    h.set_kind(&hint.kind);
+                    h.set_value(&hint.value);
+                    h.set_confidence(hint.confidence);
+                }
+            }
+        }
+
+        Payload::GraphTag { identity_id, namespace, value } => {
+            let mut req = builder.reborrow().init_tool_request().init_graph_tag();
+            req.set_identity_id(identity_id);
+            req.set_namespace(namespace);
+            req.set_value(value);
+        }
+
+        Payload::GraphConnect { from_identity, from_port, to_identity, to_port, transport } => {
+            let mut req = builder.reborrow().init_tool_request().init_graph_connect();
+            req.set_from_identity(from_identity);
+            req.set_from_port(from_port);
+            req.set_to_identity(to_identity);
+            req.set_to_port(to_port);
+            req.set_transport(transport.as_deref().unwrap_or(""));
+        }
+
+        Payload::GraphFind { name, tag_namespace, tag_value } => {
+            let mut req = builder.reborrow().init_tool_request().init_graph_find();
+            req.set_name(name.as_deref().unwrap_or(""));
+            req.set_tag_namespace(tag_namespace.as_deref().unwrap_or(""));
+            req.set_tag_value(tag_value.as_deref().unwrap_or(""));
+        }
+
+        Payload::GraphContext {
+            tag, vibe_search, creator, limit, include_metadata, include_annotations
+        } => {
+            let mut req = builder.reborrow().init_tool_request().init_graph_context();
+            req.set_tag(tag.as_deref().unwrap_or(""));
+            req.set_vibe_search(vibe_search.as_deref().unwrap_or(""));
+            req.set_creator(creator.as_deref().unwrap_or(""));
+            req.set_limit(limit.unwrap_or(20) as u32);
+            req.set_include_metadata(*include_metadata);
+            req.set_include_annotations(*include_annotations);
+        }
+
+        Payload::AddAnnotation { artifact_id, message, vibe, source } => {
+            let mut req = builder.reborrow().init_tool_request().init_add_annotation();
+            req.set_artifact_id(artifact_id);
+            req.set_message(message);
+            req.set_vibe(vibe.as_deref().unwrap_or(""));
+            req.set_source(source.as_deref().unwrap_or(""));
+        }
+
+        // === Config Tools (ToolRequest) ===
+        Payload::ConfigGet { section, key } => {
+            let mut req = builder.reborrow().init_tool_request().init_config_get();
+            req.set_section(section.as_deref().unwrap_or(""));
+            req.set_key(key.as_deref().unwrap_or(""));
+        }
+
+        // === Lua Tools (ToolRequest) ===
+        Payload::LuaEval { code, params } => {
+            let mut req = builder.reborrow().init_tool_request().init_lua_eval();
+            req.set_code(code);
+            req.set_params(&params.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default()).unwrap_or_default());
+        }
+
+        Payload::LuaDescribe { script_hash } => {
+            let mut req = builder.reborrow().init_tool_request().init_lua_describe();
+            req.set_script_hash(script_hash);
+        }
+
+        Payload::ScriptStore { content, tags, creator } => {
+            let mut req = builder.reborrow().init_tool_request().init_script_store();
+            req.set_content(content);
+            if let Some(ref tags_vec) = tags {
+                let mut tags_builder = req.reborrow().init_tags(tags_vec.len() as u32);
+                for (i, tag) in tags_vec.iter().enumerate() {
+                    tags_builder.set(i as u32, tag);
+                }
+            }
+            req.set_creator(creator.as_deref().unwrap_or(""));
+        }
+
+        Payload::ScriptSearch { tag, creator, vibe } => {
+            let mut req = builder.reborrow().init_tool_request().init_script_search();
+            req.set_tag(tag.as_deref().unwrap_or(""));
+            req.set_creator(creator.as_deref().unwrap_or(""));
+            req.set_vibe(vibe.as_deref().unwrap_or(""));
+        }
+
+        // === Job Tools (ToolRequest) ===
+        Payload::JobExecute { script_hash, params, tags } => {
+            let mut req = builder.reborrow().init_tool_request().init_job_execute();
+            req.set_script_hash(script_hash);
+            req.set_params(&serde_json::to_string(params).unwrap_or_default());
+            if let Some(ref tags_vec) = tags {
+                let mut tags_builder = req.reborrow().init_tags(tags_vec.len() as u32);
+                for (i, tag) in tags_vec.iter().enumerate() {
+                    tags_builder.set(i as u32, tag);
+                }
+            }
+        }
+
+        Payload::JobStatus { job_id } => {
+            let mut req = builder.reborrow().init_tool_request().init_job_status();
+            req.set_job_id(job_id);
+        }
+
+        Payload::JobPoll { job_ids, timeout_ms, mode } => {
+            let mut req = builder.reborrow().init_tool_request().init_job_poll();
+            {
+                let mut ids = req.reborrow().init_job_ids(job_ids.len() as u32);
+                for (i, id) in job_ids.iter().enumerate() {
+                    ids.set(i as u32, id);
+                }
+            }
+            req.set_timeout_ms(*timeout_ms);
+            req.set_mode(poll_mode_to_capnp(mode));
+        }
+
+        Payload::JobCancel { job_id } => {
+            let mut req = builder.reborrow().init_tool_request().init_job_cancel();
+            req.set_job_id(job_id);
+        }
+
+        Payload::JobList { status } => {
+            let mut req = builder.reborrow().init_tool_request().init_job_list();
+            req.set_status(status.as_deref().unwrap_or(""));
+        }
+
+        Payload::JobSleep { milliseconds } => {
+            let mut req = builder.reborrow().init_tool_request().init_job_sleep();
+            req.set_milliseconds(*milliseconds);
+        }
+
+        // === Resource Tools (ToolRequest) ===
+        Payload::ReadResource { uri } => {
+            let mut req = builder.reborrow().init_tool_request().init_read_resource();
+            req.set_uri(uri);
+        }
+
+        Payload::Complete { context, partial } => {
+            let mut req = builder.reborrow().init_tool_request().init_complete();
+            req.set_context(context);
+            req.set_partial(partial);
+        }
+
+        Payload::SampleLlm { prompt, max_tokens, temperature, system_prompt } => {
+            let mut req = builder.reborrow().init_tool_request().init_sample_llm();
+            req.set_prompt(prompt);
+            req.set_max_tokens(max_tokens.unwrap_or(1024));
+            req.set_temperature(temperature.unwrap_or(0.7));
+            req.set_system_prompt(system_prompt.as_deref().unwrap_or(""));
+        }
+
+        // === Worker Management (Direct envelope) ===
+        Payload::Register(registration) => {
+            let mut reg = builder.reborrow().init_register();
+            let mut worker_id = reg.reborrow().init_worker_id();
+            let bytes = registration.worker_id.as_bytes();
+            worker_id.set_low(u64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]));
+            worker_id.set_high(u64::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]]));
+            reg.set_worker_type(worker_type_to_capnp(&registration.worker_type));
+            reg.set_worker_name(&registration.worker_name);
+            {
+                let mut caps = reg.reborrow().init_capabilities(registration.capabilities.len() as u32);
+                for (i, cap) in registration.capabilities.iter().enumerate() {
+                    caps.set(i as u32, cap);
+                }
+            }
+            reg.set_hostname(&registration.hostname);
+            reg.set_version(&registration.version);
+        }
+
+        Payload::Pong { worker_id, uptime_secs } => {
+            let mut pong = builder.reborrow().init_pong();
+            let mut wid = pong.reborrow().init_worker_id();
+            let bytes = worker_id.as_bytes();
+            wid.set_low(u64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]));
+            wid.set_high(u64::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]]));
+            pong.set_uptime_secs(*uptime_secs);
+        }
+
+        Payload::Shutdown { reason } => {
+            let mut shutdown = builder.reborrow().init_shutdown();
+            shutdown.set_reason(reason);
         }
     }
 
