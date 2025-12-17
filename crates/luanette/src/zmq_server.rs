@@ -1,12 +1,16 @@
 //! ZMQ ROUTER server for Luanette
 //!
-//! Binds a ROUTER socket and handles hooteproto messages from:
+//! Binds a ROUTER socket and handles HOOT01 + Cap'n Proto messages from:
 //! - Holler (MCP gateway)
-//! - Chaosgarden (real-time triggers)
+//! - Hootenanny (proxying tools)
 //! - holler CLI (direct access)
 
 use anyhow::{Context, Result};
-use hooteproto::{Envelope, Payload};
+use bytes::Bytes;
+use hooteproto::{
+    capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope,
+    Command, ContentType, HootFrame, Payload, PROTOCOL_VERSION,
+};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -15,6 +19,19 @@ use uuid::Uuid;
 use zeromq::{RouterSocket, Socket, SocketRecv, SocketSend, ZmqMessage};
 
 use crate::dispatch::Dispatcher;
+
+/// Frames to ZmqMessage helper
+fn frames_to_zmq_message(frames: &[Bytes]) -> ZmqMessage {
+    if frames.is_empty() {
+        return ZmqMessage::from(Vec::<u8>::new());
+    }
+
+    let mut msg = ZmqMessage::from(frames[0].to_vec());
+    for frame in frames.iter().skip(1) {
+        msg.push_back(frame.to_vec().into());
+    }
+    msg
+}
 
 /// ZMQ server configuration
 pub struct ServerConfig {
@@ -84,42 +101,81 @@ impl Server {
 
     /// Handle a single incoming message
     async fn handle_message(&self, socket: &mut RouterSocket, msg: ZmqMessage) -> Result<()> {
-        // ROUTER sockets prepend identity frame(s)
-        // Frame 0: identity
-        // Frame 1: payload
-        let identity = msg
-            .get(0)
-            .context("Missing identity frame")?
-            .to_vec();
+        // Convert ZMQ message to frames
+        let frames: Vec<Bytes> = msg.iter().map(|f| Bytes::copy_from_slice(f)).collect();
 
-        let payload_bytes = msg
-            .get(1)
-            .context("Missing payload frame")?;
+        // Only accept HOOT01 frames
+        if !frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
+            warn!("Received non-HOOT01 message, ignoring");
+            return Ok(());
+        }
 
-        debug!("Received {} bytes", payload_bytes.len());
+        // Parse HOOT01 frame (with identity for ROUTER socket)
+        let (identity, frame) = HootFrame::from_frames_with_identity(&frames)?;
 
-        // Parse the envelope from MsgPack
-        let envelope: Envelope = rmp_serde::from_slice(payload_bytes)
-            .with_context(|| "Failed to parse MsgPack envelope")?;
+        debug!(
+            "HOOT01 {:?} from service={} request_id={}",
+            frame.command, frame.service, frame.request_id
+        );
 
-        // Dispatch and get response
-        let response_payload = self.dispatch(envelope.payload).await;
+        match frame.command {
+            Command::Heartbeat => {
+                // Respond with heartbeat
+                let response = HootFrame::heartbeat("luanette");
+                let reply_frames = response.to_frames_with_identity(&identity);
+                let reply = frames_to_zmq_message(&reply_frames);
+                socket.send(reply).await?;
+                debug!("Heartbeat response sent");
+            }
 
-        // Build response envelope
-        let response = Envelope {
-            id: envelope.id,
-            traceparent: envelope.traceparent,
-            payload: response_payload,
-        };
+            Command::Request => {
+                // Parse Cap'n Proto envelope to Payload
+                let payload_result = match frame.read_capnp() {
+                    Ok(reader) => match reader.get_root::<envelope_capnp::envelope::Reader>() {
+                        Ok(envelope_reader) => capnp_envelope_to_payload(envelope_reader).map_err(|e| e.to_string()),
+                        Err(e) => Err(e.to_string()),
+                    },
+                    Err(e) => Err(e.to_string()),
+                };
 
-        // Serialize response to MsgPack
-        let response_bytes = rmp_serde::to_vec(&response)?;
-        debug!("Sending response: {} bytes", response_bytes.len());
+                let result_payload = match payload_result {
+                    Ok(payload) => {
+                        // Dispatch to handler
+                        self.dispatch(payload).await
+                    }
+                    Err(e) => {
+                        error!("Failed to parse capnp envelope: {}", e);
+                        Payload::Error {
+                            code: "capnp_parse_error".to_string(),
+                            message: e,
+                            details: None,
+                        }
+                    }
+                };
 
-        // Send response with identity frame
-        let mut reply = ZmqMessage::from(identity);
-        reply.push_back(response_bytes.into());
-        socket.send(reply).await?;
+                // Convert result to Cap'n Proto envelope
+                let response_msg = payload_to_capnp_envelope(frame.request_id, &result_payload)?;
+
+                // Serialize and send
+                let bytes = capnp::serialize::write_message_to_words(&response_msg);
+                let response_frame = HootFrame {
+                    command: Command::Reply,
+                    content_type: ContentType::CapnProto,
+                    request_id: frame.request_id,
+                    service: "luanette".to_string(),
+                    traceparent: None,
+                    body: bytes.into(),
+                };
+
+                let reply_frames = response_frame.to_frames_with_identity(&identity);
+                let reply = frames_to_zmq_message(&reply_frames);
+                socket.send(reply).await?;
+            }
+
+            other => {
+                debug!("Ignoring command: {:?}", other);
+            }
+        }
 
         Ok(())
     }

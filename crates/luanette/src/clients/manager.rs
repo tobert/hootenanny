@@ -1,12 +1,17 @@
 //! ZMQ client for upstream hootenanny server.
 //!
-//! Connects directly to hootenanny via ZMQ DEALER socket using hooteproto.
+//! Connects directly to hootenanny via ZMQ DEALER socket using HOOT01 + Cap'n Proto.
 
 use anyhow::{Context, Result};
-use hooteproto::{Envelope, Payload, ToolInfo};
+use bytes::Bytes;
+use hooteproto::{
+    capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope,
+    Command, ContentType, HootFrame, Payload, ToolInfo,
+};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
+use uuid::Uuid;
 use zeromq::{DealerSocket, Socket, SocketRecv, SocketSend, ZmqMessage};
 
 /// Configuration for the upstream hootenanny connection.
@@ -48,16 +53,36 @@ impl HootClient {
     }
 
     async fn request(&self, payload: Payload) -> Result<Payload> {
-        let envelope = Envelope::new(payload);
-        let bytes = rmp_serde::to_vec(&envelope)?;
+        // Generate request ID
+        let request_id = Uuid::new_v4();
 
-        debug!("Sending {} bytes to hootenanny", bytes.len());
+        // Convert payload to Cap'n Proto envelope
+        let message = payload_to_capnp_envelope(request_id, &payload)
+            .context("Failed to convert payload to capnp")?;
+
+        // Serialize to bytes
+        let body_bytes = capnp::serialize::write_message_to_words(&message);
+
+        // Create HootFrame
+        let frame = HootFrame {
+            command: Command::Request,
+            content_type: ContentType::CapnProto,
+            request_id,
+            service: "hootenanny".to_string(),
+            traceparent: None,
+            body: Bytes::from(body_bytes),
+        };
+
+        // Serialize HootFrame to ZMQ message
+        let frames = frame.to_frames();
+        let zmq_msg = frames_to_zmq_message(&frames);
+
+        debug!("Sending capnp request to hootenanny ({} bytes)", frame.body.len());
 
         let mut socket = self.socket.write().await;
 
         // Send
-        let msg = ZmqMessage::from(bytes);
-        tokio::time::timeout(self.timeout, socket.send(msg))
+        tokio::time::timeout(self.timeout, socket.send(zmq_msg))
             .await
             .context("Send timeout")?
             .context("Failed to send")?;
@@ -68,11 +93,27 @@ impl HootClient {
             .context("Receive timeout")?
             .context("Failed to receive")?;
 
-        let response_bytes = response.get(0).context("Empty response")?;
-        let response_envelope: Envelope = rmp_serde::from_slice(response_bytes)
-            .context("Failed to deserialize response")?;
+        // Parse HootFrame from response
+        let response_frames: Vec<Bytes> = response
+            .into_vec()
+            .into_iter()
+            .map(|bytes| Bytes::from(bytes))
+            .collect();
 
-        Ok(response_envelope.payload)
+        let response_frame = HootFrame::from_frames(&response_frames)
+            .context("Failed to parse response HootFrame")?;
+
+        // Parse Cap'n Proto response
+        let reader = response_frame.read_capnp()
+            .context("Failed to read capnp from response")?;
+
+        let envelope_reader = reader.get_root::<envelope_capnp::envelope::Reader>()
+            .context("Failed to get envelope root")?;
+
+        let response_payload = capnp_envelope_to_payload(envelope_reader)
+            .context("Failed to convert capnp to payload")?;
+
+        Ok(response_payload)
     }
 
     async fn discover_tools(&mut self) -> Result<()> {
@@ -90,6 +131,19 @@ impl HootClient {
             }
         }
     }
+}
+
+/// Frames to ZmqMessage helper
+fn frames_to_zmq_message(frames: &[Bytes]) -> ZmqMessage {
+    if frames.is_empty() {
+        return ZmqMessage::from(Vec::<u8>::new());
+    }
+
+    let mut msg = ZmqMessage::from(frames[0].to_vec());
+    for frame in frames.iter().skip(1) {
+        msg.push_back(frame.to_vec().into());
+    }
+    msg
 }
 
 /// Manages the connection to upstream hootenanny.
