@@ -203,7 +203,7 @@ fn run_pipewire_capture_loop(
         *pw::keys::MEDIA_ROLE => "Production", // Recording/production role
         *pw::keys::MEDIA_CATEGORY => "Capture",
         *pw::keys::AUDIO_CHANNELS => config.channels.to_string(),
-        *pw::keys::NODE_TARGET => config.device_name.as_str(), // Target specific device
+        "target.object" => config.device_name.as_str(), // Target specific device
     };
 
     let stream_name = format!("capture-{}", config.stream_uri.as_str());
@@ -223,21 +223,21 @@ fn run_pipewire_capture_loop(
             stats.callbacks.fetch_add(1, Ordering::Relaxed);
 
             // Get buffer from PipeWire
-            let Some(buffer) = stream.dequeue_buffer() else {
+            let Some(mut buffer) = stream.dequeue_buffer() else {
                 return;
             };
 
-            let datas = buffer.datas();
-            let Some(data) = datas.first() else {
+            let datas = buffer.datas_mut();
+            let Some(data) = datas.first_mut() else {
                 return;
             };
+
+            // Get chunk info first (before borrowing data)
+            let size = data.chunk().size() as usize;
+
             let Some(slice) = data.data() else {
                 return;
             };
-
-            // Calculate how many frames we received
-            let chunk = data.chunk();
-            let size = chunk.size() as usize;
             let n_frames = size / stride;
 
             if n_frames == 0 {
@@ -260,8 +260,18 @@ fn run_pipewire_capture_loop(
                 }
             }
 
+            // RT-SAFE: Convert f32 samples to bytes
+            // Safety: transmute Vec<f32> to &[u8] for writing
+            let sample_count = samples.len() as u64;
+            let bytes: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    samples.as_ptr() as *const u8,
+                    samples.len() * std::mem::size_of::<f32>(),
+                )
+            };
+
             // RT-SAFE: Write to mmap'd file via StreamManager
-            if let Err(e) = stream_mgr.write_samples(&stream_uri_for_callback, &samples) {
+            if let Err(e) = stream_mgr.write_samples(&stream_uri_for_callback, bytes, sample_count) {
                 // Log error but don't panic - keep capturing
                 // Note: tracing is RT-safe with lock-free logging
                 error!(
@@ -272,7 +282,7 @@ fn run_pipewire_capture_loop(
             } else {
                 stats
                     .samples_captured
-                    .fetch_add(samples.len() as u64, Ordering::Relaxed);
+                    .fetch_add(sample_count, Ordering::Relaxed);
             }
 
             // Note: Chunk rotation (StreamChunkFull broadcast) is handled by

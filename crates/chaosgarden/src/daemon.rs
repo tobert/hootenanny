@@ -382,8 +382,8 @@ impl GardenDaemon {
 
             // Extract audio format info
             let (sample_rate, channels) = match &internal_def.format {
-                crate::stream_io::StreamFormat::Audio(audio) => {
-                    (audio.sample_rate, audio.channels as u32)
+                crate::stream_io::StreamFormat::Audio { sample_rate, channels, .. } => {
+                    (*sample_rate, *channels as u32)
                 }
                 crate::stream_io::StreamFormat::Midi => {
                     return Err("MIDI capture not yet supported".to_string());
