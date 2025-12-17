@@ -74,6 +74,10 @@ pub struct GardenDaemon {
     // Stream event publisher
     stream_publisher: Arc<dyn StreamEventPublisher>,
 
+    // Active PipeWire input streams
+    #[cfg(feature = "pipewire")]
+    active_inputs: Arc<RwLock<std::collections::HashMap<crate::stream_io::StreamUri, crate::pipewire_input::PipeWireInputStream>>>,
+
     // Query adapter (pre-built, shares state refs)
     query_adapter: Option<Arc<ChaosgardenAdapter>>,
 }
@@ -119,6 +123,8 @@ impl GardenDaemon {
             latent_manager,
             stream_manager,
             stream_publisher,
+            #[cfg(feature = "pipewire")]
+            active_inputs: Arc::new(RwLock::new(std::collections::HashMap::new())),
             query_adapter,
         }
     }
@@ -360,15 +366,57 @@ impl GardenDaemon {
     ) -> Result<(), String> {
         // Convert IPC types to internal types
         let stream_uri = StreamUri::from(uri.as_str());
-        let internal_def = convert_ipc_stream_definition(&definition, stream_uri);
+        let internal_def = convert_ipc_stream_definition(&definition, stream_uri.clone());
 
-        // Start the stream
+        // Start the stream (creates metadata and staging chunk)
         self.stream_manager
-            .start_stream(internal_def, &chunk_path)
+            .start_stream(internal_def.clone(), &chunk_path)
             .map_err(|e| e.to_string())?;
 
         info!("Started stream: {} -> {}", uri, chunk_path);
-        Ok(())
+
+        // Start PipeWire capture (if pipewire feature enabled)
+        #[cfg(feature = "pipewire")]
+        {
+            use crate::pipewire_input::{PipeWireInputConfig, PipeWireInputStream};
+
+            // Extract audio format info
+            let (sample_rate, channels) = match &internal_def.format {
+                crate::stream_io::StreamFormat::Audio(audio) => {
+                    (audio.sample_rate, audio.channels as u32)
+                }
+                crate::stream_io::StreamFormat::Midi => {
+                    return Err("MIDI capture not yet supported".to_string());
+                }
+            };
+
+            // Create PipeWire input config
+            // NOTE: device_identity is the PipeWire node name (e.g., "alsa_input.usb-...")
+            let pw_config = PipeWireInputConfig {
+                device_name: definition.device_identity.clone(),
+                stream_uri: stream_uri.clone(),
+                sample_rate,
+                channels,
+            };
+
+            // Create and start PipeWire input stream
+            let input_stream = PipeWireInputStream::new(pw_config, self.stream_manager.clone())
+                .map_err(|e| format!("Failed to start PipeWire capture: {}", e))?;
+
+            // Track active input
+            self.active_inputs
+                .write()
+                .unwrap()
+                .insert(stream_uri.clone(), input_stream);
+
+            info!("PipeWire capture started for stream: {}", uri);
+            Ok(())
+        }
+
+        #[cfg(not(feature = "pipewire"))]
+        {
+            Err("PipeWire feature not enabled (compile with --features pipewire)".to_string())
+        }
     }
 
     /// Handle stream chunk switch command
@@ -387,6 +435,16 @@ impl GardenDaemon {
     fn handle_stream_stop(&self, uri: String) -> Result<(), String> {
         let stream_uri = StreamUri::from(uri.as_str());
 
+        // Stop PipeWire capture first (if active)
+        #[cfg(feature = "pipewire")]
+        {
+            if let Some(mut input_stream) = self.active_inputs.write().unwrap().remove(&stream_uri) {
+                input_stream.stop();
+                info!("Stopped PipeWire capture for stream: {}", uri);
+            }
+        }
+
+        // Stop the stream (seals final chunk, creates manifest)
         self.stream_manager
             .stop_stream(&stream_uri)
             .map_err(|e| e.to_string())?;
