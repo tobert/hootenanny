@@ -17,9 +17,13 @@ use crate::ipc::server::Handler;
 use crate::ipc::{
     Beat as IpcBeat, ContentType as IpcContentType, ControlReply, ControlRequest,
     PendingApproval as IpcPendingApproval, QueryReply, QueryRequest, RegionSummary,
-    ShellReply, ShellRequest,
+    SampleFormat as IpcSampleFormat, ShellReply, ShellRequest, StreamDefinition as IpcStreamDefinition,
+    StreamFormat as IpcStreamFormat,
 };
 use crate::primitives::{Behavior, ContentType};
+use crate::stream_io::{
+    SampleFormat, StreamDefinition, StreamFormat, StreamManager, StreamUri,
+};
 use crate::{
     Beat, ChaosgardenAdapter, Graph, LatentConfig, LatentManager, Region, TempoMap, Tick,
 };
@@ -64,6 +68,12 @@ pub struct GardenDaemon {
     // Latent management (Arc<RwLock> for mutable access to handle lifecycle events)
     latent_manager: Arc<RwLock<LatentManager>>,
 
+    // Stream capture manager
+    stream_manager: Arc<StreamManager>,
+
+    // Stream event publisher
+    stream_publisher: Arc<dyn StreamEventPublisher>,
+
     // Query adapter (pre-built, shares state refs)
     query_adapter: Option<Arc<ChaosgardenAdapter>>,
 }
@@ -90,6 +100,10 @@ impl GardenDaemon {
         let publisher = Arc::new(NoOpPublisher);
         let latent_manager = Arc::new(RwLock::new(LatentManager::new(latent_config, publisher)));
 
+        // Create stream manager and publisher
+        let stream_manager = Arc::new(StreamManager::new());
+        let stream_publisher: Arc<dyn StreamEventPublisher> = Arc::new(NoOpStreamPublisher);
+
         // Build query adapter
         let query_adapter = ChaosgardenAdapter::new(
             Arc::clone(&regions),
@@ -103,6 +117,8 @@ impl GardenDaemon {
             regions,
             graph,
             latent_manager,
+            stream_manager,
+            stream_publisher,
             query_adapter,
         }
     }
@@ -334,6 +350,86 @@ impl GardenDaemon {
             },
         }
     }
+
+    /// Handle stream start command
+    fn handle_stream_start(
+        &self,
+        uri: String,
+        definition: IpcStreamDefinition,
+        chunk_path: String,
+    ) -> Result<(), String> {
+        // Convert IPC types to internal types
+        let stream_uri = StreamUri::from(uri.as_str());
+        let internal_def = convert_ipc_stream_definition(&definition, stream_uri);
+
+        // Start the stream
+        self.stream_manager
+            .start_stream(internal_def, &chunk_path)
+            .map_err(|e| e.to_string())?;
+
+        info!("Started stream: {} -> {}", uri, chunk_path);
+        Ok(())
+    }
+
+    /// Handle stream chunk switch command
+    fn handle_stream_switch_chunk(&self, uri: String, new_chunk_path: String) -> Result<(), String> {
+        let stream_uri = StreamUri::from(uri.as_str());
+
+        self.stream_manager
+            .switch_chunk(&stream_uri, &new_chunk_path)
+            .map_err(|e| e.to_string())?;
+
+        info!("Switched chunk for stream: {} -> {}", uri, new_chunk_path);
+        Ok(())
+    }
+
+    /// Handle stream stop command
+    fn handle_stream_stop(&self, uri: String) -> Result<(), String> {
+        let stream_uri = StreamUri::from(uri.as_str());
+
+        self.stream_manager
+            .stop_stream(&stream_uri)
+            .map_err(|e| e.to_string())?;
+
+        info!("Stopped stream: {}", uri);
+        Ok(())
+    }
+
+    /// Poll active streams and send broadcast updates
+    ///
+    /// This should be called periodically (e.g., every 100ms) by a background task.
+    /// It checks all active streams for:
+    /// - Head position updates (always broadcast)
+    /// - Chunk full events (broadcast when detected)
+    pub fn poll_stream_events(&self) {
+        let active = self.stream_manager.active_streams();
+
+        for uri in active {
+            // Get head position
+            if let Ok(pos) = self.stream_manager.head_position(&uri) {
+                self.stream_publisher.publish_head_position(
+                    uri.as_str().to_string(),
+                    pos.sample_position,
+                    pos.byte_position,
+                );
+            }
+
+            // Check for full chunks
+            if let Ok(is_full) = self.stream_manager.is_chunk_full(&uri) {
+                if is_full {
+                    if let Ok(Some(info)) = self.stream_manager.chunk_info(&uri) {
+                        debug!("Detected full chunk for stream: {}", uri.as_str());
+                        self.stream_publisher.publish_chunk_full(
+                            uri.as_str().to_string(),
+                            info.path.to_string_lossy().to_string(),
+                            info.bytes_written,
+                            info.samples_written,
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Default for GardenDaemon {
@@ -497,6 +593,41 @@ impl Handler for GardenDaemon {
                 }
             }
 
+            // Stream capture commands
+            ShellRequest::StreamStart { uri, definition, chunk_path } => {
+                match self.handle_stream_start(uri, definition, chunk_path) {
+                    Ok(()) => ShellReply::Ok {
+                        result: serde_json::json!({"status": "stream_started"}),
+                    },
+                    Err(e) => ShellReply::Error {
+                        error: e,
+                        traceback: None,
+                    },
+                }
+            }
+            ShellRequest::StreamSwitchChunk { uri, new_chunk_path } => {
+                match self.handle_stream_switch_chunk(uri, new_chunk_path) {
+                    Ok(()) => ShellReply::Ok {
+                        result: serde_json::json!({"status": "chunk_switched"}),
+                    },
+                    Err(e) => ShellReply::Error {
+                        error: e,
+                        traceback: None,
+                    },
+                }
+            }
+            ShellRequest::StreamStop { uri } => {
+                match self.handle_stream_stop(uri) {
+                    Ok(()) => ShellReply::Ok {
+                        result: serde_json::json!({"status": "stream_stopped"}),
+                    },
+                    Err(e) => ShellReply::Error {
+                        error: e,
+                        traceback: None,
+                    },
+                }
+            }
+
             // Not yet implemented
             ShellRequest::AddNode { .. }
             | ShellRequest::RemoveNode { .. }
@@ -604,11 +735,96 @@ fn convert_content_type_to_ipc(internal: ContentType) -> IpcContentType {
     }
 }
 
+/// Convert IPC StreamDefinition to internal StreamDefinition
+fn convert_ipc_stream_definition(ipc: &IpcStreamDefinition, uri: StreamUri) -> StreamDefinition {
+    StreamDefinition {
+        uri,
+        device_identity: ipc.device_identity.clone(),
+        format: convert_ipc_stream_format(&ipc.format),
+        chunk_size_bytes: ipc.chunk_size_bytes,
+    }
+}
+
+/// Convert IPC StreamFormat to internal StreamFormat
+fn convert_ipc_stream_format(ipc: &IpcStreamFormat) -> StreamFormat {
+    match ipc {
+        IpcStreamFormat::Audio {
+            sample_rate,
+            channels,
+            sample_format,
+        } => StreamFormat::Audio {
+            sample_rate: *sample_rate,
+            channels: *channels as u8,
+            sample_format: convert_ipc_sample_format(sample_format),
+        },
+        IpcStreamFormat::Midi => StreamFormat::Midi,
+    }
+}
+
+/// Convert IPC SampleFormat to internal SampleFormat
+fn convert_ipc_sample_format(ipc: &IpcSampleFormat) -> SampleFormat {
+    match ipc {
+        IpcSampleFormat::F32Le => SampleFormat::F32,
+        IpcSampleFormat::S16Le => SampleFormat::I16,
+        IpcSampleFormat::S24Le => SampleFormat::I24,
+        // S32 not supported in internal format, default to I24
+        IpcSampleFormat::S32Le => SampleFormat::I24,
+    }
+}
+
+/// Trait for publishing stream events to IOPub channel
+pub trait StreamEventPublisher: Send + Sync {
+    fn publish_head_position(
+        &self,
+        stream_uri: String,
+        sample_position: u64,
+        byte_position: u64,
+    );
+
+    fn publish_chunk_full(
+        &self,
+        stream_uri: String,
+        path: String,
+        bytes_written: u64,
+        samples_written: u64,
+    );
+
+    fn publish_stream_error(&self, stream_uri: String, error: String, recoverable: bool);
+}
+
 /// No-op IOPub publisher for daemon initialization
 struct NoOpPublisher;
 
 impl crate::IOPubPublisher for NoOpPublisher {
     fn publish(&self, _event: crate::LatentEvent) {
+        // No-op for now - will wire to actual IOPub socket later
+    }
+}
+
+/// No-op stream event publisher for daemon initialization
+struct NoOpStreamPublisher;
+
+impl StreamEventPublisher for NoOpStreamPublisher {
+    fn publish_head_position(
+        &self,
+        _stream_uri: String,
+        _sample_position: u64,
+        _byte_position: u64,
+    ) {
+        // No-op for now - will wire to actual IOPub socket later
+    }
+
+    fn publish_chunk_full(
+        &self,
+        _stream_uri: String,
+        _path: String,
+        _bytes_written: u64,
+        _samples_written: u64,
+    ) {
+        // No-op for now - will wire to actual IOPub socket later
+    }
+
+    fn publish_stream_error(&self, _stream_uri: String, _error: String, _recoverable: bool) {
         // No-op for now - will wire to actual IOPub socket later
     }
 }

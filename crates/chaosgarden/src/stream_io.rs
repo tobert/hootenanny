@@ -13,7 +13,7 @@
 //!
 //! ## Message Flow
 //!
-//! ```
+//! ```text
 //! hootenanny → StreamStart{uri, definition, chunk_path}
 //!            → chaosgarden opens/mmaps file
 //! chaosgarden → StreamHeadPosition (periodic updates)
@@ -381,6 +381,17 @@ impl StreamManager {
     pub fn active_streams(&self) -> Vec<StreamUri> {
         let streams = self.streams.read().unwrap();
         streams.keys().cloned().collect()
+    }
+
+    /// Check if a stream's chunk is full
+    pub fn is_chunk_full(&self, uri: &StreamUri) -> Result<bool> {
+        let streams = self.streams.read().unwrap();
+
+        let handle = streams
+            .get(uri)
+            .with_context(|| format!("stream not found: {}", uri.as_str()))?;
+
+        Ok(handle.is_chunk_full())
     }
 }
 

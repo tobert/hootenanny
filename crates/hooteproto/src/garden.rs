@@ -258,6 +258,50 @@ pub enum ShellRequest {
         range: Option<(Beat, Beat)>,
     },
     GetPendingApprovals,
+
+    // Stream capture commands
+    StreamStart {
+        uri: String,
+        definition: StreamDefinition,
+        chunk_path: String,
+    },
+    StreamSwitchChunk {
+        uri: String,
+        new_chunk_path: String,
+    },
+    StreamStop {
+        uri: String,
+    },
+}
+
+/// Stream format definition for audio/MIDI capture
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamDefinition {
+    pub device_identity: String,
+    pub format: StreamFormat,
+    pub chunk_size_bytes: u64,
+}
+
+/// Stream format (Audio or MIDI)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StreamFormat {
+    Audio {
+        sample_rate: u32,
+        channels: u16,
+        sample_format: SampleFormat,
+    },
+    Midi,
+}
+
+/// Audio sample format
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SampleFormat {
+    F32Le,
+    S16Le,
+    S24Le,
+    S32Le,
 }
 
 /// Shell channel replies (chaosgarden -> hootenanny)
@@ -396,6 +440,26 @@ pub enum IOPubEvent {
     },
     Warning {
         message: String,
+    },
+
+    // Stream capture events
+    StreamHeadPosition {
+        stream_uri: String,
+        sample_position: u64,
+        byte_position: u64,
+        wall_clock: DateTime<Utc>,
+    },
+    StreamChunkFull {
+        stream_uri: String,
+        path: String,
+        bytes_written: u64,
+        samples_written: u64,
+        wall_clock: DateTime<Utc>,
+    },
+    StreamError {
+        stream_uri: String,
+        error: String,
+        recoverable: bool,
     },
 }
 
