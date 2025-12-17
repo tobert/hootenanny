@@ -4,10 +4,7 @@
 //! hootenanny (control plane) and chaosgarden (RT audio daemon).
 
 pub mod capnp_server;
-pub mod client;
 pub mod messages;
-pub mod server;
-pub mod wire;
 
 pub use messages::*;
 

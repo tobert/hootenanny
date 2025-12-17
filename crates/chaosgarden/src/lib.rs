@@ -39,7 +39,7 @@ pub use external_io::{
     MidiDirection, MidiInputNode, MidiOutputNode, PipeWireInput, PipeWireOutput, RingBuffer,
 };
 pub use graph::{Edge, Graph, GraphError, GraphSnapshot};
-pub use ipc::{client::GardenClient, server::GardenServer, GardenEndpoints};
+pub use ipc::GardenEndpoints;
 pub use latent::{
     ApprovalDecision, Decision, IOPubPublisher, LatentConfig, LatentError, LatentEvent,
     LatentManager, MixInSchedule, MixInStrategy, PendingApproval,

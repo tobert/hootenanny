@@ -757,6 +757,9 @@ fn payload_type_name(payload: &Payload) -> &'static str {
         Payload::ToolList { .. } => "tool_list",
         Payload::Success { .. } => "success",
         Payload::Error { .. } => "error",
+        Payload::StreamStart { .. } => "stream_start",
+        Payload::StreamSwitchChunk { .. } => "stream_switch_chunk",
+        Payload::StreamStop { .. } => "stream_stop",
     }
 }
 
