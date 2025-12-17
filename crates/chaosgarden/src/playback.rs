@@ -146,6 +146,7 @@ pub struct PlaybackPosition {
 
 /// Tracks an in-progress crossfade
 // TODO(routing): Implement actual crossfade mixing when audio routing is added
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct ActiveCrossfade {
     old_region_id: Option<Uuid>,

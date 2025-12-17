@@ -97,6 +97,9 @@ pub struct StreamDefinition {
 /// Handle to an active chunk being written
 struct ChunkHandle {
     path: PathBuf,
+    /// File handle kept open to maintain the memory mapping.
+    /// Not read directly, but dropping it would invalidate the mmap.
+    #[allow(dead_code)]
     file: File,
     mmap: MmapMut,
     bytes_written: u64,
@@ -164,6 +167,8 @@ struct StreamHandle {
     current_chunk: Option<ChunkHandle>,
     total_samples: u64,
     total_bytes: u64,
+    /// When the stream started - for future statistics/diagnostics
+    #[allow(dead_code)]
     started_at: SystemTime,
 }
 
