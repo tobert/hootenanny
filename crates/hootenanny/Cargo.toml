@@ -35,7 +35,6 @@ capnp = "0.20"
 # ZMQ for internal IPC
 bytes = "1.9"
 zeromq = "0.4"
-rmp-serde = "1"
 trustfall = "0.8"
 bincode = "1.3"
 clap = { version = "4.5.51", features = ["derive"] }
