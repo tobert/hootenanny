@@ -194,6 +194,11 @@ impl EventDualityServer {
             .as_ref()
             .ok_or_else(|| ToolError::internal("stream manager not available"))?;
 
+        let garden_manager = self
+            .garden_manager
+            .as_ref()
+            .ok_or_else(|| ToolError::internal("garden manager not available"))?;
+
         let uri = StreamUri::from(request.uri.as_str());
 
         let format = match request.format {
@@ -211,14 +216,41 @@ impl EventDualityServer {
 
         let definition = StreamDefinition {
             uri: uri.clone(),
-            device_identity: request.device_identity,
+            device_identity: request.device_identity.clone(),
             format,
             chunk_size_bytes: request.chunk_size_bytes,
         };
 
+        // Step 1: Create staging chunk via hootenanny's StreamManager
         let chunk_path = stream_manager
-            .start_stream(definition)
+            .start_stream(definition.clone())
             .map_err(|e| ToolError::internal(format!("failed to start stream: {}", e)))?;
+
+        // Step 2: Send StreamStart command to chaosgarden
+        let ipc_definition = hooteproto::garden::StreamDefinition {
+            device_identity: request.device_identity,
+            format: convert_stream_format_to_ipc(&definition.format),
+            chunk_size_bytes: request.chunk_size_bytes,
+        };
+
+        let shell_request = hooteproto::garden::ShellRequest::StreamStart {
+            uri: uri.to_string(),
+            definition: ipc_definition,
+            chunk_path: chunk_path.to_string_lossy().to_string(),
+        };
+
+        let reply = garden_manager
+            .request(shell_request)
+            .await
+            .map_err(|e| ToolError::internal(format!("failed to send StreamStart: {}", e)))?;
+
+        // Check for error response
+        if let hooteproto::garden::ShellReply::Error { error, .. } = reply {
+            return Err(ToolError::internal(format!(
+                "chaosgarden rejected StreamStart: {}",
+                error
+            )));
+        }
 
         info!("created and started stream: {}", uri);
 
@@ -262,9 +294,32 @@ impl EventDualityServer {
             .as_ref()
             .ok_or_else(|| ToolError::internal("stream manager not available"))?;
 
+        let garden_manager = self
+            .garden_manager
+            .as_ref()
+            .ok_or_else(|| ToolError::internal("garden manager not available"))?;
+
         let uri = StreamUri::from(request.uri.as_str());
 
-        // Get manifest before stopping to capture current state
+        // Step 1: Send StreamStop command to chaosgarden to close the mmap'd file
+        let shell_request = hooteproto::garden::ShellRequest::StreamStop {
+            uri: uri.to_string(),
+        };
+
+        let reply = garden_manager
+            .request(shell_request)
+            .await
+            .map_err(|e| ToolError::internal(format!("failed to send StreamStop: {}", e)))?;
+
+        // Check for error response
+        if let hooteproto::garden::ShellReply::Error { error, .. } = reply {
+            return Err(ToolError::internal(format!(
+                "chaosgarden rejected StreamStop: {}",
+                error
+            )));
+        }
+
+        // Step 2: Get manifest before stopping to capture current state
         let manifest = stream_manager
             .get_manifest(&uri)
             .map_err(|e| ToolError::internal(format!("failed to get manifest: {}", e)))?
@@ -272,6 +327,7 @@ impl EventDualityServer {
                 ToolError::validation("not_found", format!("stream not found: {}", uri))
             })?;
 
+        // Step 3: Stop stream in hootenanny (seals final chunk, creates manifest)
         let manifest_hash = stream_manager
             .stop_stream(&uri)
             .map_err(|e| ToolError::internal(format!("failed to stop stream: {}", e)))?;
@@ -414,5 +470,34 @@ impl EventDualityServer {
             ),
             &response,
         ))
+    }
+}
+
+// ============================================================================
+// Conversion Helpers
+// ============================================================================
+
+/// Convert hootenanny's StreamFormat to IPC StreamFormat
+fn convert_stream_format_to_ipc(
+    format: &StreamFormat,
+) -> hooteproto::garden::StreamFormat {
+    match format {
+        StreamFormat::Audio(audio_format) => hooteproto::garden::StreamFormat::Audio {
+            sample_rate: audio_format.sample_rate,
+            channels: audio_format.channels as u16,
+            sample_format: convert_sample_format_to_ipc(audio_format.sample_format),
+        },
+        StreamFormat::Midi => hooteproto::garden::StreamFormat::Midi,
+    }
+}
+
+/// Convert hootenanny's SampleFormat to IPC SampleFormat
+fn convert_sample_format_to_ipc(
+    format: SampleFormat,
+) -> hooteproto::garden::SampleFormat {
+    match format {
+        SampleFormat::F32 => hooteproto::garden::SampleFormat::F32Le,
+        SampleFormat::I16 => hooteproto::garden::SampleFormat::S16Le,
+        SampleFormat::I24 => hooteproto::garden::SampleFormat::S24Le,
     }
 }
