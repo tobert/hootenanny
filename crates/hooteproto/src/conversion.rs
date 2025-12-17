@@ -1766,6 +1766,85 @@ fn payload_to_capnp_payload(
             }
         }
 
+        // Tool requests - serialize as toolRequest variant
+        Payload::Ping => {
+            builder.reborrow().set_ping(());
+        }
+
+        Payload::ListTools => {
+            builder.reborrow().init_tool_request().set_list_tools(());
+        }
+
+        Payload::ListResources => {
+            builder.reborrow().init_tool_request().set_list_resources(());
+        }
+
+        // Garden/Timeline payloads - direct envelope variants
+        Payload::GardenStatus => {
+            builder.reborrow().set_garden_status(());
+        }
+
+        Payload::GardenPlay => {
+            builder.reborrow().set_garden_play(());
+        }
+
+        Payload::GardenPause => {
+            builder.reborrow().set_garden_pause(());
+        }
+
+        Payload::GardenStop => {
+            builder.reborrow().set_garden_stop(());
+        }
+
+        Payload::GardenSeek { beat } => {
+            let mut seek = builder.reborrow().init_garden_seek();
+            seek.set_beat(*beat);
+        }
+
+        Payload::GardenSetTempo { bpm } => {
+            let mut tempo = builder.reborrow().init_garden_set_tempo();
+            tempo.set_bpm(*bpm);
+        }
+
+        Payload::GardenQuery { query, variables } => {
+            let mut q = builder.reborrow().init_garden_query();
+            q.set_query(query);
+            if let Some(ref vars) = variables {
+                q.set_variables(&serde_json::to_string(vars).unwrap_or_default());
+            } else {
+                q.set_variables("");
+            }
+        }
+
+        Payload::GardenEmergencyPause => {
+            builder.reborrow().set_garden_emergency_pause(());
+        }
+
+        Payload::GardenCreateRegion { position, duration, behavior_type, content_id } => {
+            let mut region = builder.reborrow().init_garden_create_region();
+            region.set_position(*position);
+            region.set_duration(*duration);
+            region.set_behavior_type(behavior_type);
+            region.set_content_id(content_id);
+        }
+
+        Payload::GardenDeleteRegion { region_id } => {
+            let mut region = builder.reborrow().init_garden_delete_region();
+            region.set_region_id(region_id);
+        }
+
+        Payload::GardenMoveRegion { region_id, new_position } => {
+            let mut region = builder.reborrow().init_garden_move_region();
+            region.set_region_id(region_id);
+            region.set_new_position(*new_position);
+        }
+
+        Payload::GardenGetRegions { start, end } => {
+            let mut regions = builder.reborrow().init_garden_get_regions();
+            regions.set_start(start.unwrap_or(0.0));
+            regions.set_end(end.unwrap_or(0.0));
+        }
+
         // For other payloads, we'd need to handle each variant
         // For now, convert to JSON in Success wrapper
         other => {
