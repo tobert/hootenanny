@@ -28,15 +28,40 @@ hootenanny (control)                   chaosgarden (RT)
 
 ## Progress
 
-| Task | Status | Group | Crate |
-|------|--------|-------|-------|
-| 01-cas-staging | **done** | A | cas |
-| 02-protocol-types | **done** | A | hooteproto |
-| 03-chaosgarden-io | pending | B | chaosgarden |
-| 04-stream-management | pending | B | hootenanny |
-| 05-session-management | pending | C | hootenanny |
-| 06-slicing | pending | C | hootenanny |
-| 07-mcp-tools | pending | D | hootenanny |
+| Task | Status | Group | Crate | Notes |
+|------|--------|-------|-------|-------|
+| 01-cas-staging | **done** | A | cas | Staging API complete |
+| 02-protocol-types | **done** | A | hooteproto | Cap'n Proto schemas |
+| 03-chaosgarden-io | **done** | B | chaosgarden | stream_io.rs with mmap + tests |
+| 04-stream-management | **done** | B | hootenanny | StreamManager + manifest + slicing |
+| 05-session-management | **done** | C | hootenanny | SessionManager + timeline |
+| 06-slicing | **done** | C | hootenanny | SlicingEngine with virtual/materialized |
+| 07-mcp-tools | **done** | D | hootenanny | Tools scaffolded, need impl |
+| **08-zmq-integration** | **in-progress** | E | chaosgarden | Wire protocol handlers |
+| 09-pipewire-binding | pending | E | chaosgarden | Connect to hardware |
+| 10-end-to-end-test | pending | F | hootenanny | Full capture flow |
+
+**Current Phase:** Foundation complete (3,720 LOC), now integrating with ZMQ protocol
+
+### Next Steps (Task 08: ZMQ Integration)
+
+1. **Add Cap'n Proto stream messages** to `schemas/streams.capnp`:
+   - StreamStart, StreamStop, StreamSwitchChunk (commands)
+   - StreamHeadPosition, StreamChunkFull (broadcasts)
+
+2. **Implement chaosgarden handlers**:
+   - Receive commands from hootenanny via ZMQ
+   - Call stream_io.rs functions (start_stream, switch_chunk, etc.)
+   - Send broadcasts back (position updates, chunk full)
+
+3. **Wire up hootenanny side**:
+   - Send StreamStart when MCP tool called
+   - Handle ChunkFull broadcasts → seal to CAS + create new chunk
+   - Coordinate chunk rotation lifecycle
+
+4. **Test message flow**:
+   - Mock ZMQ transport or use test harness
+   - Verify commands → actions → broadcasts
 
 ---
 
@@ -107,11 +132,15 @@ When complete, report:
 
 ## Success Metrics
 
-- [ ] `cargo test -p cas` passes with staging tests
-- [ ] `cargo test -p hooteproto` passes with message types
-- [ ] `cargo test -p chaosgarden` passes with stream I/O tests
-- [ ] `cargo test -p hootenanny` passes with stream/session tests
-- [ ] End-to-end: start stream → write samples → seal chunk → slice → artifact created
+- [x] `cargo test -p cas` passes with staging tests
+- [x] `cargo test -p hooteproto` passes with message types
+- [x] `cargo test -p chaosgarden` passes with stream I/O tests
+- [x] `cargo test -p hootenanny` passes with stream/session tests
+- [x] All builds clean: lib ✓, bin ✓, tests ✓
+- [ ] **ZMQ protocol handlers** - StreamStart/Stop/SwitchChunk
+- [ ] **Message flow works** - Commands → chaosgarden → broadcasts
+- [ ] **End-to-end:** start stream → write samples → seal chunk → slice → artifact created
+- [ ] **PipeWire integration** - Bind to real hardware devices
 - [ ] No new warnings (`cargo clippy`)
 
 ---
