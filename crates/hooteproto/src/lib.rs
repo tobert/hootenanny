@@ -590,6 +590,20 @@ pub enum Payload {
         key: Option<String>,
     },
 
+    // === Stream Capture (Hootenanny → Chaosgarden) ===
+    StreamStart {
+        uri: String,
+        definition: StreamDefinition,
+        chunk_path: String,
+    },
+    StreamSwitchChunk {
+        uri: String,
+        new_chunk_path: String,
+    },
+    StreamStop {
+        uri: String,
+    },
+
     // === Transport Tools (Holler → Chaosgarden) ===
     TransportPlay,
     TransportStop,
@@ -680,6 +694,36 @@ pub struct GraphHint {
 
 fn default_confidence() -> f64 {
     1.0
+}
+
+/// Stream definition for audio/MIDI capture
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StreamDefinition {
+    pub uri: String,
+    pub device_identity: String,
+    pub format: StreamFormat,
+    pub chunk_size_bytes: u64,
+}
+
+/// Stream format (Audio or MIDI)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StreamFormat {
+    Audio {
+        sample_rate: u32,
+        channels: u8,
+        sample_format: SampleFormat,
+    },
+    Midi,
+}
+
+/// Audio sample format
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SampleFormat {
+    F32,
+    I16,
+    I24,
 }
 
 /// Broadcast messages via PUB/SUB

@@ -358,7 +358,7 @@ impl GardenDaemon {
     }
 
     /// Handle stream start command
-    fn handle_stream_start(
+    pub fn handle_stream_start(
         &self,
         uri: String,
         definition: IpcStreamDefinition,
@@ -420,7 +420,7 @@ impl GardenDaemon {
     }
 
     /// Handle stream chunk switch command
-    fn handle_stream_switch_chunk(&self, uri: String, new_chunk_path: String) -> Result<(), String> {
+    pub fn handle_stream_switch_chunk(&self, uri: String, new_chunk_path: String) -> Result<(), String> {
         let stream_uri = StreamUri::from(uri.as_str());
 
         self.stream_manager
@@ -432,7 +432,7 @@ impl GardenDaemon {
     }
 
     /// Handle stream stop command
-    fn handle_stream_stop(&self, uri: String) -> Result<(), String> {
+    pub fn handle_stream_stop(&self, uri: String) -> Result<(), String> {
         let stream_uri = StreamUri::from(uri.as_str());
 
         // Stop PipeWire capture first (if active)

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use chaosgarden::{GardenDaemon, DaemonConfig};
-use chaosgarden::ipc::{server::GardenServer, GardenEndpoints};
+use chaosgarden::ipc::{capnp_server::CapnpGardenServer, GardenEndpoints};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -23,12 +23,12 @@ async fn main() -> Result<()> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    info!("chaosgarden {} starting", env!("CARGO_PKG_VERSION"));
+    info!("chaosgarden {} starting (Cap'n Proto)", env!("CARGO_PKG_VERSION"));
 
     let endpoints = GardenEndpoints::local();
     info!("binding to endpoints: {:?}", endpoints);
 
-    let server = GardenServer::bind(&endpoints).await?;
+    let server = CapnpGardenServer::new(endpoints);
 
     // Create real daemon with state management
     let config = DaemonConfig::default();

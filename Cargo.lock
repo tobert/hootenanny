@@ -618,6 +618,8 @@ name = "chaosgarden"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
+ "capnp",
  "cas",
  "chrono",
  "futures",

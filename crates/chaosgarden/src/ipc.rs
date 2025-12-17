@@ -3,6 +3,7 @@
 //! Implements the Jupyter-inspired 5-socket protocol for communication between
 //! hootenanny (control plane) and chaosgarden (RT audio daemon).
 
+pub mod capnp_server;
 pub mod client;
 pub mod messages;
 pub mod server;

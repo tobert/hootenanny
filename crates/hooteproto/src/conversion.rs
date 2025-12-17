@@ -1034,13 +1034,64 @@ pub fn capnp_envelope_to_payload(
             Ok(Payload::ToolList { tools })
         }
 
+        // === Stream Capture ===
+        envelope_capnp::payload::StreamStart(stream) => {
+            let stream = stream?;
+            let def = stream.get_definition()?;
+            let format = def.get_format()?;
+
+            let stream_format = match format.which()? {
+                crate::streams_capnp::stream_format::Audio(audio) => {
+                    let audio = audio?;
+                    let sample_format_enum = audio.get_sample_format()?;
+                    let sample_format = match sample_format_enum {
+                        crate::streams_capnp::SampleFormat::F32 => crate::SampleFormat::F32,
+                        crate::streams_capnp::SampleFormat::I16 => crate::SampleFormat::I16,
+                        crate::streams_capnp::SampleFormat::I24 => crate::SampleFormat::I24,
+                    };
+
+                    crate::StreamFormat::Audio {
+                        sample_rate: audio.get_sample_rate(),
+                        channels: audio.get_channels(),
+                        sample_format,
+                    }
+                }
+                crate::streams_capnp::stream_format::Midi(()) => {
+                    crate::StreamFormat::Midi
+                }
+            };
+
+            Ok(Payload::StreamStart {
+                uri: stream.get_uri()?.to_str()?.to_string(),
+                definition: crate::StreamDefinition {
+                    uri: def.get_uri()?.to_str()?.to_string(),
+                    device_identity: def.get_device_identity()?.to_str()?.to_string(),
+                    format: stream_format,
+                    chunk_size_bytes: def.get_chunk_size_bytes(),
+                },
+                chunk_path: stream.get_chunk_path()?.to_str()?.to_string(),
+            })
+        }
+
+        envelope_capnp::payload::StreamSwitchChunk(stream) => {
+            let stream = stream?;
+            Ok(Payload::StreamSwitchChunk {
+                uri: stream.get_uri()?.to_str()?.to_string(),
+                new_chunk_path: stream.get_new_chunk_path()?.to_str()?.to_string(),
+            })
+        }
+
+        envelope_capnp::payload::StreamStop(stream) => {
+            let stream = stream?;
+            Ok(Payload::StreamStop {
+                uri: stream.get_uri()?.to_str()?.to_string(),
+            })
+        }
+
         // Variants not yet implemented
         envelope_capnp::payload::Register(_) |
         envelope_capnp::payload::Pong(_) |
-        envelope_capnp::payload::TimelineEvent(_) |
-        envelope_capnp::payload::StreamStart(_) |
-        envelope_capnp::payload::StreamSwitchChunk(_) |
-        envelope_capnp::payload::StreamStop(_) => {
+        envelope_capnp::payload::TimelineEvent(_) => {
             Err(capnp::Error::failed("Payload variant not yet implemented for capnp conversion".to_string()))
         }
     }
