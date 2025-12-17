@@ -38,32 +38,35 @@ hootenanny (control)                   chaosgarden (RT)
 | 06-slicing | **done** | C | hootenanny | SlicingEngine with virtual/materialized |
 | 07-mcp-tools | **done** | D | hootenanny | Tools scaffolded, need impl |
 | 08-zmq-integration | **done** | E | both | ZMQ protocol complete (ad96460, e8527df) |
-| 09-pipewire-binding | pending | E | chaosgarden | Connect to hardware |
+| 09-pipewire-binding | **done** | E | chaosgarden | PipeWire capture Phase 1 (db0673b, b0c77cf) |
 | 10-end-to-end-test | pending | F | hootenanny | Full capture flow |
 
-**Current Phase:** ZMQ protocol integration complete (8 tasks, ~4,200 LOC total)
+**Current Phase:** PipeWire capture Phase 1 complete (9 tasks, ~5,000 LOC total)
 
-### Next Steps (Task 09: PipeWire Binding)
+### Next Steps (Task 10: End-to-End Testing)
 
-1. **Implement PipeWire stream creation** in chaosgarden:
-   - Create PipeWire ports for audio/MIDI input
-   - Connect to hardware devices via PipeWire graph
-   - Set up process callbacks for sample delivery
+**Task 09 Complete:** PipeWire capture is implemented and integrated. Ready for live testing.
 
-2. **Wire PipeWire callbacks to stream_io**:
-   - In process callback, call stream_manager.write_samples()
-   - Handle chunk full condition returned from write_samples()
-   - Trigger StreamChunkFull broadcast when chunk fills
+**What works now:**
+- ✅ Hardware capture via PipeWire (audio only)
+- ✅ Write to mmap'd chunk files
+- ✅ Automatic chunk rotation
+- ✅ ZMQ command/broadcast flow
 
-3. **Device identity mapping**:
-   - Map PipeWire node names to device identities
-   - Handle device connect/disconnect events
-   - Update stream status on device state changes
+**To test:**
+1. **Start both daemons** (chaosgarden + hootenanny)
+2. **Find audio device**: `pw-cli ls Node | grep Source`
+3. **Create stream** via hootenanny MCP (provides device name)
+4. **Verify capture**:
+   - Check chunk files appear in CAS staging
+   - Verify chunk rotation (StreamChunkFull broadcasts)
+   - Stop stream and check manifest creation
+5. **Extract audio**: Use slicing tools to materialize WAV from chunks
 
-4. **Test with real hardware**:
-   - Capture from audio interface
-   - Verify chunk rotation with real data flow
-   - Test MIDI device capture
+**Deferred to separate task:**
+- DeviceRegistry (device discovery/validation) - UX enhancement
+- MIDI capture - requires separate implementation
+- Multi-device synchronization - advanced feature
 
 ---
 
