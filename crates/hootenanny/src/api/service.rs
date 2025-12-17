@@ -2,6 +2,8 @@ use crate::artifact_store::FileStore;
 use crate::gpu_monitor::GpuMonitor;
 use crate::job_system::JobStore;
 use crate::mcp_tools::local_models::LocalModels;
+use crate::sessions::SessionManager;
+use crate::streams::{SlicingEngine, StreamManager};
 use crate::zmq::{BroadcastPublisher, GardenManager};
 use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use std::sync::{Arc, RwLock};
@@ -17,6 +19,12 @@ pub struct EventDualityServer {
     pub garden_manager: Option<Arc<GardenManager>>,
     /// Optional broadcast publisher for SSE events via holler
     pub broadcaster: Option<BroadcastPublisher>,
+    /// Stream manager for capture sessions
+    pub stream_manager: Option<Arc<StreamManager>>,
+    /// Session manager for multi-stream capture coordination
+    pub session_manager: Option<Arc<SessionManager>>,
+    /// Slicing engine for time-range extraction
+    pub slicing_engine: Option<Arc<SlicingEngine>>,
 }
 
 impl std::fmt::Debug for EventDualityServer {
@@ -45,6 +53,9 @@ impl EventDualityServer {
             gpu_monitor,
             garden_manager: None,
             broadcaster: None,
+            stream_manager: None,
+            session_manager: None,
+            slicing_engine: None,
         }
     }
 
@@ -57,6 +68,24 @@ impl EventDualityServer {
     /// Create with broadcast publisher for SSE events
     pub fn with_broadcaster(mut self, broadcaster: Option<BroadcastPublisher>) -> Self {
         self.broadcaster = broadcaster;
+        self
+    }
+
+    /// Create with stream manager for capture sessions
+    pub fn with_stream_manager(mut self, stream_manager: Option<Arc<StreamManager>>) -> Self {
+        self.stream_manager = stream_manager;
+        self
+    }
+
+    /// Create with session manager for multi-stream coordination
+    pub fn with_session_manager(mut self, session_manager: Option<Arc<SessionManager>>) -> Self {
+        self.session_manager = session_manager;
+        self
+    }
+
+    /// Create with slicing engine for time-range extraction
+    pub fn with_slicing_engine(mut self, slicing_engine: Option<Arc<SlicingEngine>>) -> Self {
+        self.slicing_engine = slicing_engine;
         self
     }
 

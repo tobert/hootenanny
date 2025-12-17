@@ -9,4 +9,6 @@ pub mod graph_query;
 pub mod jobs;
 pub mod musicgen;
 pub mod orpheus;
+pub mod sessions;
+pub mod streams;
 pub mod yue;

@@ -9,6 +9,8 @@ pub mod gpu_monitor;
 pub mod job_system;
 pub mod mcp_tools;
 pub mod persistence;
+pub mod sessions;
+pub mod streams;
 pub mod telemetry;
 pub mod types;
 pub mod web;

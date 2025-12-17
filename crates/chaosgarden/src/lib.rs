@@ -25,6 +25,7 @@ pub mod pipewire_output;
 pub mod playback;
 pub mod primitives;
 pub mod query;
+pub mod stream_io;
 
 pub use capabilities::{
     Capability, CapabilityRegistry, CapabilityRequirement, CapabilityUri, Constraint,

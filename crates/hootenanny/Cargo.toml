@@ -50,6 +50,7 @@ hound = "3.5"
 rubato = "0.16"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 dashmap = "6.0"
+tempfile = "3.8"
 
 [dev-dependencies]
 bytes = "1"

@@ -5,6 +5,8 @@ mod gpu_monitor;
 mod job_system;
 mod mcp_tools;
 mod persistence;
+mod sessions;
+mod streams;
 mod telemetry;
 mod types;
 mod web;
