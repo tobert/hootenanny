@@ -20,9 +20,7 @@ pub mod ipc;
 pub mod latent;
 pub mod nodes;
 pub mod patterns;
-#[cfg(feature = "pipewire")]
 pub mod pipewire_output;
-#[cfg(feature = "pipewire")]
 pub mod pipewire_input;
 pub mod playback;
 pub mod primitives;
@@ -55,7 +53,5 @@ pub use playback::{CompiledGraph, PlaybackEngine, PlaybackPosition};
 pub use primitives::*;
 pub use query::ChaosgardenAdapter;
 pub use daemon::{DaemonConfig, GardenDaemon};
-#[cfg(feature = "pipewire")]
 pub use pipewire_output::{PipeWireOutputConfig, PipeWireOutputError, PipeWireOutputStream};
-#[cfg(feature = "pipewire")]
 pub use pipewire_input::{PipeWireInputConfig, PipeWireInputError, PipeWireInputStream};

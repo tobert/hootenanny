@@ -45,9 +45,9 @@ symphonia-core = { version = "0.5", optional = true }
 symphonia-bundle-mp3 = { version = "0.5", optional = true }
 symphonia-bundle-flac = { version = "0.5", optional = true }
 
-# PipeWire audio I/O (optional - for RT audio output)
+# PipeWire audio I/O (RT audio output)
 # v0_3_49 enables buffer.requested() for smarter partial writes
-pipewire = { version = "0.9", optional = true, features = ["v0_3_49"] }
+pipewire = { version = "0.9", features = ["v0_3_49"] }
 
 # Observability
 tracing = "0.1"
@@ -59,7 +59,6 @@ tempfile = "3"
 
 [features]
 default = []
-pipewire = ["dep:pipewire"]
 
 # Audio file decoding for playback (WAV via hound is always available)
 symphonia-decode = [
@@ -81,4 +80,3 @@ path = "src/bin/chaosgarden.rs"
 
 [[example]]
 name = "pipewire_tone"
-required-features = ["pipewire"]

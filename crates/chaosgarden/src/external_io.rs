@@ -84,7 +84,6 @@ pub struct ExternalIOManager {
     midi_devices: HashMap<Uuid, MidiDevice>,
     sample_rate: u32,
     buffer_size: usize,
-    #[cfg(feature = "pipewire")]
     active_output_streams: HashMap<Uuid, crate::pipewire_output::PipeWireOutputStream>,
 }
 
@@ -100,7 +99,6 @@ impl ExternalIOManager {
             midi_devices: HashMap::new(),
             sample_rate,
             buffer_size,
-            #[cfg(feature = "pipewire")]
             active_output_streams: HashMap::new(),
         })
     }
@@ -118,22 +116,19 @@ impl ExternalIOManager {
             channels,
         };
 
-        #[cfg(feature = "pipewire")]
-        {
-            use crate::pipewire_output::{PipeWireOutputConfig, PipeWireOutputStream};
+        use crate::pipewire_output::{PipeWireOutputConfig, PipeWireOutputStream};
 
-            let config = PipeWireOutputConfig {
-                name: name.to_string(),
-                sample_rate: self.sample_rate,
-                channels: channels as u32,
-                latency_frames: self.buffer_size as u32,
-            };
+        let config = PipeWireOutputConfig {
+            name: name.to_string(),
+            sample_rate: self.sample_rate,
+            channels: channels as u32,
+            latency_frames: self.buffer_size as u32,
+        };
 
-            let stream = PipeWireOutputStream::new(config)
-                .map_err(|e| ExternalIOError::StreamError(e.to_string()))?;
+        let stream = PipeWireOutputStream::new(config)
+            .map_err(|e| ExternalIOError::StreamError(e.to_string()))?;
 
-            self.active_output_streams.insert(id, stream);
-        }
+        self.active_output_streams.insert(id, stream);
 
         self.outputs.insert(id, output);
         Ok(id)
@@ -150,10 +145,7 @@ impl ExternalIOManager {
             channels,
         };
 
-        #[cfg(feature = "pipewire")]
-        {
-            // PipeWire stream creation would go here
-        }
+        // TODO: PipeWire input stream creation
 
         self.inputs.insert(id, input);
         Ok(id)
@@ -168,10 +160,7 @@ impl ExternalIOManager {
 
         input.port_pattern = Some(port_pattern.to_string());
 
-        #[cfg(feature = "pipewire")]
-        {
-            // PipeWire port connection would go here
-        }
+        // TODO: PipeWire port connection
 
         Ok(())
     }
@@ -190,10 +179,7 @@ impl ExternalIOManager {
             pw_node_id: None,
         };
 
-        #[cfg(feature = "pipewire")]
-        {
-            // PipeWire MIDI device registration would go here
-        }
+        // TODO: PipeWire MIDI device registration
 
         self.midi_devices.insert(id, device);
         Ok(id)
@@ -234,9 +220,9 @@ impl ExternalIOManager {
         self.inputs.get(&id)
     }
 
-    /// Check if PipeWire is available
+    /// Check if PipeWire is available (always true now)
     pub fn is_pipewire_available(&self) -> bool {
-        cfg!(feature = "pipewire")
+        true
     }
 
     /// Create an ExternalOutputNode for use in the graph
@@ -253,20 +239,17 @@ impl ExternalIOManager {
             .get(&output_id)
             .ok_or(ExternalIOError::DeviceNotFound(output_id))?;
 
-        #[cfg(feature = "pipewire")]
-        {
-            // If we have an active stream, create a node that shares its ring buffer
-            if let Some(stream) = self.active_output_streams.get(&output_id) {
-                let mut node = ExternalOutputNode::new(
-                    output.name.clone(),
-                    output.channels,
-                    self.buffer_size,
-                );
-                // Replace the node's ring buffer with the stream's shared one
-                node.set_ring_buffer(stream.ring_buffer());
-                node.set_active(true);
-                return Ok(node);
-            }
+        // If we have an active stream, create a node that shares its ring buffer
+        if let Some(stream) = self.active_output_streams.get(&output_id) {
+            let mut node = ExternalOutputNode::new(
+                output.name.clone(),
+                output.channels,
+                self.buffer_size,
+            );
+            // Replace the node's ring buffer with the stream's shared one
+            node.set_ring_buffer(stream.ring_buffer());
+            node.set_active(true);
+            return Ok(node);
         }
 
         // Fallback: create a standalone node (won't actually output audio)

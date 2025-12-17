@@ -86,23 +86,15 @@ impl PipeWireOutputStream {
     /// Create and start a new PipeWire output stream immediately
     ///
     /// For better control, use `new_paused()` + `start()` to pre-fill the buffer first.
-    #[cfg(feature = "pipewire")]
     pub fn new(config: PipeWireOutputConfig) -> Result<Self, PipeWireOutputError> {
         let mut stream = Self::new_paused(config)?;
         stream.start()?;
         Ok(stream)
     }
 
-    /// Stub implementation when pipewire feature is disabled
-    #[cfg(not(feature = "pipewire"))]
-    pub fn new(_config: PipeWireOutputConfig) -> Result<Self, PipeWireOutputError> {
-        Err(PipeWireOutputError::NotAvailable)
-    }
-
     /// Create a new PipeWire output stream without starting it
     ///
     /// This allows you to pre-fill the ring buffer before calling `start()`.
-    #[cfg(feature = "pipewire")]
     pub fn new_paused(config: PipeWireOutputConfig) -> Result<Self, PipeWireOutputError> {
         use pipewire as pw;
 
@@ -141,14 +133,7 @@ impl PipeWireOutputStream {
         })
     }
 
-    /// Stub implementation when pipewire feature is disabled
-    #[cfg(not(feature = "pipewire"))]
-    pub fn new_paused(_config: PipeWireOutputConfig) -> Result<Self, PipeWireOutputError> {
-        Err(PipeWireOutputError::NotAvailable)
-    }
-
     /// Start the PipeWire thread (call after pre-filling the buffer)
-    #[cfg(feature = "pipewire")]
     pub fn start(&mut self) -> Result<(), PipeWireOutputError> {
         if self.started {
             return Ok(()); // Already started
@@ -182,12 +167,6 @@ impl PipeWireOutputStream {
         );
 
         Ok(())
-    }
-
-    /// Stub implementation when pipewire feature is disabled
-    #[cfg(not(feature = "pipewire"))]
-    pub fn start(&mut self) -> Result<(), PipeWireOutputError> {
-        Err(PipeWireOutputError::NotAvailable)
     }
 
     /// Get access to the ring buffer for writing audio
@@ -228,7 +207,6 @@ impl Drop for PipeWireOutputStream {
 }
 
 /// Run the PipeWire main loop (called from thread)
-#[cfg(feature = "pipewire")]
 fn run_pipewire_loop(
     config: PipeWireOutputConfig,
     ring_buffer: Arc<Mutex<RingBuffer>>,
@@ -440,12 +418,5 @@ mod tests {
         assert_eq!(config.sample_rate, 48000);
         assert_eq!(config.channels, 2);
         assert_eq!(config.name, "chaosgarden");
-    }
-
-    #[test]
-    #[cfg(not(feature = "pipewire"))]
-    fn test_not_available_without_feature() {
-        let result = PipeWireOutputStream::new(PipeWireOutputConfig::default());
-        assert!(matches!(result, Err(PipeWireOutputError::NotAvailable)));
     }
 }

@@ -14,11 +14,12 @@ use trustfall::execute_query;
 use uuid::Uuid;
 
 use crate::ipc::{
-    Beat as IpcBeat, ContentType as IpcContentType, ControlReply, ControlRequest,
-    PendingApproval as IpcPendingApproval, QueryReply, QueryRequest, RegionSummary,
-    SampleFormat as IpcSampleFormat, ShellReply, ShellRequest, StreamDefinition as IpcStreamDefinition,
+    Beat as IpcBeat, PendingApproval as IpcPendingApproval, RegionSummary,
+    SampleFormat as IpcSampleFormat, StreamDefinition as IpcStreamDefinition,
     StreamFormat as IpcStreamFormat,
 };
+#[cfg(test)]
+use crate::ipc::{ContentType as IpcContentType, QueryReply, ShellReply, ShellRequest};
 use crate::primitives::{Behavior, ContentType};
 use crate::stream_io::{
     SampleFormat, StreamDefinition, StreamFormat, StreamManager, StreamUri,
@@ -53,31 +54,40 @@ impl Default for DaemonConfig {
 }
 
 /// The main daemon state
+///
+/// Note: Several fields are scaffolding for upcoming playback integration.
+/// See docs/agents/plans/chaosgarden/13-wire-daemon.md for the full plan.
+/// The handle_shell method exercises these fields in tests.
 pub struct GardenDaemon {
-    // Transport
+    // Transport - used by handle_shell for playback control (tested)
+    #[allow(dead_code)]
     transport: RwLock<TransportState>,
+    #[allow(dead_code)]
     tempo_map: Arc<RwLock<TempoMap>>,
 
-    // Timeline (Arc<RwLock> for sharing with query adapter)
+    // Timeline - used by handle_shell for region management (tested)
+    #[allow(dead_code)]
     regions: Arc<RwLock<Vec<Region>>>,
 
-    // Graph (Arc<RwLock> for sharing with query adapter)
+    // Graph - scaffolding for audio routing (see 13-wire-daemon.md Phase 4)
+    #[allow(dead_code)]
     graph: Arc<RwLock<Graph>>,
 
-    // Latent management (Arc<RwLock> for mutable access to handle lifecycle events)
+    // Latent management - used by handle_shell for latent lifecycle (tested)
+    #[allow(dead_code)]
     latent_manager: Arc<RwLock<LatentManager>>,
 
-    // Stream capture manager
+    // Stream capture manager - actively used by Cap'n Proto server
     stream_manager: Arc<StreamManager>,
 
     // Stream event publisher
     stream_publisher: Arc<dyn StreamEventPublisher>,
 
     // Active PipeWire input streams
-    #[cfg(feature = "pipewire")]
     active_inputs: Arc<RwLock<std::collections::HashMap<crate::stream_io::StreamUri, crate::pipewire_input::PipeWireInputStream>>>,
 
-    // Query adapter (pre-built, shares state refs)
+    // Query adapter - scaffolding for Trustfall queries (see 13-wire-daemon.md Phase 5)
+    #[allow(dead_code)]
     query_adapter: Option<Arc<ChaosgardenAdapter>>,
 }
 
@@ -122,24 +132,30 @@ impl GardenDaemon {
             latent_manager,
             stream_manager,
             stream_publisher,
-            #[cfg(feature = "pipewire")]
             active_inputs: Arc::new(RwLock::new(std::collections::HashMap::new())),
             query_adapter,
         }
     }
 
+    // === Transport control methods ===
+    // These are called by handle_shell (tested) and will be wired to Cap'n Proto
+    // server once playback integration is complete. See 13-wire-daemon.md.
+
+    #[allow(dead_code)]
     fn play(&self) {
         let mut transport = self.transport.write().unwrap();
         transport.playing = true;
         info!("Playback started at beat {}", transport.position.0);
     }
 
+    #[allow(dead_code)]
     fn pause(&self) {
         let mut transport = self.transport.write().unwrap();
         transport.playing = false;
         info!("Playback paused at beat {}", transport.position.0);
     }
 
+    #[allow(dead_code)]
     fn stop(&self) {
         let mut transport = self.transport.write().unwrap();
         transport.playing = false;
@@ -147,17 +163,20 @@ impl GardenDaemon {
         info!("Playback stopped");
     }
 
+    #[allow(dead_code)]
     fn seek(&self, beat: Beat) {
         let mut transport = self.transport.write().unwrap();
         transport.position = beat;
         info!("Seeked to beat {}", beat.0);
     }
 
+    #[allow(dead_code)]
     fn set_tempo(&self, bpm: f64) {
         self.tempo_map.write().unwrap().set_base_tempo(bpm);
         info!("Set tempo to {} BPM", bpm);
     }
 
+    #[allow(dead_code)]
     fn get_transport_state(&self) -> (bool, Beat, f64) {
         let transport = self.transport.read().unwrap();
         let tempo = self.tempo_map.read().unwrap().tempo_at(Tick(0));
@@ -300,6 +319,7 @@ impl GardenDaemon {
         Ok(())
     }
 
+    #[cfg(test)]
     fn get_pending_approvals(&self) -> Vec<IpcPendingApproval> {
         let latent_manager = self.latent_manager.read().unwrap();
         latent_manager
@@ -316,6 +336,7 @@ impl GardenDaemon {
             .collect()
     }
 
+    #[cfg(test)]
     fn execute_query(&self, query: &str, variables: &HashMap<String, serde_json::Value>) -> QueryReply {
         let adapter = match &self.query_adapter {
             Some(a) => Arc::clone(a),
@@ -374,48 +395,40 @@ impl GardenDaemon {
 
         info!("Started stream: {} -> {}", uri, chunk_path);
 
-        // Start PipeWire capture (if pipewire feature enabled)
-        #[cfg(feature = "pipewire")]
-        {
-            use crate::pipewire_input::{PipeWireInputConfig, PipeWireInputStream};
+        // Start PipeWire capture
+        use crate::pipewire_input::{PipeWireInputConfig, PipeWireInputStream};
 
-            // Extract audio format info
-            let (sample_rate, channels) = match &internal_def.format {
-                crate::stream_io::StreamFormat::Audio { sample_rate, channels, .. } => {
-                    (*sample_rate, *channels as u32)
-                }
-                crate::stream_io::StreamFormat::Midi => {
-                    return Err("MIDI capture not yet supported".to_string());
-                }
-            };
+        // Extract audio format info
+        let (sample_rate, channels) = match &internal_def.format {
+            crate::stream_io::StreamFormat::Audio { sample_rate, channels, .. } => {
+                (*sample_rate, *channels as u32)
+            }
+            crate::stream_io::StreamFormat::Midi => {
+                return Err("MIDI capture not yet supported".to_string());
+            }
+        };
 
-            // Create PipeWire input config
-            // NOTE: device_identity is the PipeWire node name (e.g., "alsa_input.usb-...")
-            let pw_config = PipeWireInputConfig {
-                device_name: definition.device_identity.clone(),
-                stream_uri: stream_uri.clone(),
-                sample_rate,
-                channels,
-            };
+        // Create PipeWire input config
+        // NOTE: device_identity is the PipeWire node name (e.g., "alsa_input.usb-...")
+        let pw_config = PipeWireInputConfig {
+            device_name: definition.device_identity.clone(),
+            stream_uri: stream_uri.clone(),
+            sample_rate,
+            channels,
+        };
 
-            // Create and start PipeWire input stream
-            let input_stream = PipeWireInputStream::new(pw_config, self.stream_manager.clone())
-                .map_err(|e| format!("Failed to start PipeWire capture: {}", e))?;
+        // Create and start PipeWire input stream
+        let input_stream = PipeWireInputStream::new(pw_config, self.stream_manager.clone())
+            .map_err(|e| format!("Failed to start PipeWire capture: {}", e))?;
 
-            // Track active input
-            self.active_inputs
-                .write()
-                .unwrap()
-                .insert(stream_uri.clone(), input_stream);
+        // Track active input
+        self.active_inputs
+            .write()
+            .unwrap()
+            .insert(stream_uri.clone(), input_stream);
 
-            info!("PipeWire capture started for stream: {}", uri);
-            Ok(())
-        }
-
-        #[cfg(not(feature = "pipewire"))]
-        {
-            Err("PipeWire feature not enabled (compile with --features pipewire)".to_string())
-        }
+        info!("PipeWire capture started for stream: {}", uri);
+        Ok(())
     }
 
     /// Handle stream chunk switch command
@@ -435,12 +448,9 @@ impl GardenDaemon {
         let stream_uri = StreamUri::from(uri.as_str());
 
         // Stop PipeWire capture first (if active)
-        #[cfg(feature = "pipewire")]
-        {
-            if let Some(mut input_stream) = self.active_inputs.write().unwrap().remove(&stream_uri) {
-                input_stream.stop();
-                info!("Stopped PipeWire capture for stream: {}", uri);
-            }
+        if let Some(mut input_stream) = self.active_inputs.write().unwrap().remove(&stream_uri) {
+            input_stream.stop();
+            info!("Stopped PipeWire capture for stream: {}", uri);
         }
 
         // Stop the stream (seals final chunk, creates manifest)
@@ -677,6 +687,7 @@ fn convert_ipc_behavior_to_internal(ipc: &crate::ipc::Behavior) -> Behavior {
 }
 
 /// Convert IPC ContentType to internal ContentType
+#[cfg(test)]
 fn convert_ipc_content_type_to_internal(ipc: &IpcContentType) -> ContentType {
     match ipc {
         IpcContentType::Audio => ContentType::Audio,
@@ -686,6 +697,7 @@ fn convert_ipc_content_type_to_internal(ipc: &IpcContentType) -> ContentType {
 }
 
 /// Convert internal ContentType to IPC ContentType
+#[cfg(test)]
 fn convert_content_type_to_ipc(internal: ContentType) -> IpcContentType {
     match internal {
         ContentType::Audio => IpcContentType::Audio,
@@ -788,6 +800,7 @@ impl StreamEventPublisher for NoOpStreamPublisher {
 }
 
 /// Convert JSON value to Trustfall FieldValue
+#[cfg(test)]
 fn json_to_field_value(v: &serde_json::Value) -> trustfall::FieldValue {
     match v {
         serde_json::Value::Null => trustfall::FieldValue::Null,
@@ -816,6 +829,7 @@ fn json_to_field_value(v: &serde_json::Value) -> trustfall::FieldValue {
 }
 
 /// Convert Trustfall FieldValue to JSON
+#[cfg(test)]
 fn field_value_to_json(v: &trustfall::FieldValue) -> serde_json::Value {
     match v {
         trustfall::FieldValue::Null => serde_json::Value::Null,

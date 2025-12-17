@@ -67,7 +67,6 @@ impl PipeWireInputStream {
     /// Create and start a new PipeWire input stream
     ///
     /// This immediately starts capturing audio from the specified device.
-    #[cfg(feature = "pipewire")]
     pub fn new(
         config: PipeWireInputConfig,
         stream_manager: Arc<StreamManager>,
@@ -119,15 +118,6 @@ impl PipeWireInputStream {
         })
     }
 
-    /// Stub implementation when pipewire feature is disabled
-    #[cfg(not(feature = "pipewire"))]
-    pub fn new(
-        _config: PipeWireInputConfig,
-        _stream_manager: Arc<StreamManager>,
-    ) -> Result<Self, PipeWireInputError> {
-        Err(PipeWireInputError::NotAvailable)
-    }
-
     /// Get the stream URI
     pub fn stream_uri(&self) -> &StreamUri {
         &self.stream_uri
@@ -174,7 +164,6 @@ impl Drop for PipeWireInputStream {
 }
 
 /// Run the PipeWire capture loop (called from thread)
-#[cfg(feature = "pipewire")]
 fn run_pipewire_capture_loop(
     config: PipeWireInputConfig,
     stream_manager: Arc<StreamManager>,
@@ -405,23 +394,5 @@ mod tests {
         assert_eq!(config.device_name, "test_device");
         assert_eq!(config.sample_rate, 48000);
         assert_eq!(config.channels, 2);
-    }
-
-    #[test]
-    #[cfg(not(feature = "pipewire"))]
-    fn test_not_available_without_feature() {
-        use std::sync::Arc;
-
-        let config = PipeWireInputConfig {
-            device_name: "test".to_string(),
-            stream_uri: StreamUri::from("stream://test/audio"),
-            sample_rate: 48000,
-            channels: 2,
-        };
-
-        // Need a mock StreamManager - this will fail anyway due to feature flag
-        // Just testing the error path
-        let result = PipeWireInputStream::new(config, Arc::new(StreamManager::new(Arc::new(crate::cas::FileStore::at_path("/tmp").unwrap()))));
-        assert!(matches!(result, Err(PipeWireInputError::NotAvailable)));
     }
 }
