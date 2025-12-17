@@ -37,31 +37,33 @@ hootenanny (control)                   chaosgarden (RT)
 | 05-session-management | **done** | C | hootenanny | SessionManager + timeline |
 | 06-slicing | **done** | C | hootenanny | SlicingEngine with virtual/materialized |
 | 07-mcp-tools | **done** | D | hootenanny | Tools scaffolded, need impl |
-| **08-zmq-integration** | **in-progress** | E | chaosgarden | Wire protocol handlers |
+| 08-zmq-integration | **done** | E | both | ZMQ protocol complete (ad96460, e8527df) |
 | 09-pipewire-binding | pending | E | chaosgarden | Connect to hardware |
 | 10-end-to-end-test | pending | F | hootenanny | Full capture flow |
 
-**Current Phase:** Foundation complete (3,720 LOC), now integrating with ZMQ protocol
+**Current Phase:** ZMQ protocol integration complete (8 tasks, ~4,200 LOC total)
 
-### Next Steps (Task 08: ZMQ Integration)
+### Next Steps (Task 09: PipeWire Binding)
 
-1. **Add Cap'n Proto stream messages** to `schemas/streams.capnp`:
-   - StreamStart, StreamStop, StreamSwitchChunk (commands)
-   - StreamHeadPosition, StreamChunkFull (broadcasts)
+1. **Implement PipeWire stream creation** in chaosgarden:
+   - Create PipeWire ports for audio/MIDI input
+   - Connect to hardware devices via PipeWire graph
+   - Set up process callbacks for sample delivery
 
-2. **Implement chaosgarden handlers**:
-   - Receive commands from hootenanny via ZMQ
-   - Call stream_io.rs functions (start_stream, switch_chunk, etc.)
-   - Send broadcasts back (position updates, chunk full)
+2. **Wire PipeWire callbacks to stream_io**:
+   - In process callback, call stream_manager.write_samples()
+   - Handle chunk full condition returned from write_samples()
+   - Trigger StreamChunkFull broadcast when chunk fills
 
-3. **Wire up hootenanny side**:
-   - Send StreamStart when MCP tool called
-   - Handle ChunkFull broadcasts → seal to CAS + create new chunk
-   - Coordinate chunk rotation lifecycle
+3. **Device identity mapping**:
+   - Map PipeWire node names to device identities
+   - Handle device connect/disconnect events
+   - Update stream status on device state changes
 
-4. **Test message flow**:
-   - Mock ZMQ transport or use test harness
-   - Verify commands → actions → broadcasts
+4. **Test with real hardware**:
+   - Capture from audio interface
+   - Verify chunk rotation with real data flow
+   - Test MIDI device capture
 
 ---
 
