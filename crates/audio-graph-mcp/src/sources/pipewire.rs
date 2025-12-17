@@ -8,8 +8,13 @@ use pipewire::{
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::Once;
 use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
+use tracing::{debug, warn};
 
 use crate::HintKind;
 use super::DeviceFingerprint;
@@ -56,6 +61,226 @@ pub struct PipeWireSnapshot {
     pub nodes: Vec<PipeWireNode>,
     pub ports: Vec<PipeWirePort>,
     pub links: Vec<PipeWireLink>,
+}
+
+/// Events emitted by PipeWire registry changes for hot-plug detection
+#[derive(Debug, Clone)]
+pub enum DeviceEvent {
+    NodeAdded(PipeWireNode),
+    NodeRemoved { id: u32 },
+    PortAdded(PipeWirePort),
+    PortRemoved { id: u32 },
+    LinkAdded(PipeWireLink),
+    LinkRemoved { id: u32 },
+}
+
+/// Live PipeWire listener that keeps snapshot updated and emits events.
+///
+/// Runs in a blocking task since PipeWire requires single-threaded event loop.
+/// Updates the shared snapshot on each registry change and sends events
+/// for downstream processing (identity matching, IOPub broadcast).
+pub struct PipeWireListener {
+    snapshot: Arc<RwLock<PipeWireSnapshot>>,
+    event_tx: mpsc::Sender<DeviceEvent>,
+}
+
+impl PipeWireListener {
+    pub fn new(
+        snapshot: Arc<RwLock<PipeWireSnapshot>>,
+        event_tx: mpsc::Sender<DeviceEvent>,
+    ) -> Self {
+        Self { snapshot, event_tx }
+    }
+
+    /// Spawn the listener in a blocking task. Returns join handle.
+    ///
+    /// The listener runs forever, updating the snapshot and emitting events
+    /// as devices are added/removed from PipeWire.
+    pub fn spawn(self) -> JoinHandle<()> {
+        tokio::task::spawn_blocking(move || {
+            PIPEWIRE_INIT.call_once(|| {
+                pipewire::init();
+            });
+
+            let mainloop = match MainLoopRc::new(None) {
+                Ok(ml) => ml,
+                Err(e) => {
+                    warn!("Failed to create PipeWire main loop: {}", e);
+                    return;
+                }
+            };
+
+            let context = match ContextRc::new(&mainloop, None) {
+                Ok(ctx) => ctx,
+                Err(e) => {
+                    warn!("Failed to create PipeWire context: {}", e);
+                    return;
+                }
+            };
+
+            let core = match context.connect_rc(None) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("Failed to connect to PipeWire: {}", e);
+                    return;
+                }
+            };
+
+            let registry = match core.get_registry_rc() {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("Failed to get PipeWire registry: {}", e);
+                    return;
+                }
+            };
+
+            // Shared state for closures
+            let snapshot_add = self.snapshot.clone();
+            let snapshot_remove = self.snapshot.clone();
+            let event_tx_add = self.event_tx.clone();
+            let event_tx_remove = self.event_tx.clone();
+
+            let _listener = registry
+                .add_listener_local()
+                .global(move |global| {
+                    if let Some(event) = process_global_to_event(global) {
+                        // Update snapshot
+                        let mut snap = snapshot_add.blocking_write();
+                        apply_add_event(&mut snap, &event);
+                        drop(snap);
+
+                        // Send event (non-blocking, drop if channel full)
+                        if event_tx_add.blocking_send(event.clone()).is_err() {
+                            debug!("Event channel full, dropping event");
+                        }
+                    }
+                })
+                .global_remove(move |id| {
+                    // Determine what type was removed and update snapshot
+                    let mut snap = snapshot_remove.blocking_write();
+                    let event = remove_by_id(&mut snap, id);
+                    drop(snap);
+
+                    if let Some(event) = event {
+                        if event_tx_remove.blocking_send(event).is_err() {
+                            debug!("Event channel full, dropping remove event");
+                        }
+                    }
+                })
+                .register();
+
+            debug!("🔌 PipeWire listener started, watching for device changes...");
+
+            // Run forever - mainloop exits when process exits
+            mainloop.run();
+        })
+    }
+}
+
+/// Process a PipeWire global object into an add event
+fn process_global_to_event<P: AsRef<pipewire::spa::utils::dict::DictRef>>(
+    global: &GlobalObject<P>,
+) -> Option<DeviceEvent> {
+    let props = global.props.as_ref()?.as_ref();
+
+    match global.type_ {
+        ObjectType::Node => {
+            let node = PipeWireNode {
+                id: global.id,
+                name: props.get(*pipewire::keys::NODE_NAME)
+                    .map(String::from)
+                    .unwrap_or_else(|| format!("node-{}", global.id)),
+                description: props.get(*pipewire::keys::NODE_DESCRIPTION).map(String::from),
+                media_class: props.get(*pipewire::keys::MEDIA_CLASS).map(String::from),
+                device_bus_path: props.get(*pipewire::keys::DEVICE_BUS_PATH).map(String::from),
+                alsa_card: props.get("alsa.card").map(String::from),
+            };
+            Some(DeviceEvent::NodeAdded(node))
+        }
+        ObjectType::Port => {
+            let node_id = props.get(*pipewire::keys::NODE_ID)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let direction = match props.get(*pipewire::keys::PORT_DIRECTION) {
+                Some("in") => PortDirection::In,
+                _ => PortDirection::Out,
+            };
+            let port = PipeWirePort {
+                id: global.id,
+                node_id,
+                name: props.get(*pipewire::keys::PORT_NAME)
+                    .map(String::from)
+                    .unwrap_or_else(|| format!("port-{}", global.id)),
+                direction,
+                media_type: props.get(*pipewire::keys::FORMAT_DSP).map(String::from),
+            };
+            Some(DeviceEvent::PortAdded(port))
+        }
+        ObjectType::Link => {
+            let link = PipeWireLink {
+                id: global.id,
+                output_node_id: props.get(*pipewire::keys::LINK_OUTPUT_NODE)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0),
+                output_port_id: props.get(*pipewire::keys::LINK_OUTPUT_PORT)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0),
+                input_node_id: props.get(*pipewire::keys::LINK_INPUT_NODE)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0),
+                input_port_id: props.get(*pipewire::keys::LINK_INPUT_PORT)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0),
+            };
+            Some(DeviceEvent::LinkAdded(link))
+        }
+        _ => None,
+    }
+}
+
+/// Apply an add event to the snapshot
+fn apply_add_event(snap: &mut PipeWireSnapshot, event: &DeviceEvent) {
+    match event {
+        DeviceEvent::NodeAdded(node) => {
+            // Remove any existing node with same ID (update case)
+            snap.nodes.retain(|n| n.id != node.id);
+            snap.nodes.push(node.clone());
+        }
+        DeviceEvent::PortAdded(port) => {
+            snap.ports.retain(|p| p.id != port.id);
+            snap.ports.push(port.clone());
+        }
+        DeviceEvent::LinkAdded(link) => {
+            snap.links.retain(|l| l.id != link.id);
+            snap.links.push(link.clone());
+        }
+        _ => {} // Remove events handled separately
+    }
+}
+
+/// Remove an object by ID from the snapshot, returning the appropriate event
+fn remove_by_id(snap: &mut PipeWireSnapshot, id: u32) -> Option<DeviceEvent> {
+    // Check nodes first
+    if snap.nodes.iter().any(|n| n.id == id) {
+        snap.nodes.retain(|n| n.id != id);
+        // Also remove associated ports
+        snap.ports.retain(|p| p.node_id != id);
+        return Some(DeviceEvent::NodeRemoved { id });
+    }
+
+    // Check ports
+    if snap.ports.iter().any(|p| p.id == id) {
+        snap.ports.retain(|p| p.id != id);
+        return Some(DeviceEvent::PortRemoved { id });
+    }
+
+    // Check links
+    if snap.links.iter().any(|l| l.id == id) {
+        snap.links.retain(|l| l.id != id);
+        return Some(DeviceEvent::LinkRemoved { id });
+    }
+
+    None
 }
 
 pub struct PipeWireSource {

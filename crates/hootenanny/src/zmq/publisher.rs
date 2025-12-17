@@ -65,6 +65,38 @@ impl BroadcastPublisher {
         })
         .await
     }
+
+    /// Publish a device connected event
+    pub async fn device_connected(
+        &self,
+        pipewire_id: u32,
+        name: &str,
+        media_class: Option<&str>,
+        identity_id: Option<&str>,
+        identity_name: Option<&str>,
+    ) -> Result<()> {
+        self.publish(Broadcast::DeviceConnected {
+            pipewire_id,
+            name: name.to_string(),
+            media_class: media_class.map(|s| s.to_string()),
+            identity_id: identity_id.map(|s| s.to_string()),
+            identity_name: identity_name.map(|s| s.to_string()),
+        })
+        .await
+    }
+
+    /// Publish a device disconnected event
+    pub async fn device_disconnected(
+        &self,
+        pipewire_id: u32,
+        name: Option<&str>,
+    ) -> Result<()> {
+        self.publish(Broadcast::DeviceDisconnected {
+            pipewire_id,
+            name: name.map(|s| s.to_string()),
+        })
+        .await
+    }
 }
 
 /// ZMQ PUB socket server
@@ -197,6 +229,25 @@ fn broadcast_to_capnp(
             log.set_message(message);
             log.set_source(source);
         }
+        Broadcast::DeviceConnected {
+            pipewire_id,
+            name,
+            media_class,
+            identity_id,
+            identity_name,
+        } => {
+            let mut device = builder.reborrow().init_device_connected();
+            device.set_pipewire_id(*pipewire_id);
+            device.set_name(name);
+            device.set_media_class(media_class.as_deref().unwrap_or(""));
+            device.set_identity_id(identity_id.as_deref().unwrap_or(""));
+            device.set_identity_name(identity_name.as_deref().unwrap_or(""));
+        }
+        Broadcast::DeviceDisconnected { pipewire_id, name } => {
+            let mut device = builder.reborrow().init_device_disconnected();
+            device.set_pipewire_id(*pipewire_id);
+            device.set_name(name.as_deref().unwrap_or(""));
+        }
     }
     Ok(())
 }
@@ -214,5 +265,7 @@ fn broadcast_variant_name(broadcast: &Broadcast) -> &'static str {
         Broadcast::MarkerReached { .. } => "MarkerReached",
         Broadcast::BeatTick { .. } => "BeatTick",
         Broadcast::Log { .. } => "Log",
+        Broadcast::DeviceConnected { .. } => "DeviceConnected",
+        Broadcast::DeviceDisconnected { .. } => "DeviceDisconnected",
     }
 }

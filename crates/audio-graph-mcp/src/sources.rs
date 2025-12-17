@@ -5,6 +5,6 @@ pub mod pipewire;
 pub use alsa::{AlsaMidiDevice, AlsaMidiPort, AlsaSource, DeviceFingerprint, PortDirection};
 pub use artifact::{AnnotationData, ArtifactData, ArtifactSource, DEFAULT_RECENT_WINDOW};
 pub use pipewire::{
-    PipeWireLink, PipeWireNode, PipeWirePort, PipeWireSnapshot, PipeWireSource,
-    PortDirection as PwPortDirection,
+    DeviceEvent, PipeWireLink, PipeWireListener, PipeWireNode, PipeWirePort,
+    PipeWireSnapshot, PipeWireSource, PortDirection as PwPortDirection,
 };

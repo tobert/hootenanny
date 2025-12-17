@@ -442,6 +442,26 @@ pub enum IOPubEvent {
         message: String,
     },
 
+    // PipeWire device hot-plug events
+    DeviceConnected {
+        /// PipeWire node ID
+        pipewire_id: u32,
+        /// Device name from PipeWire
+        name: String,
+        /// Media class (e.g., "Midi/Bridge", "Audio/Sink")
+        media_class: Option<String>,
+        /// Matched identity ID (if device was recognized)
+        identity_id: Option<String>,
+        /// Matched identity name (if device was recognized)
+        identity_name: Option<String>,
+    },
+    DeviceDisconnected {
+        /// PipeWire node ID that was removed
+        pipewire_id: u32,
+        /// Device name (if known from previous state)
+        name: Option<String>,
+    },
+
     // Stream capture events
     StreamHeadPosition {
         stream_uri: String,

@@ -799,6 +799,28 @@ pub enum Broadcast {
         message: String,
         source: String,
     },
+
+    /// PipeWire device connected (hot-plug)
+    DeviceConnected {
+        /// PipeWire node ID
+        pipewire_id: u32,
+        /// Device name from PipeWire
+        name: String,
+        /// Media class (e.g., "Midi/Bridge", "Audio/Sink")
+        media_class: Option<String>,
+        /// Matched identity ID (if recognized)
+        identity_id: Option<String>,
+        /// Matched identity name (if recognized)
+        identity_name: Option<String>,
+    },
+
+    /// PipeWire device disconnected
+    DeviceDisconnected {
+        /// PipeWire node ID that was removed
+        pipewire_id: u32,
+        /// Device name (if known)
+        name: Option<String>,
+    },
 }
 
 /// Base64 encoding for binary data in JSON

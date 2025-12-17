@@ -16,6 +16,7 @@ tracing = "0.1"
 trustfall = "0.8"
 alsa = "0.9"
 pipewire = "0.9"
+tokio = { version = "1", features = ["sync", "rt"] }
 
 [dev-dependencies]
 tempfile = "3"

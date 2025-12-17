@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use tokio::sync::RwLock;
 use trustfall::{
     provider::{
         AsVertex, ContextIterator, ContextOutcomeIterator, EdgeParameters,
@@ -41,7 +42,7 @@ impl Typename for Vertex {
 pub struct AudioGraphAdapter {
     db: Arc<Database>,
     schema: Arc<Schema>,
-    pipewire_snapshot: Arc<PipeWireSnapshot>,
+    pipewire_snapshot: Arc<RwLock<PipeWireSnapshot>>,
     artifact_source: Option<Arc<dyn ArtifactSource>>,
 }
 
@@ -52,7 +53,7 @@ impl AudioGraphAdapter {
         Ok(Self {
             db,
             schema,
-            pipewire_snapshot: Arc::new(pipewire_snapshot),
+            pipewire_snapshot: Arc::new(RwLock::new(pipewire_snapshot)),
             artifact_source: None,
         })
     }
@@ -72,7 +73,27 @@ impl AudioGraphAdapter {
         Ok(Self {
             db,
             schema,
-            pipewire_snapshot: Arc::new(pipewire_snapshot),
+            pipewire_snapshot: Arc::new(RwLock::new(pipewire_snapshot)),
+            artifact_source: Some(artifact_source),
+        })
+    }
+
+    /// Create an adapter with a live, shared PipeWire snapshot.
+    ///
+    /// The snapshot is shared with PipeWireListener which updates it
+    /// as devices are added/removed. Trustfall queries always see
+    /// the current device state.
+    pub fn new_with_live_snapshot(
+        db: Arc<Database>,
+        pipewire_snapshot: Arc<RwLock<PipeWireSnapshot>>,
+        artifact_source: Arc<dyn ArtifactSource>,
+    ) -> anyhow::Result<Self> {
+        let schema_text = include_str!("schema.graphql");
+        let schema = Arc::new(Schema::parse(schema_text)?);
+        Ok(Self {
+            db,
+            schema,
+            pipewire_snapshot,
             artifact_source: Some(artifact_source),
         })
     }
@@ -87,6 +108,11 @@ impl AudioGraphAdapter {
 
     pub fn db(&self) -> &Database {
         &self.db
+    }
+
+    /// Get a reference to the shared PipeWire snapshot.
+    pub fn pipewire_snapshot(&self) -> &Arc<RwLock<PipeWireSnapshot>> {
+        &self.pipewire_snapshot
     }
 }
 
@@ -126,7 +152,10 @@ impl<'a> trustfall::provider::BasicAdapter<'a> for AudioGraphAdapter {
             "PipeWireNode" => {
                 let media_class_filter = parameters.get("media_class").and_then(|v| v.as_str());
 
-                let nodes = self.pipewire_snapshot.nodes.clone();
+                let snap = self.pipewire_snapshot.blocking_read();
+                let nodes = snap.nodes.clone();
+                drop(snap);
+
                 let filtered: Vec<_> = if let Some(mc) = media_class_filter {
                     nodes
                         .into_iter()
@@ -470,10 +499,12 @@ impl<'a> trustfall::provider::BasicAdapter<'a> for AudioGraphAdapter {
                 resolve_neighbors_with(contexts, move |v| {
                     if let Vertex::PipeWireNode(n) = v {
                         let node_id = n.id;
-                        let ports: Vec<_> = snapshot.ports.iter()
+                        let snap = snapshot.blocking_read();
+                        let ports: Vec<_> = snap.ports.iter()
                             .filter(|p| p.node_id == node_id)
                             .cloned()
                             .collect();
+                        drop(snap);
                         Box::new(ports.into_iter().map(|p| Vertex::PipeWirePort(Arc::new(p))))
                             as VertexIterator<'a, Self::Vertex>
                     } else {
@@ -482,11 +513,24 @@ impl<'a> trustfall::provider::BasicAdapter<'a> for AudioGraphAdapter {
                 })
             }
             ("PipeWireNode", "identity") => {
+                let db = self.db.clone();
                 resolve_neighbors_with(contexts, move |v| {
-                    if let Vertex::PipeWireNode(_n) = v {
-                        // TODO: Identity matching by device_bus_path or alsa_card
-                        // For now, return empty
-                        Box::new(std::iter::empty()) as VertexIterator<'a, Self::Vertex>
+                    if let Vertex::PipeWireNode(n) = v {
+                        // Extract fingerprints from the PipeWire node
+                        let pw_source = crate::sources::pipewire::PipeWireSource::new();
+                        let fingerprints = pw_source.extract_fingerprints(&n);
+
+                        // Try to match against known identities
+                        let matcher = crate::matcher::IdentityMatcher::new(&db);
+                        match matcher.best_match(&fingerprints) {
+                            Ok(Some(result)) => {
+                                Box::new(std::iter::once(Vertex::Identity(Arc::new(result.identity))))
+                                    as VertexIterator<'a, Self::Vertex>
+                            }
+                            Ok(None) | Err(_) => {
+                                Box::new(std::iter::empty()) as VertexIterator<'a, Self::Vertex>
+                            }
+                        }
                     } else {
                         unreachable!()
                     }

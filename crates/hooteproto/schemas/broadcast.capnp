@@ -21,6 +21,10 @@ struct Broadcast {
     streamHeadPosition @10 :Streams.StreamHeadPosition;
     streamChunkFull @11 :Streams.StreamChunkFull;
     streamError @12 :Streams.StreamError;
+
+    # === Device Hot-Plug Events ===
+    deviceConnected @13 :DeviceConnected;
+    deviceDisconnected @14 :DeviceDisconnected;
   }
 }
 
@@ -82,3 +86,17 @@ struct Log {
 }
 
 # Note: Stream events added to Broadcast union above (indices 10-12)
+# Note: Device events added at indices 13-14
+
+struct DeviceConnected {
+  pipewireId @0 :UInt32;
+  name @1 :Text;
+  mediaClass @2 :Text;      # Optional, empty string if not available
+  identityId @3 :Text;      # Optional, empty string if no match
+  identityName @4 :Text;    # Optional, empty string if no match
+}
+
+struct DeviceDisconnected {
+  pipewireId @0 :UInt32;
+  name @1 :Text;            # Optional, empty string if unknown
+}
