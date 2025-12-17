@@ -4,6 +4,7 @@
 //! Also provides bidirectional heartbeating with connected clients (holler).
 
 mod client_tracker;
+mod garden_client;
 mod hooteproto_server;
 mod luanette_client;
 mod manager;

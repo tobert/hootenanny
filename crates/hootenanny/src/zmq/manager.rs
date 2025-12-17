@@ -11,7 +11,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
 use tracing::{debug, error, info, warn};
 
-use chaosgarden::ipc::client::GardenClient;
+use super::garden_client::GardenClient;
 use chaosgarden::ipc::{
     ControlReply, ControlRequest, GardenEndpoints, IOPubEvent, QueryReply, ShellReply,
     ShellRequest,

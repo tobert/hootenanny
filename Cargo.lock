@@ -1533,6 +1533,7 @@ version = "0.1.0"
 dependencies = [
  "abc",
  "anyhow",
+ "async-stream",
  "async-trait",
  "audio-graph-mcp",
  "axum 0.8.7",

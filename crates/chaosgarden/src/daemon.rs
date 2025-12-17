@@ -495,6 +495,157 @@ impl Default for GardenDaemon {
     }
 }
 
+impl GardenDaemon {
+    /// Handle shell requests (for testing)
+    ///
+    /// This method dispatches ShellRequest variants to the appropriate internal handlers.
+    /// It's primarily used by tests and is not part of the public API.
+    #[cfg(test)]
+    pub fn handle_shell(&self, req: ShellRequest) -> ShellReply {
+        match req {
+            ShellRequest::Play => {
+                self.play();
+                ShellReply::Ok {
+                    result: serde_json::Value::Null,
+                }
+            }
+            ShellRequest::Pause => {
+                self.pause();
+                ShellReply::Ok {
+                    result: serde_json::Value::Null,
+                }
+            }
+            ShellRequest::Stop => {
+                self.pause(); // Stop is same as pause in current implementation
+                ShellReply::Ok {
+                    result: serde_json::Value::Null,
+                }
+            }
+            ShellRequest::Seek { beat } => {
+                self.seek(Beat(beat.0));
+                ShellReply::Ok {
+                    result: serde_json::Value::Null,
+                }
+            }
+            ShellRequest::SetTempo { bpm } => {
+                self.set_tempo(bpm);
+                ShellReply::Ok {
+                    result: serde_json::Value::Null,
+                }
+            }
+            ShellRequest::GetTransportState => {
+                let transport = self.transport.read().unwrap();
+                let tempo_map = self.tempo_map.read().unwrap();
+                let current_tempo = tempo_map.tempo_at(Tick(0)); // Default to tempo at start
+                ShellReply::TransportState {
+                    playing: transport.playing,
+                    position: IpcBeat(transport.position.0),
+                    tempo: current_tempo,
+                }
+            }
+            ShellRequest::CreateRegion { position, duration, behavior } => {
+                let region_id = self.create_region(Beat(position.0), Beat(duration.0), &behavior);
+                ShellReply::RegionCreated { region_id }
+            }
+            ShellRequest::DeleteRegion { region_id } => {
+                if self.delete_region(region_id) {
+                    ShellReply::Ok {
+                        result: serde_json::Value::Null,
+                    }
+                } else {
+                    ShellReply::Error {
+                        error: format!("Region {} not found", region_id),
+                        traceback: None,
+                    }
+                }
+            }
+            ShellRequest::MoveRegion { region_id, new_position } => {
+                if self.move_region(region_id, Beat(new_position.0)) {
+                    ShellReply::Ok {
+                        result: serde_json::Value::Null,
+                    }
+                } else {
+                    ShellReply::Error {
+                        error: format!("Region {} not found", region_id),
+                        traceback: None,
+                    }
+                }
+            }
+            ShellRequest::GetRegions { range } => {
+                let regions = self.get_regions(range.map(|(start, end)| (Beat(start.0), Beat(end.0))));
+                ShellReply::Regions { regions }
+            }
+            ShellRequest::GetPendingApprovals => {
+                let approvals = self.get_pending_approvals();
+                ShellReply::PendingApprovals { approvals }
+            }
+
+            // Latent lifecycle management
+            ShellRequest::UpdateLatentStarted { region_id, job_id } => {
+                match self.handle_latent_started(region_id, job_id) {
+                    Ok(()) => ShellReply::Ok { result: serde_json::Value::Null },
+                    Err(e) => ShellReply::Error { error: e, traceback: None },
+                }
+            }
+            ShellRequest::UpdateLatentProgress { region_id, progress } => {
+                match self.handle_latent_progress(region_id, progress) {
+                    Ok(()) => ShellReply::Ok { result: serde_json::Value::Null },
+                    Err(e) => ShellReply::Error { error: e, traceback: None },
+                }
+            }
+            ShellRequest::UpdateLatentResolved { region_id, artifact_id, content_hash, content_type } => {
+                let internal_content_type = convert_ipc_content_type_to_internal(&content_type);
+                match self.handle_latent_resolved(region_id, artifact_id, content_hash, internal_content_type) {
+                    Ok(()) => ShellReply::Ok { result: serde_json::Value::Null },
+                    Err(e) => ShellReply::Error { error: e, traceback: None },
+                }
+            }
+            ShellRequest::UpdateLatentFailed { region_id, error } => {
+                match self.handle_latent_failed(region_id, error) {
+                    Ok(()) => ShellReply::Ok { result: serde_json::Value::Null },
+                    Err(e) => ShellReply::Error { error: e, traceback: None },
+                }
+            }
+            ShellRequest::ApproveLatent { region_id, decided_by } => {
+                match self.handle_approve(region_id, decided_by) {
+                    Ok(()) => ShellReply::Ok { result: serde_json::Value::Null },
+                    Err(e) => ShellReply::Error { error: e, traceback: None },
+                }
+            }
+            ShellRequest::RejectLatent { region_id, decided_by, reason } => {
+                match self.handle_reject(region_id, decided_by, reason) {
+                    Ok(()) => ShellReply::Ok { result: serde_json::Value::Null },
+                    Err(e) => ShellReply::Error { error: e, traceback: None },
+                }
+            }
+
+            // Stream commands are handled by the stream manager
+            ShellRequest::StreamStart { uri, definition, chunk_path } => {
+                match self.handle_stream_start(uri, definition, chunk_path) {
+                    Ok(()) => ShellReply::Ok { result: serde_json::Value::Null },
+                    Err(e) => ShellReply::Error { error: e, traceback: None },
+                }
+            }
+            ShellRequest::StreamSwitchChunk { uri, new_chunk_path } => {
+                match self.handle_stream_switch_chunk(uri, new_chunk_path) {
+                    Ok(()) => ShellReply::Ok { result: serde_json::Value::Null },
+                    Err(e) => ShellReply::Error { error: e, traceback: None },
+                }
+            }
+            ShellRequest::StreamStop { uri } => {
+                match self.handle_stream_stop(uri) {
+                    Ok(()) => ShellReply::Ok { result: serde_json::Value::Null },
+                    Err(e) => ShellReply::Error { error: e, traceback: None },
+                }
+            }
+            // Unhandled requests
+            _ => ShellReply::Error {
+                error: format!("Unhandled shell request: {:?}", req),
+                traceback: None,
+            },
+        }
+    }
+}
 
 /// Convert IPC Behavior to internal Behavior
 fn convert_ipc_behavior_to_internal(ipc: &crate::ipc::Behavior) -> Behavior {

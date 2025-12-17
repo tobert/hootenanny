@@ -5,12 +5,13 @@
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use hooteproto::{Command, Envelope, HootFrame, Payload, PROTOCOL_VERSION};
+use hooteproto::{Command, ContentType, HootFrame, Payload, PROTOCOL_VERSION};
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 use zeromq::{DealerSocket, Socket, SocketRecv, SocketSend, ZmqMessage};
 
 /// Connection state to luanette
@@ -146,20 +147,38 @@ impl LuanetteClient {
 
     /// Send a payload to luanette and wait for response
     pub async fn request(&self, payload: Payload, traceparent: Option<String>) -> Result<Payload> {
-        let envelope = if let Some(tp) = traceparent {
-            Envelope::new(payload).with_traceparent(tp)
-        } else {
-            Envelope::new(payload)
+        use hooteproto::{payload_to_capnp_envelope, capnp_envelope_to_payload, envelope_capnp};
+
+        // Generate request ID
+        let request_id = Uuid::new_v4();
+
+        // Convert payload to Cap'n Proto envelope
+        let message = payload_to_capnp_envelope(request_id, &payload)
+            .context("Failed to convert payload to capnp")?;
+
+        // Serialize to bytes
+        let body_bytes = capnp::serialize::write_message_to_words(&message);
+
+        // Create HootFrame
+        let frame = HootFrame {
+            command: Command::Request,
+            content_type: ContentType::CapnProto,
+            request_id,
+            service: "luanette".to_string(),
+            traceparent,
+            body: Bytes::from(body_bytes),
         };
 
-        let bytes = rmp_serde::to_vec(&envelope)?;
-        debug!("Sending to luanette ({} bytes)", bytes.len());
+        // Serialize HootFrame to ZMQ message
+        let frames = frame.to_frames();
+        let zmq_msg = frames_to_zmq_message(&frames);
+
+        debug!("Sending capnp request to luanette ({} bytes)", frame.body.len());
 
         let mut socket = self.socket.write().await;
 
         // Send
-        let msg = ZmqMessage::from(bytes);
-        tokio::time::timeout(self.timeout, socket.send(msg))
+        tokio::time::timeout(self.timeout, socket.send(zmq_msg))
             .await
             .context("Send timeout")?
             .context("Failed to send")?;
@@ -170,13 +189,28 @@ impl LuanetteClient {
             .context("Receive timeout")?
             .context("Failed to receive")?;
 
-        let response_bytes = response.get(0).context("Empty response")?;
+        // Parse HootFrame from response
+        let response_frames: Vec<Bytes> = response
+            .into_vec()
+            .into_iter()
+            .map(|bytes| Bytes::from(bytes))
+            .collect();
 
-        let response_envelope: Envelope = rmp_serde::from_slice(response_bytes)
-            .with_context(|| "Failed to deserialize response")?;
+        let response_frame = HootFrame::from_frames(&response_frames)
+            .context("Failed to parse response HootFrame")?;
+
+        // Parse Cap'n Proto response
+        let reader = response_frame.read_capnp()
+            .context("Failed to read capnp from response")?;
+
+        let envelope_reader = reader.get_root::<envelope_capnp::envelope::Reader>()
+            .context("Failed to get envelope root")?;
+
+        let response_payload = capnp_envelope_to_payload(envelope_reader)
+            .context("Failed to convert capnp to payload")?;
 
         self.health.record_success().await;
-        Ok(response_envelope.payload)
+        Ok(response_payload)
     }
 
     /// Send a HOOT01 heartbeat and wait for response
