@@ -252,7 +252,10 @@ impl Dispatcher {
         }
     }
 
-    /// Store a script (stub - needs CAS)
+    /// Store a Lua script in CAS
+    ///
+    /// Stores the raw script content. Tags and creator are returned but not persisted -
+    /// for searchable metadata, use hootenanny's artifact system.
     #[instrument(skip(self, content))]
     pub async fn script_store(
         &self,
@@ -260,58 +263,84 @@ impl Dispatcher {
         tags: Option<Vec<String>>,
         creator: Option<String>,
     ) -> Payload {
-        debug!("script_store not fully implemented yet - needs CAS");
+        use cas::ContentStore;
 
-        // Compute a simple hash for now
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        content.hash(&mut hasher);
-        let hash = format!("{:016x}", hasher.finish());
-
-        Payload::Success {
-            result: serde_json::json!({
-                "hash": hash,
-                "size": content.len(),
-                "tags": tags,
-                "creator": creator,
-                "note": "CAS integration not yet implemented"
-            }),
+        match self.cas.store(content.as_bytes(), "text/x-lua") {
+            Ok(hash) => Payload::Success {
+                result: serde_json::json!({
+                    "hash": hash.to_string(),
+                    "size": content.len(),
+                    "tags": tags,
+                    "creator": creator,
+                    "note": "Script stored in CAS. For searchable metadata, use hootenanny artifact APIs."
+                }),
+            },
+            Err(e) => Payload::Error {
+                code: "cas_store_failed".to_string(),
+                message: format!("Failed to store script in CAS: {}", e),
+                details: None,
+            },
         }
     }
 
-    /// Search for scripts (stub - needs CAS)
+    /// Search for scripts by metadata
+    ///
+    /// CAS is content-addressed and doesn't support metadata search.
+    /// Use hootenanny's artifact APIs for searchable script storage.
     #[instrument(skip(self))]
     pub async fn script_search(
         &self,
-        tag: Option<String>,
-        creator: Option<String>,
-        vibe: Option<String>,
+        _tag: Option<String>,
+        _creator: Option<String>,
+        _vibe: Option<String>,
     ) -> Payload {
-        debug!("script_search not fully implemented yet - needs CAS");
-
-        Payload::Success {
-            result: serde_json::json!({
-                "scripts": [],
-                "query": {
-                    "tag": tag,
-                    "creator": creator,
-                    "vibe": vibe,
-                },
-                "note": "CAS integration not yet implemented"
-            }),
+        Payload::Error {
+            code: "not_available".to_string(),
+            message: "Script search requires artifact system. Use hootenanny's artifact_list with tag:type:lua".to_string(),
+            details: Some(serde_json::json!({
+                "suggested_tool": "artifact_list",
+                "suggested_filter": "type:lua"
+            })),
         }
     }
 
-    /// Describe a script's interface (stub - needs CAS)
+    /// Retrieve and describe a script from CAS
     #[instrument(skip(self))]
     pub async fn lua_describe(&self, script_hash: &str) -> Payload {
-        debug!("lua_describe not fully implemented yet - needs CAS");
+        use cas::ContentStore;
 
-        Payload::Error {
-            code: "not_implemented".to_string(),
-            message: "lua_describe requires CAS integration".to_string(),
-            details: Some(serde_json::json!({"script_hash": script_hash})),
+        let content_hash: ContentHash = match script_hash.parse() {
+            Ok(h) => h,
+            Err(e) => {
+                return Payload::Error {
+                    code: "invalid_hash".to_string(),
+                    message: format!("Invalid content hash: {}", e),
+                    details: Some(serde_json::json!({"script_hash": script_hash})),
+                };
+            }
+        };
+
+        match self.cas.retrieve(&content_hash) {
+            Ok(Some(content)) => {
+                let source = String::from_utf8_lossy(&content);
+                Payload::Success {
+                    result: serde_json::json!({
+                        "hash": script_hash,
+                        "size": content.len(),
+                        "source": source,
+                    }),
+                }
+            }
+            Ok(None) => Payload::Error {
+                code: "not_found".to_string(),
+                message: format!("Script not found in CAS: {}", script_hash),
+                details: Some(serde_json::json!({"script_hash": script_hash})),
+            },
+            Err(e) => Payload::Error {
+                code: "cas_retrieve_failed".to_string(),
+                message: format!("Failed to retrieve script from CAS: {}", e),
+                details: Some(serde_json::json!({"script_hash": script_hash})),
+            },
         }
     }
 
