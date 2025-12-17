@@ -132,8 +132,10 @@ impl TypedDispatcher {
                 ResponseEnvelope::ack("pong")
             }
             ToolRequest::ListTools => {
-                // TODO: Return proper typed list
-                ResponseEnvelope::ack("list_tools not yet typed")
+                use hooteproto::responses::ToolsListResponse;
+                let tools = crate::api::dispatch::list_tools();
+                let count = tools.len();
+                ResponseEnvelope::success(ToolResponse::ToolsList(ToolsListResponse { tools, count }))
             }
 
             // Fallback for tools that should be sync but aren't implemented yet

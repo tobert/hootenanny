@@ -253,43 +253,78 @@ impl EventDualityServer {
 
     /// Get garden status - typed response
     pub async fn garden_status_typed(&self) -> Result<GardenStatusResponse, ToolError> {
+        use chaosgarden::ipc::ShellReply;
+
         let manager = self
             .garden_manager
             .as_ref()
             .ok_or_else(|| ToolError::validation("not_connected", "Not connected to chaosgarden"))?;
 
-        // Use get_transport_state which returns a ShellReply
         let reply = manager.get_transport_state().await.map_err(|e| {
             ToolError::service("chaosgarden", "status_failed", e.to_string())
         })?;
 
-        // Parse the reply - for now return a default response
-        // TODO: Parse actual transport state from ShellReply
-        Ok(GardenStatusResponse {
-            state: TransportState::Stopped,
-            position_beats: 0.0,
-            tempo_bpm: 120.0,
-            region_count: 0,
-        })
+        match reply {
+            ShellReply::TransportState { playing, position, tempo } => {
+                Ok(GardenStatusResponse {
+                    state: if playing { TransportState::Playing } else { TransportState::Stopped },
+                    position_beats: position.0,
+                    tempo_bpm: tempo,
+                    region_count: 0, // Would need separate query
+                })
+            }
+            ShellReply::Error { error, .. } => {
+                Err(ToolError::service("chaosgarden", "status_failed", error))
+            }
+            _ => Err(ToolError::internal("Unexpected reply type for get_transport_state")),
+        }
     }
 
     /// Get garden regions - typed response
     pub async fn garden_get_regions_typed(
         &self,
-        _start: Option<f64>,
-        _end: Option<f64>,
+        start: Option<f64>,
+        end: Option<f64>,
     ) -> Result<GardenRegionsResponse, ToolError> {
-        let _manager = self
+        use chaosgarden::ipc::{Beat, ShellReply, ShellRequest};
+        use hooteproto::responses::GardenRegionInfo;
+
+        let manager = self
             .garden_manager
             .as_ref()
             .ok_or_else(|| ToolError::validation("not_connected", "Not connected to chaosgarden"))?;
 
-        // TODO: Implement region query via GardenManager.query()
-        // For now return empty list
-        Ok(GardenRegionsResponse {
-            regions: vec![],
-            count: 0,
-        })
+        // Convert f64 beat range to (Beat, Beat) tuple
+        let range = match (start, end) {
+            (Some(s), Some(e)) => Some((Beat(s), Beat(e))),
+            _ => None,
+        };
+
+        let reply = manager
+            .request(ShellRequest::GetRegions { range })
+            .await
+            .map_err(|e| ToolError::service("chaosgarden", "get_regions_failed", e.to_string()))?;
+
+        match reply {
+            ShellReply::Regions { regions } => {
+                let converted: Vec<GardenRegionInfo> = regions
+                    .into_iter()
+                    .map(|r| GardenRegionInfo {
+                        region_id: r.region_id.to_string(),
+                        position: r.position.0,
+                        duration: r.duration.0,
+                        behavior_type: if r.is_latent { "latent" } else { "play_content" }.to_string(),
+                        content_id: r.artifact_id.unwrap_or_default(),
+                    })
+                    .collect();
+                let count = converted.len();
+                Ok(GardenRegionsResponse { regions: converted, count })
+            }
+            ShellReply::Error { error, .. } => {
+                Err(ToolError::service("chaosgarden", "get_regions_failed", error))
+            }
+            _ => Err(ToolError::internal("Unexpected reply type for GetRegions")),
+        }
     }
 
     // =========================================================================

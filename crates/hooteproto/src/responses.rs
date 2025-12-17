@@ -69,6 +69,9 @@ pub enum ToolResponse {
     // === Config ===
     ConfigValue(ConfigValueResponse),
 
+    // === Admin ===
+    ToolsList(ToolsListResponse),
+
     // === Simple Acknowledgements ===
     Ack(AckResponse),
 
@@ -453,6 +456,16 @@ pub enum ConfigValue {
     Object(std::collections::HashMap<String, ConfigValue>),
     Array(Vec<ConfigValue>),
     Null,
+}
+
+// =============================================================================
+// Admin Responses
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolsListResponse {
+    pub tools: Vec<crate::ToolInfo>,
+    pub count: usize,
 }
 
 // =============================================================================
