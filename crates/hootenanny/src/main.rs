@@ -19,6 +19,8 @@ use api::service::EventDualityServer;
 use cas::FileStore;
 use hooteconf::HootConfig;
 use mcp_tools::local_models::LocalModels;
+use sessions::SessionManager;
+use streams::{SlicingEngine, StreamManager};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -236,6 +238,16 @@ async fn main() -> Result<()> {
     });
     info!("   ZMQ PUB: {}", zmq_pub);
 
+    // --- Stream Subsystems (for capture sessions) ---
+    info!("🎙️  Initializing stream capture subsystems...");
+    let cas_arc = Arc::new(cas.clone());
+    let stream_manager = Arc::new(StreamManager::new(cas_arc.clone()));
+    let session_manager = Arc::new(SessionManager::new(cas_arc.clone(), stream_manager.clone()));
+    let slicing_engine = Arc::new(SlicingEngine::new(cas.clone()));
+    info!("   Stream manager ready");
+    info!("   Session manager ready");
+    info!("   Slicing engine ready");
+
     // Create the EventDualityServer
     let event_duality_server = Arc::new(EventDualityServer::new(
         local_models.clone(),
@@ -246,7 +258,19 @@ async fn main() -> Result<()> {
         gpu_monitor.clone(),
     )
     .with_garden(garden_manager.clone())
-    .with_broadcaster(Some(broadcast_publisher)));
+    .with_broadcaster(Some(broadcast_publisher))
+    .with_stream_manager(Some(stream_manager.clone()))
+    .with_session_manager(Some(session_manager.clone()))
+    .with_slicing_engine(Some(slicing_engine.clone())));
+
+    // --- Start Stream Event Handler (if chaosgarden connected) ---
+    if garden_manager.is_some() {
+        if let Err(e) = event_duality_server.start_stream_event_handler().await {
+            tracing::warn!("   Failed to start stream event handler: {}", e);
+        } else {
+            info!("   Stream event handler started");
+        }
+    }
 
     // --- Hooteproto ZMQ Server ---
     info!("📡 Starting hooteproto ZMQ server...");
