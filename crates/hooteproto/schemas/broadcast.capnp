@@ -25,6 +25,11 @@ struct Broadcast {
     # === Device Hot-Plug Events ===
     deviceConnected @13 :DeviceConnected;
     deviceDisconnected @14 :DeviceDisconnected;
+
+    # === Audio Output Attachment Events ===
+    audioAttached @15 :AudioAttached;
+    audioDetached @16 :AudioDetached;
+    audioUnderrun @17 :AudioUnderrun;
   }
 }
 
@@ -99,4 +104,20 @@ struct DeviceConnected {
 struct DeviceDisconnected {
   pipewireId @0 :UInt32;
   name @1 :Text;            # Optional, empty string if unknown
+}
+
+# === Audio Output Attachment Events ===
+
+struct AudioAttached {
+  deviceName @0 :Text;
+  sampleRate @1 :UInt32;
+  latencyFrames @2 :UInt32;
+}
+
+struct AudioDetached {
+  # Empty - just signals detachment
+}
+
+struct AudioUnderrun {
+  count @0 :UInt64;
 }

@@ -228,9 +228,11 @@ impl ClientManager {
         let client = self.client.as_ref()
             .ok_or_else(|| anyhow::anyhow!("Not connected to hootenanny"))?;
 
-        // Convert tool name + args to Payload using shared function
-        let payload = hooteproto::tool_to_payload(tool_name, &arguments)
-            .with_context(|| format!("Failed to convert tool '{}' to payload", tool_name))?;
+        // Use generic ToolCall - hootenanny routes by name
+        let payload = Payload::ToolCall {
+            name: tool_name.to_string(),
+            args: arguments,
+        };
 
         // Send request
         let response = client.request(payload).await?;

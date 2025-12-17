@@ -325,6 +325,22 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Get regions from the timeline".to_string(),
             input_schema: schema_for::<super::tools::garden::GardenGetRegionsRequest>(),
         },
+        // Audio attachment
+        ToolInfo {
+            name: "garden_attach_audio".to_string(),
+            description: "Attach PipeWire audio output".to_string(),
+            input_schema: schema_for::<super::tools::garden::GardenAttachAudioRequest>(),
+        },
+        ToolInfo {
+            name: "garden_detach_audio".to_string(),
+            description: "Detach audio output".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        },
+        ToolInfo {
+            name: "garden_audio_status".to_string(),
+            description: "Get audio output status".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        },
     ]
 }
 
@@ -532,6 +548,16 @@ pub async fn dispatch_tool(
         "garden_get_regions" => {
             let request: super::tools::garden::GardenGetRegionsRequest = parse_args(args)?;
             tool_to_json(server.garden_get_regions(request).await)
+        }
+        "garden_attach_audio" => {
+            let request: super::tools::garden::GardenAttachAudioRequest = parse_args(args)?;
+            tool_to_json(server.garden_attach_audio(request).await)
+        }
+        "garden_detach_audio" => {
+            tool_to_json(server.garden_detach_audio().await)
+        }
+        "garden_audio_status" => {
+            tool_to_json(server.garden_audio_status().await)
         }
 
         _ => Err(DispatchError::not_found(name)),

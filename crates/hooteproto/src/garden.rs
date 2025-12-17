@@ -272,6 +272,18 @@ pub enum ShellRequest {
     StreamStop {
         uri: String,
     },
+
+    // Audio output attachment (dynamic PipeWire output)
+    AttachAudio {
+        /// Device name hint (None = default output)
+        device_name: Option<String>,
+        /// Sample rate (None = 48000)
+        sample_rate: Option<u32>,
+        /// Latency in frames (None = 256)
+        latency_frames: Option<u32>,
+    },
+    DetachAudio,
+    GetAudioStatus,
 }
 
 /// Stream format definition for audio/MIDI capture
@@ -332,6 +344,15 @@ pub enum ShellReply {
     },
     PendingApprovals {
         approvals: Vec<PendingApproval>,
+    },
+    AudioStatus {
+        attached: bool,
+        device_name: Option<String>,
+        sample_rate: Option<u32>,
+        latency_frames: Option<u32>,
+        callbacks: u64,
+        samples_written: u64,
+        underruns: u64,
     },
 }
 
@@ -440,6 +461,17 @@ pub enum IOPubEvent {
     },
     Warning {
         message: String,
+    },
+
+    // Audio output attachment events
+    AudioAttached {
+        device_name: String,
+        sample_rate: u32,
+        latency_frames: u32,
+    },
+    AudioDetached,
+    AudioUnderrun {
+        count: u64,
     },
 
     // PipeWire device hot-plug events

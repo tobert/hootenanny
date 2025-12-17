@@ -132,14 +132,10 @@ impl Handler for ZmqHandler {
             }
         };
 
-        let payload = match hooteproto::tool_to_payload(name, &arguments) {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(ErrorData::invalid_params(format!(
-                    "Invalid tool arguments: {}",
-                    e
-                )));
-            }
+        // Use generic ToolCall - hootenanny routes by name to dispatch.rs
+        let payload = Payload::ToolCall {
+            name: name.to_string(),
+            args: arguments,
         };
 
         // TODO: Extract traceparent from context if available

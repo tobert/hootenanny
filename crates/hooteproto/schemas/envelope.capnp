@@ -58,7 +58,15 @@ struct Payload {
     streamStart @27 :Streams.StreamStart;
     streamSwitchChunk @28 :Streams.StreamSwitchChunk;
     streamStop @29 :Streams.StreamStop;
+
+    # === Generic Tool Call (name-based dispatch) ===
+    toolCall @30 :ToolCall;
   }
+}
+
+struct ToolCall {
+  name @0 :Text;
+  args @1 :Text;  # JSON string
 }
 
 struct Pong {

@@ -103,3 +103,21 @@ struct RegionSummary {
   isLatent @3 :Bool;
   artifactId @4 :Text;
 }
+
+# === Audio Output Attachment ===
+
+struct AttachAudio {
+  deviceName @0 :Text;
+  sampleRate @1 :UInt32;
+  latencyFrames @2 :UInt32;
+}
+
+struct AudioStatus {
+  attached @0 :Bool;
+  deviceName @1 :Text;
+  sampleRate @2 :UInt32;
+  latencyFrames @3 :UInt32;
+  callbacks @4 :UInt64;
+  samplesWritten @5 :UInt64;
+  underruns @6 :UInt64;
+}

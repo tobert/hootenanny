@@ -108,7 +108,7 @@ pub mod timing;
 
 pub use conversion::{
     capnp_envelope_to_payload, envelope_to_payload, payload_to_capnp_envelope,
-    payload_to_request, tool_to_payload,
+    payload_to_request,
 };
 pub use domain::{JobId, JobInfo, JobStatus, JobStoreStats};
 pub use envelope::{ResponseEnvelope, ToolError};
@@ -227,6 +227,15 @@ pub enum Payload {
     },
     Shutdown {
         reason: String,
+    },
+
+    // === Generic Tool Call (name-based dispatch) ===
+    /// Generic tool call - routes to dispatch.rs by name
+    /// This is the preferred way to call tools - avoids needing Payload variants for each tool
+    ToolCall {
+        name: String,
+        #[serde(default)]
+        args: serde_json::Value,
     },
 
     // === Lua Tools (Holler → Luanette) ===

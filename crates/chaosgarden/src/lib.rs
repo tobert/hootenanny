@@ -26,6 +26,7 @@ pub mod playback;
 pub mod primitives;
 pub mod query;
 pub mod stream_io;
+pub mod tick_clock;
 
 pub use capabilities::{
     Capability, CapabilityRegistry, CapabilityRequirement, CapabilityUri, Constraint,
@@ -55,3 +56,4 @@ pub use query::ChaosgardenAdapter;
 pub use daemon::{DaemonConfig, GardenDaemon};
 pub use pipewire_output::{PipeWireOutputConfig, PipeWireOutputError, PipeWireOutputStream};
 pub use pipewire_input::{PipeWireInputConfig, PipeWireInputError, PipeWireInputStream};
+pub use tick_clock::TickClock;

@@ -8,7 +8,12 @@
 
 use std::sync::{Arc, RwLock};
 
+#[cfg(test)]
+use std::collections::HashMap;
+
 use tracing::{debug, info, warn};
+#[cfg(test)]
+use trustfall::execute_query;
 use uuid::Uuid;
 
 use crate::ipc::{
@@ -16,12 +21,16 @@ use crate::ipc::{
     RegionSummary, SampleFormat as IpcSampleFormat, ShellReply, ShellRequest,
     StreamDefinition as IpcStreamDefinition, StreamFormat as IpcStreamFormat,
 };
+use crate::pipewire_output::{PipeWireOutputConfig, PipeWireOutputStream};
+#[cfg(test)]
+use crate::ipc::QueryReply;
 use crate::primitives::{Behavior, ContentType};
 use crate::stream_io::{
     SampleFormat, StreamDefinition, StreamFormat, StreamManager, StreamUri,
 };
 use crate::{
     Beat, ChaosgardenAdapter, Graph, LatentConfig, LatentManager, Region, TempoMap, Tick,
+    TickClock,
 };
 
 /// Transport state
@@ -85,6 +94,12 @@ pub struct GardenDaemon {
     // Query adapter - scaffolding for Trustfall queries (see 13-wire-daemon.md Phase 5)
     #[allow(dead_code)]
     query_adapter: Option<Arc<ChaosgardenAdapter>>,
+
+    // Tick clock for position advancement via wall time
+    tick_clock: Arc<RwLock<TickClock>>,
+
+    // Optional PipeWire audio output (attached dynamically)
+    audio_output: RwLock<Option<PipeWireOutputStream>>,
 }
 
 impl GardenDaemon {
@@ -120,6 +135,9 @@ impl GardenDaemon {
             Arc::clone(&tempo_map),
         ).ok().map(Arc::new);
 
+        // Create tick clock for position advancement
+        let tick_clock = Arc::new(RwLock::new(TickClock::new(Arc::clone(&tempo_map))));
+
         Self {
             transport: RwLock::new(TransportState::default()),
             tempo_map,
@@ -130,6 +148,8 @@ impl GardenDaemon {
             stream_publisher,
             active_inputs: Arc::new(RwLock::new(std::collections::HashMap::new())),
             query_adapter,
+            tick_clock,
+            audio_output: RwLock::new(None),
         }
     }
 
@@ -137,46 +157,131 @@ impl GardenDaemon {
     // These are called by handle_shell (tested) and will be wired to Cap'n Proto
     // server once playback integration is complete. See 13-wire-daemon.md.
 
-    #[allow(dead_code)]
     fn play(&self) {
+        self.tick_clock.write().unwrap().start();
         let mut transport = self.transport.write().unwrap();
         transport.playing = true;
         info!("Playback started at beat {}", transport.position.0);
     }
 
-    #[allow(dead_code)]
     fn pause(&self) {
+        self.tick_clock.write().unwrap().pause();
         let mut transport = self.transport.write().unwrap();
         transport.playing = false;
         info!("Playback paused at beat {}", transport.position.0);
     }
 
-    #[allow(dead_code)]
     fn stop(&self) {
+        self.tick_clock.write().unwrap().stop();
         let mut transport = self.transport.write().unwrap();
         transport.playing = false;
         transport.position = Beat(0.0);
         info!("Playback stopped");
     }
 
-    #[allow(dead_code)]
     fn seek(&self, beat: Beat) {
+        self.tick_clock.write().unwrap().seek(beat);
         let mut transport = self.transport.write().unwrap();
         transport.position = beat;
         info!("Seeked to beat {}", beat.0);
     }
 
-    #[allow(dead_code)]
     fn set_tempo(&self, bpm: f64) {
         self.tempo_map.write().unwrap().set_base_tempo(bpm);
         info!("Set tempo to {} BPM", bpm);
     }
 
-    #[allow(dead_code)]
     fn get_transport_state(&self) -> (bool, Beat, f64) {
         let transport = self.transport.read().unwrap();
         let tempo = self.tempo_map.read().unwrap().tempo_at(Tick(0));
         (transport.playing, transport.position, tempo)
+    }
+
+    /// Called by the tick loop to advance position based on wall time
+    ///
+    /// This is the main driver for playback position when running.
+    pub fn tick(&self) {
+        // Get updated position from tick clock
+        let position = self.tick_clock.write().unwrap().tick();
+
+        // Update transport state
+        let mut transport = self.transport.write().unwrap();
+        if transport.playing {
+            transport.position = position;
+        }
+    }
+
+    // === Audio output attachment methods ===
+
+    /// Attach a PipeWire audio output device
+    ///
+    /// If audio is already attached, it will be detached first.
+    fn attach_audio(
+        &self,
+        device_name: Option<String>,
+        sample_rate: Option<u32>,
+        latency_frames: Option<u32>,
+    ) -> Result<(), String> {
+        // Detach any existing audio first
+        self.detach_audio();
+
+        let config = PipeWireOutputConfig {
+            name: device_name.unwrap_or_else(|| "chaosgarden".to_string()),
+            sample_rate: sample_rate.unwrap_or(48000),
+            channels: 2,
+            latency_frames: latency_frames.unwrap_or(256),
+        };
+
+        info!(
+            "Attaching audio output: {} @ {}Hz, {} frames latency",
+            config.name, config.sample_rate, config.latency_frames
+        );
+
+        let stream = PipeWireOutputStream::new(config)
+            .map_err(|e| format!("Failed to create PipeWire output: {}", e))?;
+
+        *self.audio_output.write().unwrap() = Some(stream);
+        info!("Audio output attached");
+        Ok(())
+    }
+
+    /// Detach the current audio output (if any)
+    fn detach_audio(&self) {
+        let mut output = self.audio_output.write().unwrap();
+        if output.is_some() {
+            *output = None;
+            info!("Audio output detached");
+        }
+    }
+
+    /// Get audio output status
+    fn get_audio_status(&self) -> ShellReply {
+        let output = self.audio_output.read().unwrap();
+        match output.as_ref() {
+            Some(stream) => {
+                let config = stream.config();
+                let stats = stream.stats();
+                use std::sync::atomic::Ordering;
+                ShellReply::AudioStatus {
+                    attached: true,
+                    device_name: Some(config.name.clone()),
+                    sample_rate: Some(config.sample_rate),
+                    latency_frames: Some(config.latency_frames),
+                    callbacks: stats.callbacks.load(Ordering::Relaxed),
+                    samples_written: stats.samples_written.load(Ordering::Relaxed),
+                    underruns: stats.underruns.load(Ordering::Relaxed),
+                }
+            }
+            None => ShellReply::AudioStatus {
+                attached: false,
+                device_name: None,
+                sample_rate: None,
+                latency_frames: None,
+                callbacks: 0,
+                samples_written: 0,
+                underruns: 0,
+            },
+        }
     }
 
     fn create_region(&self, position: Beat, duration: Beat, behavior: &crate::ipc::Behavior) -> Uuid {
@@ -642,6 +747,24 @@ impl GardenDaemon {
                     Err(e) => ShellReply::Error { error: e, traceback: None },
                 }
             }
+
+            // Audio output attachment
+            ShellRequest::AttachAudio { device_name, sample_rate, latency_frames } => {
+                match self.attach_audio(device_name, sample_rate, latency_frames) {
+                    Ok(()) => ShellReply::Ok {
+                        result: serde_json::json!({"status": "attached"}),
+                    },
+                    Err(e) => ShellReply::Error { error: e, traceback: None },
+                }
+            }
+            ShellRequest::DetachAudio => {
+                self.detach_audio();
+                ShellReply::Ok {
+                    result: serde_json::json!({"status": "detached"}),
+                }
+            }
+            ShellRequest::GetAudioStatus => self.get_audio_status(),
+
             // Unhandled requests
             _ => ShellReply::Error {
                 error: format!("Unhandled shell request: {:?}", req),

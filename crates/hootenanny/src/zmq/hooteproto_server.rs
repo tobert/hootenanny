@@ -378,6 +378,20 @@ impl HooteprotoServer {
         use crate::api::typed_dispatcher::TypedDispatcher;
         use hooteproto::{envelope_to_payload, payload_to_request};
 
+        // Fast path: ToolCall goes directly to name-based dispatch
+        // This is the preferred way for holler to call tools
+        if let Payload::ToolCall { name, args } = payload {
+            debug!("ToolCall dispatch: {}", name);
+            return match dispatch_tool(server, &name, args).await {
+                Ok(result) => Payload::Success { result },
+                Err(DispatchError { code, message, details }) => Payload::Error {
+                    code,
+                    message,
+                    details,
+                },
+            };
+        }
+
         // Try typed dispatch path first (Protocol v2)
         match payload_to_request(&payload) {
             Ok(Some(request)) => {
@@ -687,6 +701,7 @@ fn payload_type_name(payload: &Payload) -> &'static str {
         Payload::Ping => "ping",
         Payload::Pong { .. } => "pong",
         Payload::Shutdown { .. } => "shutdown",
+        Payload::ToolCall { .. } => "tool_call",
         Payload::LuaEval { .. } => "lua_eval",
         Payload::LuaDescribe { .. } => "lua_describe",
         Payload::ScriptStore { .. } => "script_store",

@@ -7,8 +7,11 @@
 //! - Timeline with regions
 //! - Trustfall queries over graph state
 //! - Latent region lifecycle
+//!
+//! A background tick loop advances the transport position based on wall time.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use chaosgarden::{GardenDaemon, DaemonConfig};
@@ -34,6 +37,17 @@ async fn main() -> Result<()> {
     let config = DaemonConfig::default();
     let handler = Arc::new(GardenDaemon::with_config(config));
     info!("GardenDaemon initialized");
+
+    // Spawn tick loop to advance position based on wall time
+    let tick_handler = Arc::clone(&handler);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(1));
+        loop {
+            interval.tick().await;
+            tick_handler.tick();
+        }
+    });
+    info!("Tick loop started (1ms interval)");
 
     server.run(handler).await?;
 

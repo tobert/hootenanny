@@ -86,6 +86,20 @@ pub struct GardenGetRegionsRequest {
     pub end: Option<f64>,
 }
 
+/// Request to attach PipeWire audio output
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GardenAttachAudioRequest {
+    /// Device name hint (empty for default output)
+    #[serde(default)]
+    pub device_name: Option<String>,
+    /// Sample rate in Hz (default: 48000)
+    #[serde(default)]
+    pub sample_rate: Option<u32>,
+    /// Latency in frames (default: 256)
+    #[serde(default)]
+    pub latency_frames: Option<u32>,
+}
+
 impl EventDualityServer {
     fn require_garden(&self) -> Result<(), ToolError> {
         if self.garden_manager.is_none() {
@@ -454,6 +468,108 @@ impl EventDualityServer {
             }
             Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
             Err(e) => Err(ToolError::internal(format!("Get regions failed: {}", e))),
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Audio Output Attachment
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[tracing::instrument(name = "mcp.tool.garden_attach_audio", skip(self))]
+    pub async fn garden_attach_audio(&self, request: GardenAttachAudioRequest) -> ToolResult {
+        self.require_garden()?;
+        let manager = self.garden_manager.as_ref().unwrap();
+
+        use chaosgarden::ipc::ShellRequest;
+
+        match manager.request(ShellRequest::AttachAudio {
+            device_name: request.device_name,
+            sample_rate: request.sample_rate,
+            latency_frames: request.latency_frames,
+        }).await {
+            Ok(chaosgarden::ipc::ShellReply::Ok { result }) => {
+                let response = GardenResponse {
+                    success: true,
+                    message: "Audio output attached".to_string(),
+                    data: Some(result),
+                };
+                let json = serde_json::to_string_pretty(&response)
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
+            }
+            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
+                Err(ToolError::internal(error))
+            }
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Attach audio failed: {}", e))),
+        }
+    }
+
+    #[tracing::instrument(name = "mcp.tool.garden_detach_audio", skip(self))]
+    pub async fn garden_detach_audio(&self) -> ToolResult {
+        self.require_garden()?;
+        let manager = self.garden_manager.as_ref().unwrap();
+
+        use chaosgarden::ipc::ShellRequest;
+
+        match manager.request(ShellRequest::DetachAudio).await {
+            Ok(chaosgarden::ipc::ShellReply::Ok { result }) => {
+                let response = GardenResponse {
+                    success: true,
+                    message: "Audio output detached".to_string(),
+                    data: Some(result),
+                };
+                let json = serde_json::to_string_pretty(&response)
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
+            }
+            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
+                Err(ToolError::internal(error))
+            }
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Detach audio failed: {}", e))),
+        }
+    }
+
+    #[tracing::instrument(name = "mcp.tool.garden_audio_status", skip(self))]
+    pub async fn garden_audio_status(&self) -> ToolResult {
+        self.require_garden()?;
+        let manager = self.garden_manager.as_ref().unwrap();
+
+        use chaosgarden::ipc::ShellRequest;
+
+        match manager.request(ShellRequest::GetAudioStatus).await {
+            Ok(chaosgarden::ipc::ShellReply::AudioStatus {
+                attached,
+                device_name,
+                sample_rate,
+                latency_frames,
+                callbacks,
+                samples_written,
+                underruns,
+            }) => {
+                let response = GardenResponse {
+                    success: true,
+                    message: if attached { "Audio attached".to_string() } else { "Audio not attached".to_string() },
+                    data: Some(serde_json::json!({
+                        "attached": attached,
+                        "device_name": device_name,
+                        "sample_rate": sample_rate,
+                        "latency_frames": latency_frames,
+                        "callbacks": callbacks,
+                        "samples_written": samples_written,
+                        "underruns": underruns,
+                    })),
+                };
+                let json = serde_json::to_string_pretty(&response)
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
+            }
+            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
+                Err(ToolError::internal(error))
+            }
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Get audio status failed: {}", e))),
         }
     }
 }
