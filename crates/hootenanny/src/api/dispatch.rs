@@ -82,6 +82,11 @@ pub fn list_tools() -> Vec<ToolInfo> {
             input_schema: schema_for::<CasInspectRequest>(),
         },
         ToolInfo {
+            name: "cas_stats".to_string(),
+            description: "Get CAS storage statistics".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        },
+        ToolInfo {
             name: "cas_upload_file".to_string(),
             description: "Upload file from disk to CAS".to_string(),
             input_schema: schema_for::<UploadFileRequest>(),
@@ -380,6 +385,9 @@ pub async fn dispatch_tool(
         "cas_inspect" => {
             let request: CasInspectRequest = parse_args(args)?;
             tool_to_json(server.cas_inspect(request).await)
+        }
+        "cas_stats" => {
+            tool_to_json(server.cas_stats().await)
         }
         "cas_upload_file" => {
             let request: UploadFileRequest = parse_args(args)?;

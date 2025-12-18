@@ -217,6 +217,33 @@ pub struct CasInspectResponse {
     pub local_path: Option<String>,
 }
 
+/// Statistics about CAS storage by MIME type
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct MimeTypeStats {
+    /// Number of files with this MIME type
+    #[schemars(schema_with = "u64_schema")]
+    pub count: u64,
+
+    /// Total bytes stored for this MIME type
+    #[schemars(schema_with = "u64_schema")]
+    pub bytes: u64,
+}
+
+/// Response from cas_stats tool
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CasStatsResponse {
+    /// Total number of files in CAS
+    #[schemars(schema_with = "u64_schema")]
+    pub total_files: u64,
+
+    /// Total bytes stored
+    #[schemars(schema_with = "u64_schema")]
+    pub total_bytes: u64,
+
+    /// Breakdown by MIME type
+    pub by_mime_type: std::collections::HashMap<String, MimeTypeStats>,
+}
+
 /// Response from cas_upload_file tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CasUploadResponse {

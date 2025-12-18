@@ -71,6 +71,11 @@ impl LocalModels {
         }
     }
 
+    /// Get the base path of the CAS directory
+    pub fn cas_base_path(&self) -> std::path::PathBuf {
+        self.cas.config().base_path.clone()
+    }
+
     // Helper to resolve CAS hash to bytes
     fn resolve_cas(&self, hash: &str) -> Result<Vec<u8>> {
         let content_hash: ContentHash = hash.parse().context("Invalid hash format")?;

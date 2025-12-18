@@ -1,4 +1,4 @@
-use crate::api::responses::{CasStoreResponse, CasInspectResponse, CasUploadResponse, ArtifactUploadResponse, MidiToWavResponse, SoundfontInspectResponse, PresetInfo, SoundfontPresetResponse, InstrumentInfo, JobSpawnResponse, JobStatus};
+use crate::api::responses::{CasStoreResponse, CasInspectResponse, CasStatsResponse, MimeTypeStats, CasUploadResponse, ArtifactUploadResponse, MidiToWavResponse, SoundfontInspectResponse, PresetInfo, SoundfontPresetResponse, InstrumentInfo, JobSpawnResponse, JobStatus};
 use crate::api::service::EventDualityServer;
 use crate::api::schema::{CasStoreRequest, CasInspectRequest, UploadFileRequest, ArtifactUploadRequest, MidiToWavRequest, SoundfontInspectRequest, SoundfontPresetInspectRequest};
 use crate::artifact_store::{Artifact, ArtifactStore};
@@ -8,6 +8,23 @@ use hooteproto::{ToolOutput, ToolResult, ToolError};
 use base64::{Engine as _, engine::general_purpose};
 use tracing;
 use std::sync::Arc;
+
+/// Format bytes in human-readable form
+fn humanize_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
 
 /// Look up an artifact ID by its content hash
 fn find_artifact_by_hash<S: ArtifactStore>(store: &S, content_hash: &str) -> Option<String> {
@@ -84,6 +101,71 @@ impl EventDualityServer {
             format!("CAS content: {} ({} bytes, {})", response.hash, response.size_bytes, response.mime_type),
             &response,
         ))
+    }
+
+    #[tracing::instrument(
+        name = "mcp.tool.cas_stats",
+        skip(self),
+        fields(
+            cas.total_files = tracing::field::Empty,
+            cas.total_bytes = tracing::field::Empty,
+        )
+    )]
+    pub async fn cas_stats(&self) -> ToolResult {
+        use std::collections::HashMap;
+
+        let cas_dir = self.local_models.cas_base_path();
+        let metadata_dir = cas_dir.join("metadata");
+
+        let mut total_files = 0u64;
+        let mut total_bytes = 0u64;
+        let mut by_mime: HashMap<String, MimeTypeStats> = HashMap::new();
+
+        // Walk the metadata directory to get stats
+        if metadata_dir.exists() {
+            for entry in walkdir::WalkDir::new(&metadata_dir)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_file() && e.path().extension().is_some_and(|ext| ext == "json"))
+            {
+                if let Ok(contents) = std::fs::read_to_string(entry.path()) {
+                    if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&contents) {
+                        let mime_type = meta.get("mime_type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("application/octet-stream")
+                            .to_string();
+                        let size = meta.get("size")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+
+                        total_files += 1;
+                        total_bytes += size;
+
+                        let entry = by_mime.entry(mime_type).or_default();
+                        entry.count += 1;
+                        entry.bytes += size;
+                    }
+                }
+            }
+        }
+
+        tracing::Span::current().record("cas.total_files", total_files);
+        tracing::Span::current().record("cas.total_bytes", total_bytes);
+
+        let response = CasStatsResponse {
+            total_files,
+            total_bytes,
+            by_mime_type: by_mime,
+        };
+
+        let human_text = format!(
+            "CAS: {} files, {} bytes ({} types)",
+            total_files,
+            humanize_bytes(total_bytes),
+            response.by_mime_type.len()
+        );
+
+        Ok(ToolOutput::new(human_text, &response))
     }
 
     #[tracing::instrument(
