@@ -418,9 +418,6 @@ fn run_pipewire_loop(
                     output_buffer[i] += temp_buffer[i];
                 }
                 has_audio = true;
-                stats
-                    .samples_written
-                    .fetch_add(timeline_read as u64, Ordering::Relaxed);
             }
 
             // Count underrun only if no audio from any source AND we've warmed up
@@ -428,6 +425,11 @@ fn run_pipewire_loop(
             if !has_audio && stats.warmed_up.load(Ordering::Relaxed) {
                 stats.underruns.fetch_add(1, Ordering::Relaxed);
             }
+
+            // Count total samples written to output (from all sources)
+            stats
+                .samples_written
+                .fetch_add(samples_needed as u64, Ordering::Relaxed);
 
             // Fill output buffer
             for i in 0..n_frames {
