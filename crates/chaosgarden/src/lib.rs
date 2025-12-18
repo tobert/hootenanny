@@ -18,6 +18,7 @@ pub mod external_io;
 pub mod graph;
 pub mod ipc;
 pub mod latent;
+pub mod mixer;
 pub mod nodes;
 pub mod patterns;
 pub mod monitor_input;
@@ -60,3 +61,4 @@ pub use monitor_input::{MonitorInputConfig, MonitorInputError, MonitorInputStrea
 pub use pipewire_output::{MonitorMixState, PipeWireOutputConfig, PipeWireOutputError, PipeWireOutputStream, StreamStats};
 pub use pipewire_input::{PipeWireInputConfig, PipeWireInputError, PipeWireInputStream};
 pub use tick_clock::TickClock;
+pub use mixer::{MixerChannel, MixerConfig, MixerState};

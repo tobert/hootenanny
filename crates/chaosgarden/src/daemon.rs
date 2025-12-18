@@ -6,13 +6,11 @@
 //! - Trustfall queries over graph state
 //! - Latent lifecycle management
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
 
 #[cfg(test)]
 use std::collections::HashMap;
-
-use portable_atomic::AtomicF32;
 
 use tracing::{debug, info, warn};
 #[cfg(test)]
@@ -25,6 +23,7 @@ use crate::ipc::{
     StreamDefinition as IpcStreamDefinition, StreamFormat as IpcStreamFormat,
 };
 use crate::external_io::{audio_ring_pair, AudioRingConsumer};
+use crate::mixer::{MixerChannel, MixerState};
 use crate::monitor_input::{MonitorInputConfig, MonitorInputStream};
 use crate::pipewire_output::{MonitorMixState, PipeWireOutputConfig, PipeWireOutputStream};
 #[cfg(test)]
@@ -111,10 +110,13 @@ pub struct GardenDaemon {
     // Lock-free ring consumer for monitor mixing (created by attach_input, consumed by attach_audio)
     // Uses Mutex instead of RwLock because AudioRingConsumer is Send but not Sync
     monitor_consumer: Mutex<Option<AudioRingConsumer>>,
-    // Monitor enabled flag (RT-safe, Arc for sharing with output callback)
-    monitor_enabled: Arc<AtomicBool>,
-    // Monitor gain 0.0-1.0 (RT-safe, Arc for sharing with output callback)
-    monitor_gain: Arc<AtomicF32>,
+
+    // Audio mixer state (control plane for all mixing)
+    // The mixer holds channels with gain/pan/mute/solo controls.
+    // Ring buffers are transport and stay separate.
+    mixer: MixerState,
+    // Reference to the monitor channel in the mixer (for convenience)
+    monitor_channel: Arc<MixerChannel>,
 }
 
 impl GardenDaemon {
@@ -153,6 +155,13 @@ impl GardenDaemon {
         // Create tick clock for position advancement
         let tick_clock = Arc::new(RwLock::new(TickClock::new(Arc::clone(&tempo_map))));
 
+        // Create mixer with monitor channel
+        let mut mixer = MixerState::new();
+        let monitor_channel = mixer.add_channel(MixerChannel::new("monitor"));
+        // Default: enabled but muted until attach_input is called
+        monitor_channel.enabled.store(false, Ordering::Relaxed);
+        monitor_channel.set_gain(0.8); // Default 80% gain
+
         Self {
             transport: RwLock::new(TransportState::default()),
             tempo_map,
@@ -167,8 +176,8 @@ impl GardenDaemon {
             audio_output: RwLock::new(None),
             monitor_input: RwLock::new(None),
             monitor_consumer: Mutex::new(None),
-            monitor_enabled: Arc::new(AtomicBool::new(false)),
-            monitor_gain: Arc::new(AtomicF32::new(0.8)), // Default 80% gain
+            mixer,
+            monitor_channel,
         }
     }
 
@@ -264,10 +273,11 @@ impl GardenDaemon {
         let consumer = self.monitor_consumer.lock().unwrap().take();
         let stream = if let Some(consumer) = consumer {
             // Create monitor mix state for RT callback with lock-free consumer
+            // Use the mixer channel's atomics for RT-safe control
             let monitor_state = MonitorMixState {
                 consumer,
-                enabled: Arc::clone(&self.monitor_enabled),
-                gain: Arc::clone(&self.monitor_gain),
+                enabled: Arc::clone(&self.monitor_channel.enabled),
+                gain: Arc::clone(&self.monitor_channel.gain),
             };
 
             info!("Creating output stream with RT monitor mixing (lock-free)");
@@ -413,8 +423,8 @@ impl GardenDaemon {
                     device_name: config.device_name.clone(),
                     sample_rate: Some(config.sample_rate),
                     channels: Some(config.channels),
-                    monitor_enabled: self.monitor_enabled.load(Ordering::Relaxed),
-                    monitor_gain: self.monitor_gain.load(Ordering::Relaxed),
+                    monitor_enabled: self.monitor_channel.enabled.load(Ordering::Relaxed),
+                    monitor_gain: self.monitor_channel.get_gain(),
                     callbacks: stats.callbacks.load(Ordering::Relaxed),
                     samples_captured: stats.samples_captured.load(Ordering::Relaxed),
                     overruns: stats.overruns.load(Ordering::Relaxed),
@@ -425,8 +435,8 @@ impl GardenDaemon {
                 device_name: None,
                 sample_rate: None,
                 channels: None,
-                monitor_enabled: self.monitor_enabled.load(Ordering::Relaxed),
-                monitor_gain: self.monitor_gain.load(Ordering::Relaxed),
+                monitor_enabled: self.monitor_channel.enabled.load(Ordering::Relaxed),
+                monitor_gain: self.monitor_channel.get_gain(),
                 callbacks: 0,
                 samples_captured: 0,
                 overruns: 0,
@@ -437,12 +447,13 @@ impl GardenDaemon {
     /// Set monitor enabled state and/or gain
     fn set_monitor(&self, enabled: Option<bool>, gain: Option<f32>) {
         if let Some(en) = enabled {
-            self.monitor_enabled.store(en, Ordering::Relaxed);
+            self.monitor_channel.enabled.store(en, Ordering::Relaxed);
             info!("Monitor enabled: {}", en);
         }
         if let Some(g) = gain {
+            // MixerChannel.set_gain clamps to 0.0-2.0, but for monitor we want 0.0-1.0
             let clamped = g.clamp(0.0, 1.0);
-            self.monitor_gain.store(clamped, Ordering::Relaxed);
+            self.monitor_channel.gain.store(clamped, Ordering::Relaxed);
             info!("Monitor gain: {}", clamped);
         }
     }
@@ -948,8 +959,8 @@ impl GardenDaemon {
                 self.set_monitor(enabled, gain);
                 ShellReply::Ok {
                     result: serde_json::json!({
-                        "monitor_enabled": self.monitor_enabled.load(Ordering::Relaxed),
-                        "monitor_gain": self.monitor_gain.load(Ordering::Relaxed),
+                        "monitor_enabled": self.monitor_channel.enabled.load(Ordering::Relaxed),
+                        "monitor_gain": self.monitor_channel.get_gain(),
                     }),
                 }
             }
