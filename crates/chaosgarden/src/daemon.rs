@@ -22,10 +22,12 @@ use crate::ipc::{
     RegionSummary, SampleFormat as IpcSampleFormat, ShellReply, ShellRequest,
     StreamDefinition as IpcStreamDefinition, StreamFormat as IpcStreamFormat,
 };
-use crate::external_io::{audio_ring_pair, AudioRingConsumer};
+use crate::external_io::{audio_ring_pair, AudioRingConsumer, RingBuffer};
 use crate::mixer::{MixerChannel, MixerState};
 use crate::monitor_input::{MonitorInputConfig, MonitorInputStream};
+use crate::nodes::ContentResolver;
 use crate::pipewire_output::{MonitorMixState, PipeWireOutputConfig, PipeWireOutputStream};
+use crate::playback::{CompiledGraph, PlaybackEngine};
 #[cfg(test)]
 use crate::ipc::QueryReply;
 use crate::primitives::{Behavior, ContentType};
@@ -117,6 +119,17 @@ pub struct GardenDaemon {
     mixer: MixerState,
     // Reference to the monitor channel in the mixer (for convenience)
     monitor_channel: Arc<MixerChannel>,
+
+    // === Playback Engine (Phase 3) ===
+    // Content resolver for loading audio from CAS
+    content_resolver: Option<Arc<dyn ContentResolver>>,
+    // Playback engine processes regions and produces audio
+    playback_engine: RwLock<Option<PlaybackEngine>>,
+    // Compiled graph for RT processing (currently empty - placeholder for future graph routing)
+    compiled_graph: RwLock<Option<CompiledGraph>>,
+    // Reference to timeline ring buffer (written by tick(), read by RT callback)
+    // This is obtained from the PipeWire output stream when attached
+    timeline_ring: RwLock<Option<Arc<Mutex<RingBuffer>>>>,
 }
 
 impl GardenDaemon {
@@ -178,7 +191,37 @@ impl GardenDaemon {
             monitor_consumer: Mutex::new(None),
             mixer,
             monitor_channel,
+            // Playback engine fields - initialized lazily when content_resolver is set
+            content_resolver: None,
+            playback_engine: RwLock::new(None),
+            compiled_graph: RwLock::new(None),
+            timeline_ring: RwLock::new(None),
         }
+    }
+
+    /// Set the content resolver for loading audio from CAS
+    ///
+    /// This enables timeline playback by allowing the PlaybackEngine to load
+    /// audio content from the content-addressable storage.
+    pub fn set_content_resolver(&mut self, resolver: Arc<dyn ContentResolver>) {
+        // Clone the Arc<RwLock<TempoMap>>, then get an Arc<TempoMap> from it
+        let tempo_map_snapshot = Arc::new(self.tempo_map.read().unwrap().clone());
+        let engine = PlaybackEngine::with_resolver(
+            48000,  // Default sample rate (will match PipeWire)
+            256,    // Default buffer size
+            tempo_map_snapshot,
+            Arc::clone(&resolver),
+        );
+        self.content_resolver = Some(resolver);
+        *self.playback_engine.write().unwrap() = Some(engine);
+
+        // Create empty compiled graph for now (future: build from audio graph)
+        let mut empty_graph = Graph::new();
+        if let Ok(compiled) = CompiledGraph::compile(&mut empty_graph, 256) {
+            *self.compiled_graph.write().unwrap() = Some(compiled);
+        }
+
+        info!("Content resolver set, playback engine initialized");
     }
 
     // === Transport control methods ===
@@ -189,6 +232,13 @@ impl GardenDaemon {
         self.tick_clock.write().unwrap().start();
         let mut transport = self.transport.write().unwrap();
         transport.playing = true;
+
+        // Sync playback engine
+        if let Some(ref mut engine) = *self.playback_engine.write().unwrap() {
+            engine.play();
+            engine.seek(transport.position);
+        }
+
         info!("Playback started at beat {}", transport.position.0);
     }
 
@@ -196,6 +246,12 @@ impl GardenDaemon {
         self.tick_clock.write().unwrap().pause();
         let mut transport = self.transport.write().unwrap();
         transport.playing = false;
+
+        // Sync playback engine
+        if let Some(ref mut engine) = *self.playback_engine.write().unwrap() {
+            engine.pause();
+        }
+
         info!("Playback paused at beat {}", transport.position.0);
     }
 
@@ -204,6 +260,12 @@ impl GardenDaemon {
         let mut transport = self.transport.write().unwrap();
         transport.playing = false;
         transport.position = Beat(0.0);
+
+        // Sync playback engine
+        if let Some(ref mut engine) = *self.playback_engine.write().unwrap() {
+            engine.stop();
+        }
+
         info!("Playback stopped");
     }
 
@@ -211,6 +273,12 @@ impl GardenDaemon {
         self.tick_clock.write().unwrap().seek(beat);
         let mut transport = self.transport.write().unwrap();
         transport.position = beat;
+
+        // Sync playback engine
+        if let Some(ref mut engine) = *self.playback_engine.write().unwrap() {
+            engine.seek(beat);
+        }
+
         info!("Seeked to beat {}", beat.0);
     }
 
@@ -230,16 +298,75 @@ impl GardenDaemon {
     /// This is the main driver for playback position when running.
     /// Note: Monitor mixing now happens directly in the PipeWire output callback
     /// (RT thread) for proper timing. See pipewire_output.rs.
+    ///
+    /// Timeline playback (Phase 3):
+    /// - When playing, calls PlaybackEngine.process() with current regions
+    /// - Writes output audio to timeline ring buffer
+    /// - RT callback reads from timeline ring and mixes with monitor
     pub fn tick(&self) {
         // Get updated position from tick clock
         let position = self.tick_clock.write().unwrap().tick();
 
         // Update transport state
-        let mut transport = self.transport.write().unwrap();
-        if transport.playing {
-            transport.position = position;
+        let is_playing = {
+            let mut transport = self.transport.write().unwrap();
+            if transport.playing {
+                transport.position = position;
+            }
+            transport.playing
+        };
+
+        // Process playback engine if playing and we have all the pieces
+        if is_playing {
+            self.process_playback();
         }
-        // Note: mix_monitor_to_output() removed - mixing now happens in RT callback
+    }
+
+    /// Process the playback engine and write output to timeline ring
+    fn process_playback(&self) {
+        // Get timeline ring (if audio output is attached)
+        let timeline_ring = match self.timeline_ring.read().unwrap().as_ref() {
+            Some(ring) => Arc::clone(ring),
+            None => return, // No output attached
+        };
+
+        // Get playback engine
+        let mut engine_guard = self.playback_engine.write().unwrap();
+        let engine = match engine_guard.as_mut() {
+            Some(e) => e,
+            None => return, // No engine configured
+        };
+
+        // Get compiled graph
+        let mut graph_guard = self.compiled_graph.write().unwrap();
+        let graph = match graph_guard.as_mut() {
+            Some(g) => g,
+            None => return, // No graph compiled
+        };
+
+        // Get regions
+        let regions = self.regions.read().unwrap();
+
+        // Engine transport is synced by play/pause/stop/seek methods
+        // Just process the buffer
+
+        // Process one buffer
+        match engine.process(graph, &regions) {
+            Ok(output_buffer) => {
+                // Write output to timeline ring
+                if let Ok(mut ring) = timeline_ring.lock() {
+                    // AudioBuffer.samples is interleaved [L, R, L, R, ...]
+                    let written = ring.write(&output_buffer.samples);
+                    if written < output_buffer.samples.len() {
+                        // Ring is full - this is expected if playback is ahead of output
+                        // The RT callback will drain it
+                    }
+                }
+            }
+            Err(e) => {
+                debug!("Playback process error: {}", e);
+            }
+        }
     }
 
     // === Audio output attachment methods ===
@@ -288,13 +415,20 @@ impl GardenDaemon {
                 .map_err(|e| format!("Failed to create PipeWire output: {}", e))?
         };
 
+        // Store the timeline ring reference for tick() to write to
+        let timeline_ring = stream.ring_buffer();
+        *self.timeline_ring.write().unwrap() = Some(timeline_ring);
+
         *self.audio_output.write().unwrap() = Some(stream);
-        info!("Audio output attached");
+        info!("Audio output attached (timeline ring available for playback)");
         Ok(())
     }
 
     /// Detach the current audio output (if any)
     fn detach_audio(&self) {
+        // Clear timeline ring first
+        *self.timeline_ring.write().unwrap() = None;
+
         let mut output = self.audio_output.write().unwrap();
         if output.is_some() {
             *output = None;
@@ -1622,6 +1756,112 @@ mod tests {
                 assert!(approvals.is_empty());
             }
             other => panic!("expected PendingApprovals, got {:?}", other),
+        }
+    }
+
+    // === Playback Engine Wiring Tests (Phase 3) ===
+
+    #[test]
+    fn test_set_content_resolver_initializes_engine() {
+        use crate::nodes::MemoryResolver;
+
+        let mut daemon = GardenDaemon::new();
+
+        // Before setting resolver, no engine
+        assert!(daemon.playback_engine.read().unwrap().is_none());
+        assert!(daemon.compiled_graph.read().unwrap().is_none());
+
+        // Set resolver
+        let resolver = Arc::new(MemoryResolver::new());
+        daemon.set_content_resolver(resolver);
+
+        // Now engine and graph should exist
+        assert!(daemon.playback_engine.read().unwrap().is_some());
+        assert!(daemon.compiled_graph.read().unwrap().is_some());
+    }
+
+    #[test]
+    fn test_play_syncs_playback_engine() {
+        use crate::nodes::MemoryResolver;
+
+        let mut daemon = GardenDaemon::new();
+        let resolver = Arc::new(MemoryResolver::new());
+        daemon.set_content_resolver(resolver);
+
+        // Initially not playing
+        {
+            let engine = daemon.playback_engine.read().unwrap();
+            assert!(!engine.as_ref().unwrap().is_playing());
+        }
+
+        // Play
+        daemon.play();
+
+        // Engine should be playing
+        {
+            let engine = daemon.playback_engine.read().unwrap();
+            assert!(engine.as_ref().unwrap().is_playing());
+        }
+
+        // Pause
+        daemon.pause();
+
+        // Engine should be paused
+        {
+            let engine = daemon.playback_engine.read().unwrap();
+            assert!(!engine.as_ref().unwrap().is_playing());
+        }
+    }
+
+    #[test]
+    fn test_seek_syncs_playback_engine() {
+        use crate::nodes::MemoryResolver;
+
+        let mut daemon = GardenDaemon::new();
+        let resolver = Arc::new(MemoryResolver::new());
+        daemon.set_content_resolver(resolver);
+
+        // Seek to beat 8
+        daemon.seek(Beat(8.0));
+
+        // Engine position should be at beat 8
+        {
+            let engine = daemon.playback_engine.read().unwrap();
+            let pos = engine.as_ref().unwrap().position();
+            assert_eq!(pos.beats.0, 8.0);
+        }
+
+        // Seek again
+        daemon.seek(Beat(16.0));
+
+        {
+            let engine = daemon.playback_engine.read().unwrap();
+            let pos = engine.as_ref().unwrap().position();
+            assert_eq!(pos.beats.0, 16.0);
+        }
+    }
+
+    #[test]
+    fn test_stop_resets_playback_engine() {
+        use crate::nodes::MemoryResolver;
+
+        let mut daemon = GardenDaemon::new();
+        let resolver = Arc::new(MemoryResolver::new());
+        daemon.set_content_resolver(resolver);
+
+        // Seek and play
+        daemon.seek(Beat(10.0));
+        daemon.play();
+
+        // Stop
+        daemon.stop();
+
+        // Engine should be stopped and at position 0
+        {
+            let engine = daemon.playback_engine.read().unwrap();
+            let engine_ref = engine.as_ref().unwrap();
+            assert!(!engine_ref.is_playing());
+            assert_eq!(engine_ref.position().beats.0, 0.0);
         }
     }
 }

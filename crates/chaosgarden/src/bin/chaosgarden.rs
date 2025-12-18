@@ -16,6 +16,7 @@ use std::time::Duration;
 use anyhow::Result;
 use chaosgarden::{GardenDaemon, DaemonConfig};
 use chaosgarden::ipc::{capnp_server::CapnpGardenServer, GardenEndpoints};
+use chaosgarden::nodes::FileCasClient;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -35,7 +36,25 @@ async fn main() -> Result<()> {
 
     // Create real daemon with state management
     let config = DaemonConfig::default();
-    let handler = Arc::new(GardenDaemon::with_config(config));
+    let mut daemon = GardenDaemon::with_config(config);
+
+    // Initialize content resolver for timeline playback (loads audio from CAS)
+    let cas_path = std::env::var("HOOTENANNY_CAS_DIR")
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+            format!("{}/.hootenanny/cas", home)
+        });
+    match FileCasClient::new(&cas_path) {
+        Ok(client) => {
+            daemon.set_content_resolver(Arc::new(client));
+            info!("Content resolver initialized: {}", cas_path);
+        }
+        Err(e) => {
+            info!("Warning: Could not initialize CAS at {}: {} (timeline playback disabled)", cas_path, e);
+        }
+    }
+
+    let handler = Arc::new(daemon);
     info!("GardenDaemon initialized");
 
     // Spawn tick loop to advance position based on wall time
