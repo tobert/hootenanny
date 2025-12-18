@@ -121,3 +121,29 @@ struct AudioStatus {
   samplesWritten @5 :UInt64;
   underruns @6 :UInt64;
 }
+
+# === Monitor Input Attachment ===
+
+struct AttachInput {
+  deviceName @0 :Text;
+  sampleRate @1 :UInt32;
+}
+
+struct InputStatus {
+  attached @0 :Bool;
+  deviceName @1 :Text;
+  sampleRate @2 :UInt32;
+  channels @3 :UInt32;
+  monitorEnabled @4 :Bool;
+  monitorGain @5 :Float32;
+  callbacks @6 :UInt64;
+  samplesCaptured @7 :UInt64;
+  overruns @8 :UInt64;
+}
+
+struct SetMonitor {
+  enabled @0 :Bool;
+  enabledSet @1 :Bool;  # true if enabled was explicitly set
+  gain @2 :Float32;
+  gainSet @3 :Bool;     # true if gain was explicitly set
+}

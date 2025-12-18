@@ -22,9 +22,27 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
+use portable_atomic::AtomicF32;
 use tracing::{debug, error, info};
 
-use crate::external_io::RingBuffer;
+use crate::external_io::{AudioRingConsumer, RingBuffer};
+
+/// Monitor input state for RT mixing (lock-free version)
+///
+/// When provided to the output stream, the output callback will read from the
+/// monitor input ring buffer and mix it directly in the RT thread, bypassing
+/// the tick() loop entirely.
+///
+/// NOTE: This struct is NOT Clone because AudioRingConsumer uses SPSC semantics
+/// (only one consumer can exist). The consumer is moved into the output stream.
+pub struct MonitorMixState {
+    /// Lock-free ring buffer consumer (from monitor input)
+    pub consumer: AudioRingConsumer,
+    /// Enable flag (RT-safe)
+    pub enabled: Arc<AtomicBool>,
+    /// Gain 0.0-1.0 (RT-safe)
+    pub gain: Arc<AtomicF32>,
+}
 
 /// Configuration for PipeWire output stream
 #[derive(Debug, Clone)]
@@ -72,6 +90,8 @@ pub struct PipeWireOutputStream {
     started: bool,
     // Stats for monitoring (updated by RT callback)
     stats: Arc<StreamStats>,
+    // Track whether monitor was attached (for logging)
+    has_monitor: bool,
 }
 
 /// Runtime statistics from the PipeWire callback
@@ -80,6 +100,11 @@ pub struct StreamStats {
     pub callbacks: std::sync::atomic::AtomicU64,
     pub samples_written: std::sync::atomic::AtomicU64,
     pub underruns: std::sync::atomic::AtomicU64,
+    // Debug counters for RT mixer
+    pub monitor_reads: std::sync::atomic::AtomicU64,
+    pub monitor_samples: std::sync::atomic::AtomicU64,
+    // Warmup flag - don't count underruns until first successful read
+    pub warmed_up: std::sync::atomic::AtomicBool,
 }
 
 impl PipeWireOutputStream {
@@ -90,6 +115,71 @@ impl PipeWireOutputStream {
         let mut stream = Self::new_paused(config)?;
         stream.start()?;
         Ok(stream)
+    }
+
+    /// Create and start a new PipeWire output stream with monitor mixing
+    ///
+    /// The monitor input is mixed directly in the RT callback, bypassing tick().
+    /// This eliminates underruns/overruns caused by timing mismatches.
+    ///
+    /// Note: This constructor starts immediately. Monitor state is moved directly
+    /// to the RT thread (never stored in the struct) to avoid Send/Sync issues.
+    pub fn new_with_monitor(
+        config: PipeWireOutputConfig,
+        monitor: MonitorMixState,
+    ) -> Result<Self, PipeWireOutputError> {
+        use pipewire as pw;
+
+        // Initialize PipeWire
+        pw::init();
+
+        // Create ring buffer sized for ~1 second of audio
+        let ring_capacity = config.sample_rate as usize * config.channels as usize * 2;
+        let ring_buffer = Arc::new(Mutex::new(RingBuffer::new(ring_capacity)));
+
+        let running = Arc::new(AtomicBool::new(true));
+        let stats = Arc::new(StreamStats::default());
+
+        debug!(
+            "Creating monitor output stream: {} @ {}Hz, {} channels",
+            config.name, config.sample_rate, config.channels
+        );
+
+        // Spawn thread immediately with monitor state (moved, not stored)
+        let ring_for_thread = Arc::clone(&ring_buffer);
+        let running_for_thread = Arc::clone(&running);
+        let stats_for_thread = Arc::clone(&stats);
+        let config_clone = config.clone();
+
+        let thread_handle = thread::Builder::new()
+            .name("pipewire-output".to_string())
+            .spawn(move || {
+                if let Err(e) = run_pipewire_loop(
+                    config_clone,
+                    ring_for_thread,
+                    running_for_thread,
+                    stats_for_thread,
+                    Some(monitor), // Monitor state moved here
+                ) {
+                    error!("PipeWire output thread failed: {}", e);
+                }
+            })
+            .map_err(|e| PipeWireOutputError::ThreadSpawn(e.to_string()))?;
+
+        info!(
+            "PipeWire output stream started: {} @ {}Hz, {} channels (with lock-free monitor mixing)",
+            config.name, config.sample_rate, config.channels
+        );
+
+        Ok(Self {
+            ring_buffer,
+            running,
+            thread_handle: Some(thread_handle),
+            config,
+            started: true,
+            stats,
+            has_monitor: true,
+        })
     }
 
     /// Create a new PipeWire output stream without starting it
@@ -130,10 +220,14 @@ impl PipeWireOutputStream {
             config,
             started: false,
             stats,
+            has_monitor: false,
         })
     }
 
     /// Start the PipeWire thread (call after pre-filling the buffer)
+    ///
+    /// Note: To start with monitor mixing, use `new_with_monitor` instead.
+    /// This method starts without monitor support.
     pub fn start(&mut self) -> Result<(), PipeWireOutputError> {
         if self.started {
             return Ok(()); // Already started
@@ -152,6 +246,7 @@ impl PipeWireOutputStream {
                     ring_for_thread,
                     running_for_thread,
                     stats_for_thread,
+                    None, // No monitor mixing - use new_with_monitor for that
                 ) {
                     error!("PipeWire output thread failed: {}", e);
                 }
@@ -163,7 +258,9 @@ impl PipeWireOutputStream {
 
         info!(
             "PipeWire output stream started: {} @ {}Hz, {} channels",
-            self.config.name, self.config.sample_rate, self.config.channels
+            self.config.name,
+            self.config.sample_rate,
+            self.config.channels,
         );
 
         Ok(())
@@ -212,6 +309,7 @@ fn run_pipewire_loop(
     ring_buffer: Arc<Mutex<RingBuffer>>,
     running: Arc<AtomicBool>,
     stats: Arc<StreamStats>,
+    monitor: Option<MonitorMixState>,
 ) -> Result<(), PipeWireOutputError> {
     use pipewire as pw;
     use pw::spa::pod::Pod;
@@ -257,9 +355,10 @@ fn run_pipewire_loop(
     let target_frames = config.latency_frames as usize;
 
     // Register process callback - runs in PipeWire's RT thread
+    // This is the RT mixer: reads from monitor input (if enabled) and timeline ring
     let _listener = stream
-        .add_local_listener_with_user_data((ring_buffer, stats))
-        .process(move |stream, (ring, stats)| {
+        .add_local_listener_with_user_data((ring_buffer, stats, monitor))
+        .process(move |stream, (timeline_ring, stats, monitor)| {
             stats.callbacks.fetch_add(1, Ordering::Relaxed);
 
             let Some(mut buffer) = stream.dequeue_buffer() else {
@@ -283,18 +382,50 @@ fn run_pipewire_loop(
             };
 
             let samples_needed = n_frames * channels;
-            let mut temp_buffer = vec![0.0f32; samples_needed];
 
-            let samples_read = ring
+            // Pre-allocate temp buffers for mixing
+            let mut output_buffer = vec![0.0f32; samples_needed];
+            let mut temp_buffer = vec![0.0f32; samples_needed];
+            let mut has_audio = false;
+
+            // === RT Mixer: Mix monitor input if enabled (lock-free!) ===
+            if let Some(ref mut mon) = monitor {
+                if mon.enabled.load(Ordering::Relaxed) {
+                    // Lock-free read from SPSC ring buffer - never blocks!
+                    let read = mon.consumer.read(&mut temp_buffer);
+                    if read > 0 {
+                        stats.monitor_reads.fetch_add(1, Ordering::Relaxed);
+                        stats.monitor_samples.fetch_add(read as u64, Ordering::Relaxed);
+                        // Mark warmed up after first successful read
+                        stats.warmed_up.store(true, Ordering::Relaxed);
+                        let gain = mon.gain.load(Ordering::Relaxed);
+                        for i in 0..read {
+                            output_buffer[i] += temp_buffer[i] * gain;
+                        }
+                        has_audio = true;
+                    }
+                }
+            }
+
+            // === RT Mixer: Mix timeline audio ===
+            let timeline_read = timeline_ring
                 .try_lock()
                 .map(|mut r| r.read(&mut temp_buffer))
                 .unwrap_or(0);
 
-            if samples_read > 0 {
+            if timeline_read > 0 {
+                for i in 0..timeline_read {
+                    output_buffer[i] += temp_buffer[i];
+                }
+                has_audio = true;
                 stats
                     .samples_written
-                    .fetch_add(samples_read as u64, Ordering::Relaxed);
-            } else {
+                    .fetch_add(timeline_read as u64, Ordering::Relaxed);
+            }
+
+            // Count underrun only if no audio from any source AND we've warmed up
+            // (don't count initial empty buffer during startup)
+            if !has_audio && stats.warmed_up.load(Ordering::Relaxed) {
                 stats.underruns.fetch_add(1, Ordering::Relaxed);
             }
 
@@ -302,8 +433,8 @@ fn run_pipewire_loop(
             for i in 0..n_frames {
                 for c in 0..channels {
                     let sample_idx = i * channels + c;
-                    let sample = if sample_idx < samples_read {
-                        temp_buffer[sample_idx]
+                    let sample = if sample_idx < samples_needed {
+                        output_buffer[sample_idx]
                     } else {
                         0.0
                     };

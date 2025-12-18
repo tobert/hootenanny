@@ -284,6 +284,24 @@ pub enum ShellRequest {
     },
     DetachAudio,
     GetAudioStatus,
+
+    // Audio input attachment (monitor input)
+    AttachInput {
+        /// Device name hint (None = default input)
+        device_name: Option<String>,
+        /// Sample rate (None = 48000, should match output)
+        sample_rate: Option<u32>,
+    },
+    DetachInput,
+    GetInputStatus,
+
+    // Monitor control (input -> output passthrough)
+    SetMonitor {
+        /// Enable/disable monitor (None = don't change)
+        enabled: Option<bool>,
+        /// Monitor gain 0.0-1.0 (None = don't change)
+        gain: Option<f32>,
+    },
 }
 
 /// Stream format definition for audio/MIDI capture
@@ -353,6 +371,22 @@ pub enum ShellReply {
         callbacks: u64,
         samples_written: u64,
         underruns: u64,
+        // Debug counters for RT mixer
+        #[serde(default)]
+        monitor_reads: u64,
+        #[serde(default)]
+        monitor_samples: u64,
+    },
+    InputStatus {
+        attached: bool,
+        device_name: Option<String>,
+        sample_rate: Option<u32>,
+        channels: Option<u32>,
+        monitor_enabled: bool,
+        monitor_gain: f32,
+        callbacks: u64,
+        samples_captured: u64,
+        overruns: u64,
     },
 }
 

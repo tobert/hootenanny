@@ -298,6 +298,9 @@ impl ExternalIOManager {
 ///
 /// Used to transfer samples between PipeWire callback and graph processing.
 /// Single producer, single consumer. Fixed size power-of-2 for efficient modulo.
+///
+/// NOTE: This original RingBuffer requires `&mut self`, so it needs Mutex wrapping.
+/// For truly lock-free SPSC operation, use AudioRingProducer/AudioRingConsumer instead.
 pub struct RingBuffer {
     data: Vec<f32>,
     capacity: usize,
@@ -364,6 +367,97 @@ impl RingBuffer {
     pub fn space(&self) -> usize {
         self.capacity - self.available()
     }
+}
+
+/// Lock-free audio ring buffer producer (writer)
+///
+/// This is the write-end of a SPSC ring buffer for RT audio.
+/// Designed to be owned by a single producer thread (e.g., PipeWire input callback).
+/// Thread-safe: can be used from RT thread without any locking.
+pub struct AudioRingProducer {
+    inner: rtrb::Producer<f32>,
+}
+
+impl AudioRingProducer {
+    /// Write samples to the ring buffer. Returns number of samples written.
+    /// This is wait-free and never blocks.
+    pub fn write(&mut self, samples: &[f32]) -> usize {
+        // Use write_chunk_uninit for RT-safe batch writes
+        let available = self.inner.slots();
+        let to_write = samples.len().min(available);
+
+        if to_write == 0 {
+            return 0;
+        }
+
+        // Push samples one by one (rtrb doesn't have push_slice for chunks)
+        let mut written = 0;
+        for &sample in samples.iter().take(to_write) {
+            if self.inner.push(sample).is_ok() {
+                written += 1;
+            } else {
+                break;
+            }
+        }
+        written
+    }
+
+    /// Space available for writing
+    pub fn space(&self) -> usize {
+        self.inner.slots()
+    }
+}
+
+/// Lock-free audio ring buffer consumer (reader)
+///
+/// This is the read-end of a SPSC ring buffer for RT audio.
+/// Designed to be owned by a single consumer thread (e.g., PipeWire output callback).
+/// Thread-safe: can be used from RT thread without any locking.
+pub struct AudioRingConsumer {
+    inner: rtrb::Consumer<f32>,
+}
+
+impl AudioRingConsumer {
+    /// Read samples from the ring buffer. Returns number of samples read.
+    /// This is wait-free and never blocks.
+    pub fn read(&mut self, output: &mut [f32]) -> usize {
+        let available = self.inner.slots();
+        let to_read = output.len().min(available);
+
+        if to_read == 0 {
+            return 0;
+        }
+
+        // Pop samples one by one
+        let mut read = 0;
+        for sample in output.iter_mut().take(to_read) {
+            if let Ok(s) = self.inner.pop() {
+                *sample = s;
+                read += 1;
+            } else {
+                break;
+            }
+        }
+        read
+    }
+
+    /// Number of samples available to read
+    pub fn available(&self) -> usize {
+        self.inner.slots()
+    }
+}
+
+/// Create a new lock-free audio ring buffer pair
+///
+/// Returns (producer, consumer) that can be moved to different threads.
+/// The producer writes samples, the consumer reads them.
+/// Capacity is rounded up to next power of 2.
+pub fn audio_ring_pair(capacity: usize) -> (AudioRingProducer, AudioRingConsumer) {
+    let (producer, consumer) = rtrb::RingBuffer::new(capacity);
+    (
+        AudioRingProducer { inner: producer },
+        AudioRingConsumer { inner: consumer },
+    )
 }
 
 /// Node that outputs audio to external hardware via PipeWire

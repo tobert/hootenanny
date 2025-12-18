@@ -20,6 +20,7 @@ pub mod ipc;
 pub mod latent;
 pub mod nodes;
 pub mod patterns;
+pub mod monitor_input;
 pub mod pipewire_output;
 pub mod pipewire_input;
 pub mod playback;
@@ -34,8 +35,9 @@ pub use capabilities::{
     ParticipantKind, SatisfactionResult,
 };
 pub use external_io::{
-    ExternalIOError, ExternalIOManager, ExternalInputNode, ExternalOutputNode, MidiDevice,
-    MidiDirection, MidiInputNode, MidiOutputNode, PipeWireInput, PipeWireOutput, RingBuffer,
+    audio_ring_pair, AudioRingConsumer, AudioRingProducer, ExternalIOError, ExternalIOManager,
+    ExternalInputNode, ExternalOutputNode, MidiDevice, MidiDirection, MidiInputNode,
+    MidiOutputNode, PipeWireInput, PipeWireOutput, RingBuffer,
 };
 pub use graph::{Edge, Graph, GraphError, GraphSnapshot};
 pub use ipc::GardenEndpoints;
@@ -54,6 +56,7 @@ pub use playback::{CompiledGraph, PlaybackEngine, PlaybackPosition};
 pub use primitives::*;
 pub use query::ChaosgardenAdapter;
 pub use daemon::{DaemonConfig, GardenDaemon};
-pub use pipewire_output::{PipeWireOutputConfig, PipeWireOutputError, PipeWireOutputStream};
+pub use monitor_input::{MonitorInputConfig, MonitorInputError, MonitorInputStream, MonitorStats};
+pub use pipewire_output::{MonitorMixState, PipeWireOutputConfig, PipeWireOutputError, PipeWireOutputStream, StreamStats};
 pub use pipewire_input::{PipeWireInputConfig, PipeWireInputError, PipeWireInputStream};
 pub use tick_clock::TickClock;

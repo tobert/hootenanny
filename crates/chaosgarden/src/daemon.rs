@@ -6,10 +6,13 @@
 //! - Trustfall queries over graph state
 //! - Latent lifecycle management
 
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 #[cfg(test)]
 use std::collections::HashMap;
+
+use portable_atomic::AtomicF32;
 
 use tracing::{debug, info, warn};
 #[cfg(test)]
@@ -21,7 +24,9 @@ use crate::ipc::{
     RegionSummary, SampleFormat as IpcSampleFormat, ShellReply, ShellRequest,
     StreamDefinition as IpcStreamDefinition, StreamFormat as IpcStreamFormat,
 };
-use crate::pipewire_output::{PipeWireOutputConfig, PipeWireOutputStream};
+use crate::external_io::{audio_ring_pair, AudioRingConsumer};
+use crate::monitor_input::{MonitorInputConfig, MonitorInputStream};
+use crate::pipewire_output::{MonitorMixState, PipeWireOutputConfig, PipeWireOutputStream};
 #[cfg(test)]
 use crate::ipc::QueryReply;
 use crate::primitives::{Behavior, ContentType};
@@ -100,6 +105,16 @@ pub struct GardenDaemon {
 
     // Optional PipeWire audio output (attached dynamically)
     audio_output: RwLock<Option<PipeWireOutputStream>>,
+
+    // Optional PipeWire monitor input (attached dynamically)
+    monitor_input: RwLock<Option<MonitorInputStream>>,
+    // Lock-free ring consumer for monitor mixing (created by attach_input, consumed by attach_audio)
+    // Uses Mutex instead of RwLock because AudioRingConsumer is Send but not Sync
+    monitor_consumer: Mutex<Option<AudioRingConsumer>>,
+    // Monitor enabled flag (RT-safe, Arc for sharing with output callback)
+    monitor_enabled: Arc<AtomicBool>,
+    // Monitor gain 0.0-1.0 (RT-safe, Arc for sharing with output callback)
+    monitor_gain: Arc<AtomicF32>,
 }
 
 impl GardenDaemon {
@@ -150,6 +165,10 @@ impl GardenDaemon {
             query_adapter,
             tick_clock,
             audio_output: RwLock::new(None),
+            monitor_input: RwLock::new(None),
+            monitor_consumer: Mutex::new(None),
+            monitor_enabled: Arc::new(AtomicBool::new(false)),
+            monitor_gain: Arc::new(AtomicF32::new(0.8)), // Default 80% gain
         }
     }
 
@@ -200,6 +219,8 @@ impl GardenDaemon {
     /// Called by the tick loop to advance position based on wall time
     ///
     /// This is the main driver for playback position when running.
+    /// Note: Monitor mixing now happens directly in the PipeWire output callback
+    /// (RT thread) for proper timing. See pipewire_output.rs.
     pub fn tick(&self) {
         // Get updated position from tick clock
         let position = self.tick_clock.write().unwrap().tick();
@@ -209,6 +230,7 @@ impl GardenDaemon {
         if transport.playing {
             transport.position = position;
         }
+        // Note: mix_monitor_to_output() removed - mixing now happens in RT callback
     }
 
     // === Audio output attachment methods ===
@@ -216,6 +238,7 @@ impl GardenDaemon {
     /// Attach a PipeWire audio output device
     ///
     /// If audio is already attached, it will be detached first.
+    /// If monitor input is attached, the output will be created with RT mixing enabled.
     fn attach_audio(
         &self,
         device_name: Option<String>,
@@ -237,8 +260,23 @@ impl GardenDaemon {
             config.name, config.sample_rate, config.latency_frames
         );
 
-        let stream = PipeWireOutputStream::new(config)
-            .map_err(|e| format!("Failed to create PipeWire output: {}", e))?;
+        // Check if we have a monitor consumer available - if so, use RT mixing
+        let consumer = self.monitor_consumer.lock().unwrap().take();
+        let stream = if let Some(consumer) = consumer {
+            // Create monitor mix state for RT callback with lock-free consumer
+            let monitor_state = MonitorMixState {
+                consumer,
+                enabled: Arc::clone(&self.monitor_enabled),
+                gain: Arc::clone(&self.monitor_gain),
+            };
+
+            info!("Creating output stream with RT monitor mixing (lock-free)");
+            PipeWireOutputStream::new_with_monitor(config, monitor_state)
+                .map_err(|e| format!("Failed to create PipeWire output with monitor: {}", e))?
+        } else {
+            PipeWireOutputStream::new(config)
+                .map_err(|e| format!("Failed to create PipeWire output: {}", e))?
+        };
 
         *self.audio_output.write().unwrap() = Some(stream);
         info!("Audio output attached");
@@ -270,6 +308,8 @@ impl GardenDaemon {
                     callbacks: stats.callbacks.load(Ordering::Relaxed),
                     samples_written: stats.samples_written.load(Ordering::Relaxed),
                     underruns: stats.underruns.load(Ordering::Relaxed),
+                    monitor_reads: stats.monitor_reads.load(Ordering::Relaxed),
+                    monitor_samples: stats.monitor_samples.load(Ordering::Relaxed),
                 }
             }
             None => ShellReply::AudioStatus {
@@ -280,7 +320,130 @@ impl GardenDaemon {
                 callbacks: 0,
                 samples_written: 0,
                 underruns: 0,
+                monitor_reads: 0,
+                monitor_samples: 0,
             },
+        }
+    }
+
+    // === Monitor input attachment methods ===
+
+    /// Attach a PipeWire monitor input device
+    ///
+    /// Captures audio from the specified device and routes to monitor output.
+    /// If audio output is already attached, it will be recreated with RT mixing.
+    fn attach_input(
+        &self,
+        device_name: Option<String>,
+        sample_rate: Option<u32>,
+    ) -> Result<(), String> {
+        // Detach any existing input first
+        self.detach_input();
+
+        let sample_rate = sample_rate.unwrap_or(48000);
+        let channels = 2u32; // Stereo
+
+        let config = MonitorInputConfig {
+            device_name: device_name.clone(),
+            sample_rate,
+            channels,
+        };
+
+        info!(
+            "Attaching monitor input: device={:?} @ {}Hz, {}ch",
+            config.device_name, config.sample_rate, config.channels
+        );
+
+        // Create lock-free ring buffer pair
+        // Size: ~500ms of audio at the given sample rate
+        let ring_capacity = (sample_rate as usize) * (channels as usize) / 2;
+        let (producer, consumer) = audio_ring_pair(ring_capacity);
+
+        // Create input stream with the producer end
+        let stream = MonitorInputStream::new(config, producer)
+            .map_err(|e| format!("Failed to create monitor input: {}", e))?;
+
+        // Store the consumer for when audio output is created
+        *self.monitor_consumer.lock().unwrap() = Some(consumer);
+        *self.monitor_input.write().unwrap() = Some(stream);
+        info!("Monitor input attached (lock-free SPSC ring buffer)");
+
+        // If audio output is already attached, recreate it with RT mixing
+        let has_output = self.audio_output.read().unwrap().is_some();
+        if has_output {
+            info!("Recreating audio output with RT monitor mixing");
+            // Get current output config before detaching
+            let (output_name, output_rate, output_latency) = {
+                let output_guard = self.audio_output.read().unwrap();
+                if let Some(ref output) = *output_guard {
+                    let cfg = output.config();
+                    (Some(cfg.name.clone()), Some(cfg.sample_rate), Some(cfg.latency_frames))
+                } else {
+                    (None, None, None)
+                }
+            };
+            // Recreate output with monitor mixing
+            self.attach_audio(output_name, output_rate, output_latency)?;
+        }
+
+        Ok(())
+    }
+
+    /// Detach the current monitor input (if any)
+    fn detach_input(&self) {
+        // Clear consumer first (it may not have been used yet)
+        *self.monitor_consumer.lock().unwrap() = None;
+
+        let mut input = self.monitor_input.write().unwrap();
+        if input.is_some() {
+            *input = None;
+            info!("Monitor input detached");
+        }
+    }
+
+    /// Get monitor input status
+    fn get_input_status(&self) -> ShellReply {
+        let input = self.monitor_input.read().unwrap();
+        match input.as_ref() {
+            Some(stream) => {
+                let config = stream.config();
+                let stats = stream.stats();
+                ShellReply::InputStatus {
+                    attached: true,
+                    device_name: config.device_name.clone(),
+                    sample_rate: Some(config.sample_rate),
+                    channels: Some(config.channels),
+                    monitor_enabled: self.monitor_enabled.load(Ordering::Relaxed),
+                    monitor_gain: self.monitor_gain.load(Ordering::Relaxed),
+                    callbacks: stats.callbacks.load(Ordering::Relaxed),
+                    samples_captured: stats.samples_captured.load(Ordering::Relaxed),
+                    overruns: stats.overruns.load(Ordering::Relaxed),
+                }
+            }
+            None => ShellReply::InputStatus {
+                attached: false,
+                device_name: None,
+                sample_rate: None,
+                channels: None,
+                monitor_enabled: self.monitor_enabled.load(Ordering::Relaxed),
+                monitor_gain: self.monitor_gain.load(Ordering::Relaxed),
+                callbacks: 0,
+                samples_captured: 0,
+                overruns: 0,
+            },
+        }
+    }
+
+    /// Set monitor enabled state and/or gain
+    fn set_monitor(&self, enabled: Option<bool>, gain: Option<f32>) {
+        if let Some(en) = enabled {
+            self.monitor_enabled.store(en, Ordering::Relaxed);
+            info!("Monitor enabled: {}", en);
+        }
+        if let Some(g) = gain {
+            let clamped = g.clamp(0.0, 1.0);
+            self.monitor_gain.store(clamped, Ordering::Relaxed);
+            info!("Monitor gain: {}", clamped);
         }
     }
 
@@ -764,6 +927,32 @@ impl GardenDaemon {
                 }
             }
             ShellRequest::GetAudioStatus => self.get_audio_status(),
+
+            // Monitor input attachment
+            ShellRequest::AttachInput { device_name, sample_rate } => {
+                match self.attach_input(device_name, sample_rate) {
+                    Ok(()) => ShellReply::Ok {
+                        result: serde_json::json!({"status": "attached"}),
+                    },
+                    Err(e) => ShellReply::Error { error: e, traceback: None },
+                }
+            }
+            ShellRequest::DetachInput => {
+                self.detach_input();
+                ShellReply::Ok {
+                    result: serde_json::json!({"status": "detached"}),
+                }
+            }
+            ShellRequest::GetInputStatus => self.get_input_status(),
+            ShellRequest::SetMonitor { enabled, gain } => {
+                self.set_monitor(enabled, gain);
+                ShellReply::Ok {
+                    result: serde_json::json!({
+                        "monitor_enabled": self.monitor_enabled.load(Ordering::Relaxed),
+                        "monitor_gain": self.monitor_gain.load(Ordering::Relaxed),
+                    }),
+                }
+            }
 
             // Unhandled requests
             _ => ShellReply::Error {

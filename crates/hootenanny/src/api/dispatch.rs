@@ -341,6 +341,27 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Get audio output status".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
         },
+        // Monitor input
+        ToolInfo {
+            name: "garden_attach_input".to_string(),
+            description: "Attach PipeWire monitor input (for mic passthrough)".to_string(),
+            input_schema: schema_for::<super::tools::garden::GardenAttachInputRequest>(),
+        },
+        ToolInfo {
+            name: "garden_detach_input".to_string(),
+            description: "Detach monitor input".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        },
+        ToolInfo {
+            name: "garden_input_status".to_string(),
+            description: "Get monitor input status".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        },
+        ToolInfo {
+            name: "garden_set_monitor".to_string(),
+            description: "Set monitor enabled/gain (input -> output passthrough)".to_string(),
+            input_schema: schema_for::<super::tools::garden::GardenSetMonitorRequest>(),
+        },
     ]
 }
 
@@ -558,6 +579,21 @@ pub async fn dispatch_tool(
         }
         "garden_audio_status" => {
             tool_to_json(server.garden_audio_status().await)
+        }
+        // Monitor input
+        "garden_attach_input" => {
+            let request: super::tools::garden::GardenAttachInputRequest = parse_args(args)?;
+            tool_to_json(server.garden_attach_input(request).await)
+        }
+        "garden_detach_input" => {
+            tool_to_json(server.garden_detach_input().await)
+        }
+        "garden_input_status" => {
+            tool_to_json(server.garden_input_status().await)
+        }
+        "garden_set_monitor" => {
+            let request: super::tools::garden::GardenSetMonitorRequest = parse_args(args)?;
+            tool_to_json(server.garden_set_monitor(request).await)
         }
 
         _ => Err(DispatchError::not_found(name)),

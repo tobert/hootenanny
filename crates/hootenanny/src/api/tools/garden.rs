@@ -100,6 +100,28 @@ pub struct GardenAttachAudioRequest {
     pub latency_frames: Option<u32>,
 }
 
+/// Request to attach PipeWire monitor input
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GardenAttachInputRequest {
+    /// Device name hint (empty for default input)
+    #[serde(default)]
+    pub device_name: Option<String>,
+    /// Sample rate in Hz (default: 48000, should match output)
+    #[serde(default)]
+    pub sample_rate: Option<u32>,
+}
+
+/// Request to set monitor control (input -> output passthrough)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GardenSetMonitorRequest {
+    /// Enable/disable monitor (None = don't change)
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// Monitor gain 0.0-1.0 (None = don't change)
+    #[serde(default)]
+    pub gain: Option<f32>,
+}
+
 impl EventDualityServer {
     fn require_garden(&self) -> Result<(), ToolError> {
         if self.garden_manager.is_none() {
@@ -547,6 +569,8 @@ impl EventDualityServer {
                 callbacks,
                 samples_written,
                 underruns,
+                monitor_reads,
+                monitor_samples,
             }) => {
                 let response = GardenResponse {
                     success: true,
@@ -559,6 +583,8 @@ impl EventDualityServer {
                         "callbacks": callbacks,
                         "samples_written": samples_written,
                         "underruns": underruns,
+                        "monitor_reads": monitor_reads,
+                        "monitor_samples": monitor_samples,
                     })),
                 };
                 let json = serde_json::to_string_pretty(&response)
@@ -570,6 +596,138 @@ impl EventDualityServer {
             }
             Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
             Err(e) => Err(ToolError::internal(format!("Get audio status failed: {}", e))),
+        }
+    }
+
+    // === Monitor Input Tools ===
+
+    #[tracing::instrument(name = "mcp.tool.garden_attach_input", skip(self))]
+    pub async fn garden_attach_input(&self, request: GardenAttachInputRequest) -> ToolResult {
+        self.require_garden()?;
+        let manager = self.garden_manager.as_ref().unwrap();
+
+        use chaosgarden::ipc::ShellRequest;
+
+        match manager.request(ShellRequest::AttachInput {
+            device_name: request.device_name,
+            sample_rate: request.sample_rate,
+        }).await {
+            Ok(chaosgarden::ipc::ShellReply::Ok { result }) => {
+                let response = GardenResponse {
+                    success: true,
+                    message: "Monitor input attached".to_string(),
+                    data: Some(result),
+                };
+                let json = serde_json::to_string_pretty(&response)
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
+            }
+            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
+                Err(ToolError::internal(error))
+            }
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Attach input failed: {}", e))),
+        }
+    }
+
+    #[tracing::instrument(name = "mcp.tool.garden_detach_input", skip(self))]
+    pub async fn garden_detach_input(&self) -> ToolResult {
+        self.require_garden()?;
+        let manager = self.garden_manager.as_ref().unwrap();
+
+        use chaosgarden::ipc::ShellRequest;
+
+        match manager.request(ShellRequest::DetachInput).await {
+            Ok(chaosgarden::ipc::ShellReply::Ok { result }) => {
+                let response = GardenResponse {
+                    success: true,
+                    message: "Monitor input detached".to_string(),
+                    data: Some(result),
+                };
+                let json = serde_json::to_string_pretty(&response)
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
+            }
+            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
+                Err(ToolError::internal(error))
+            }
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Detach input failed: {}", e))),
+        }
+    }
+
+    #[tracing::instrument(name = "mcp.tool.garden_input_status", skip(self))]
+    pub async fn garden_input_status(&self) -> ToolResult {
+        self.require_garden()?;
+        let manager = self.garden_manager.as_ref().unwrap();
+
+        use chaosgarden::ipc::ShellRequest;
+
+        match manager.request(ShellRequest::GetInputStatus).await {
+            Ok(chaosgarden::ipc::ShellReply::InputStatus {
+                attached,
+                device_name,
+                sample_rate,
+                channels,
+                monitor_enabled,
+                monitor_gain,
+                callbacks,
+                samples_captured,
+                overruns,
+            }) => {
+                let response = GardenResponse {
+                    success: true,
+                    message: if attached { "Input attached".to_string() } else { "Input not attached".to_string() },
+                    data: Some(serde_json::json!({
+                        "attached": attached,
+                        "device_name": device_name,
+                        "sample_rate": sample_rate,
+                        "channels": channels,
+                        "monitor_enabled": monitor_enabled,
+                        "monitor_gain": monitor_gain,
+                        "callbacks": callbacks,
+                        "samples_captured": samples_captured,
+                        "overruns": overruns,
+                    })),
+                };
+                let json = serde_json::to_string_pretty(&response)
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
+            }
+            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
+                Err(ToolError::internal(error))
+            }
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Get input status failed: {}", e))),
+        }
+    }
+
+    #[tracing::instrument(name = "mcp.tool.garden_set_monitor", skip(self))]
+    pub async fn garden_set_monitor(&self, request: GardenSetMonitorRequest) -> ToolResult {
+        self.require_garden()?;
+        let manager = self.garden_manager.as_ref().unwrap();
+
+        use chaosgarden::ipc::ShellRequest;
+
+        match manager.request(ShellRequest::SetMonitor {
+            enabled: request.enabled,
+            gain: request.gain,
+        }).await {
+            Ok(chaosgarden::ipc::ShellReply::Ok { result }) => {
+                let response = GardenResponse {
+                    success: true,
+                    message: "Monitor settings updated".to_string(),
+                    data: Some(result),
+                };
+                let json = serde_json::to_string_pretty(&response)
+                    .map_err(|e| ToolError::internal(e.to_string()))?;
+                Ok(ToolOutput::text_only(json))
+            }
+            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
+                Err(ToolError::internal(error))
+            }
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Set monitor failed: {}", e))),
         }
     }
 }
