@@ -4,16 +4,9 @@
 //! via the ZMQ connection to chaosgarden.
 
 use crate::api::service::EventDualityServer;
-use hooteproto::{ToolOutput, ToolResult, ToolError};
+use hooteproto::{ToolError, ToolOutput, ToolResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-/// Request to connect to chaosgarden daemon
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct GardenConnectRequest {
-    /// Endpoint: "local" for IPC, or "tcp://host:port"
-    pub endpoint: String,
-}
 
 /// Response from garden operations
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -46,19 +39,6 @@ pub struct GardenQueryRequest {
     /// Query variables as JSON object
     #[serde(default)]
     pub variables: serde_json::Value,
-}
-
-/// Request to create a region on the timeline
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct GardenCreateRegionRequest {
-    /// Position in beats
-    pub position: f64,
-    /// Duration in beats
-    pub duration: f64,
-    /// Behavior type: "play_content" or "latent"
-    pub behavior_type: String,
-    /// For play_content: artifact_id. For latent: job_id
-    pub content_id: String,
 }
 
 /// Request to delete a region
@@ -141,20 +121,16 @@ impl EventDualityServer {
 
                 if connected {
                     match manager.get_transport_state().await {
-                        Ok(reply) => {
-                            GardenResponse {
-                                success: true,
-                                message: "Connected to chaosgarden".to_string(),
-                                data: Some(serde_json::to_value(&reply).unwrap_or_default()),
-                            }
-                        }
-                        Err(e) => {
-                            GardenResponse {
-                                success: true,
-                                message: format!("Connected but failed to get state: {}", e),
-                                data: None,
-                            }
-                        }
+                        Ok(reply) => GardenResponse {
+                            success: true,
+                            message: "Connected to chaosgarden".to_string(),
+                            data: Some(serde_json::to_value(&reply).unwrap_or_default()),
+                        },
+                        Err(e) => GardenResponse {
+                            success: true,
+                            message: format!("Connected but failed to get state: {}", e),
+                            data: None,
+                        },
                     }
                 } else {
                     GardenResponse {
@@ -164,13 +140,11 @@ impl EventDualityServer {
                     }
                 }
             }
-            None => {
-                GardenResponse {
-                    success: false,
-                    message: "Not connected to chaosgarden".to_string(),
-                    data: None,
-                }
-            }
+            None => GardenResponse {
+                success: false,
+                message: "Not connected to chaosgarden".to_string(),
+                data: None,
+            },
         };
 
         let json = serde_json::to_string_pretty(&response)
@@ -195,9 +169,7 @@ impl EventDualityServer {
                     .map_err(|e| ToolError::internal(e.to_string()))?;
                 Ok(ToolOutput::text_only(json))
             }
-            Err(e) => {
-                Err(ToolError::internal(format!("Play failed: {}", e)))
-            }
+            Err(e) => Err(ToolError::internal(format!("Play failed: {}", e))),
         }
     }
 
@@ -217,9 +189,7 @@ impl EventDualityServer {
                     .map_err(|e| ToolError::internal(e.to_string()))?;
                 Ok(ToolOutput::text_only(json))
             }
-            Err(e) => {
-                Err(ToolError::internal(format!("Pause failed: {}", e)))
-            }
+            Err(e) => Err(ToolError::internal(format!("Pause failed: {}", e))),
         }
     }
 
@@ -239,9 +209,7 @@ impl EventDualityServer {
                     .map_err(|e| ToolError::internal(e.to_string()))?;
                 Ok(ToolOutput::text_only(json))
             }
-            Err(e) => {
-                Err(ToolError::internal(format!("Stop failed: {}", e)))
-            }
+            Err(e) => Err(ToolError::internal(format!("Stop failed: {}", e))),
         }
     }
 
@@ -261,9 +229,7 @@ impl EventDualityServer {
                     .map_err(|e| ToolError::internal(e.to_string()))?;
                 Ok(ToolOutput::text_only(json))
             }
-            Err(e) => {
-                Err(ToolError::internal(format!("Seek failed: {}", e)))
-            }
+            Err(e) => Err(ToolError::internal(format!("Seek failed: {}", e))),
         }
     }
 
@@ -273,7 +239,10 @@ impl EventDualityServer {
         let manager = self.garden_manager.as_ref().unwrap();
 
         if request.bpm <= 0.0 || request.bpm > 999.0 {
-            return Err(ToolError::validation("invalid_params", "BPM must be between 0 and 999"));
+            return Err(ToolError::validation(
+                "invalid_params",
+                "BPM must be between 0 and 999",
+            ));
         }
 
         match manager.set_tempo(request.bpm).await {
@@ -287,9 +256,7 @@ impl EventDualityServer {
                     .map_err(|e| ToolError::internal(e.to_string()))?;
                 Ok(ToolOutput::text_only(json))
             }
-            Err(e) => {
-                Err(ToolError::internal(format!("Set tempo failed: {}", e)))
-            }
+            Err(e) => Err(ToolError::internal(format!("Set tempo failed: {}", e))),
         }
     }
 
@@ -298,11 +265,17 @@ impl EventDualityServer {
         self.require_garden()?;
         let manager = self.garden_manager.as_ref().unwrap();
 
-        let variables: std::collections::HashMap<String, serde_json::Value> = match request.variables {
-            serde_json::Value::Object(map) => map.into_iter().collect(),
-            serde_json::Value::Null => std::collections::HashMap::new(),
-            _ => return Err(ToolError::validation("invalid_params", "variables must be a JSON object")),
-        };
+        let variables: std::collections::HashMap<String, serde_json::Value> =
+            match request.variables {
+                serde_json::Value::Object(map) => map.into_iter().collect(),
+                serde_json::Value::Null => std::collections::HashMap::new(),
+                _ => {
+                    return Err(ToolError::validation(
+                        "invalid_params",
+                        "variables must be a JSON object",
+                    ))
+                }
+            };
 
         match manager.query(&request.query, variables).await {
             Ok(reply) => {
@@ -315,9 +288,7 @@ impl EventDualityServer {
                     .map_err(|e| ToolError::internal(e.to_string()))?;
                 Ok(ToolOutput::text_only(json))
             }
-            Err(e) => {
-                Err(ToolError::internal(format!("Query failed: {}", e)))
-            }
+            Err(e) => Err(ToolError::internal(format!("Query failed: {}", e))),
         }
     }
 
@@ -337,54 +308,16 @@ impl EventDualityServer {
                     .map_err(|e| ToolError::internal(e.to_string()))?;
                 Ok(ToolOutput::text_only(json))
             }
-            Err(e) => {
-                Err(ToolError::internal(format!("Emergency pause failed: {}", e)))
-            }
+            Err(e) => Err(ToolError::internal(format!(
+                "Emergency pause failed: {}",
+                e
+            ))),
         }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Region Operations
     // ═══════════════════════════════════════════════════════════════════════
-
-    #[tracing::instrument(name = "mcp.tool.garden_create_region", skip(self, request))]
-    pub async fn garden_create_region(&self, request: GardenCreateRegionRequest) -> ToolResult {
-        self.require_garden()?;
-        let manager = self.garden_manager.as_ref().unwrap();
-
-        use chaosgarden::ipc::{Beat, Behavior, ShellRequest};
-
-        let behavior = match request.behavior_type.as_str() {
-            "play_content" => Behavior::PlayContent { artifact_id: request.content_id },
-            "latent" => Behavior::Latent { job_id: request.content_id },
-            other => return Err(ToolError::validation("invalid_params", format!("Unknown behavior_type: {}. Use 'play_content' or 'latent'", other))),
-        };
-
-        let shell_req = ShellRequest::CreateRegion {
-            position: Beat(request.position),
-            duration: Beat(request.duration),
-            behavior,
-        };
-
-        match manager.request(shell_req).await {
-            Ok(chaosgarden::ipc::ShellReply::RegionCreated { region_id }) => {
-                let response = GardenResponse {
-                    success: true,
-                    message: format!("Region created: {}", region_id),
-                    data: Some(serde_json::json!({
-                        "region_id": region_id.to_string(),
-                        "position": request.position,
-                        "duration": request.duration,
-                    })),
-                };
-                let json = serde_json::to_string_pretty(&response)
-                    .map_err(|e| ToolError::internal(e.to_string()))?;
-                Ok(ToolOutput::text_only(json))
-            }
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
-            Err(e) => Err(ToolError::internal(format!("Create region failed: {}", e))),
-        }
-    }
 
     #[tracing::instrument(name = "mcp.tool.garden_delete_region", skip(self))]
     pub async fn garden_delete_region(&self, request: GardenDeleteRegionRequest) -> ToolResult {
@@ -394,10 +327,14 @@ impl EventDualityServer {
         use chaosgarden::ipc::ShellRequest;
         use uuid::Uuid;
 
-        let region_id = Uuid::parse_str(&request.region_id)
-            .map_err(|e| ToolError::validation("invalid_params", format!("Invalid region_id: {}", e)))?;
+        let region_id = Uuid::parse_str(&request.region_id).map_err(|e| {
+            ToolError::validation("invalid_params", format!("Invalid region_id: {}", e))
+        })?;
 
-        match manager.request(ShellRequest::DeleteRegion { region_id }).await {
+        match manager
+            .request(ShellRequest::DeleteRegion { region_id })
+            .await
+        {
             Ok(chaosgarden::ipc::ShellReply::Ok { .. }) => {
                 let response = GardenResponse {
                     success: true,
@@ -411,7 +348,10 @@ impl EventDualityServer {
             Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
                 Err(ToolError::internal(error))
             }
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected reply: {:?}",
+                other
+            ))),
             Err(e) => Err(ToolError::internal(format!("Delete region failed: {}", e))),
         }
     }
@@ -424,17 +364,24 @@ impl EventDualityServer {
         use chaosgarden::ipc::{Beat, ShellRequest};
         use uuid::Uuid;
 
-        let region_id = Uuid::parse_str(&request.region_id)
-            .map_err(|e| ToolError::validation("invalid_params", format!("Invalid region_id: {}", e)))?;
+        let region_id = Uuid::parse_str(&request.region_id).map_err(|e| {
+            ToolError::validation("invalid_params", format!("Invalid region_id: {}", e))
+        })?;
 
-        match manager.request(ShellRequest::MoveRegion {
-            region_id,
-            new_position: Beat(request.new_position),
-        }).await {
+        match manager
+            .request(ShellRequest::MoveRegion {
+                region_id,
+                new_position: Beat(request.new_position),
+            })
+            .await
+        {
             Ok(chaosgarden::ipc::ShellReply::Ok { .. }) => {
                 let response = GardenResponse {
                     success: true,
-                    message: format!("Region {} moved to beat {}", region_id, request.new_position),
+                    message: format!(
+                        "Region {} moved to beat {}",
+                        region_id, request.new_position
+                    ),
                     data: Some(serde_json::json!({
                         "region_id": region_id.to_string(),
                         "new_position": request.new_position,
@@ -447,7 +394,10 @@ impl EventDualityServer {
             Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
                 Err(ToolError::internal(error))
             }
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected reply: {:?}",
+                other
+            ))),
             Err(e) => Err(ToolError::internal(format!("Move region failed: {}", e))),
         }
     }
@@ -466,15 +416,18 @@ impl EventDualityServer {
 
         match manager.request(ShellRequest::GetRegions { range }).await {
             Ok(chaosgarden::ipc::ShellReply::Regions { regions }) => {
-                let regions_json: Vec<serde_json::Value> = regions.iter().map(|r| {
-                    serde_json::json!({
-                        "region_id": r.region_id.to_string(),
-                        "position": r.position.0,
-                        "duration": r.duration.0,
-                        "is_latent": r.is_latent,
-                        "artifact_id": r.artifact_id,
+                let regions_json: Vec<serde_json::Value> = regions
+                    .iter()
+                    .map(|r| {
+                        serde_json::json!({
+                            "region_id": r.region_id.to_string(),
+                            "position": r.position.0,
+                            "duration": r.duration.0,
+                            "is_latent": r.is_latent,
+                            "artifact_id": r.artifact_id,
+                        })
                     })
-                }).collect();
+                    .collect();
 
                 let response = GardenResponse {
                     success: true,
@@ -488,7 +441,10 @@ impl EventDualityServer {
                     .map_err(|e| ToolError::internal(e.to_string()))?;
                 Ok(ToolOutput::text_only(json))
             }
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected reply: {:?}",
+                other
+            ))),
             Err(e) => Err(ToolError::internal(format!("Get regions failed: {}", e))),
         }
     }
@@ -504,11 +460,14 @@ impl EventDualityServer {
 
         use chaosgarden::ipc::ShellRequest;
 
-        match manager.request(ShellRequest::AttachAudio {
-            device_name: request.device_name,
-            sample_rate: request.sample_rate,
-            latency_frames: request.latency_frames,
-        }).await {
+        match manager
+            .request(ShellRequest::AttachAudio {
+                device_name: request.device_name,
+                sample_rate: request.sample_rate,
+                latency_frames: request.latency_frames,
+            })
+            .await
+        {
             Ok(chaosgarden::ipc::ShellReply::Ok { result }) => {
                 let response = GardenResponse {
                     success: true,
@@ -522,7 +481,10 @@ impl EventDualityServer {
             Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
                 Err(ToolError::internal(error))
             }
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected reply: {:?}",
+                other
+            ))),
             Err(e) => Err(ToolError::internal(format!("Attach audio failed: {}", e))),
         }
     }
@@ -548,7 +510,10 @@ impl EventDualityServer {
             Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
                 Err(ToolError::internal(error))
             }
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected reply: {:?}",
+                other
+            ))),
             Err(e) => Err(ToolError::internal(format!("Detach audio failed: {}", e))),
         }
     }
@@ -574,7 +539,11 @@ impl EventDualityServer {
             }) => {
                 let response = GardenResponse {
                     success: true,
-                    message: if attached { "Audio attached".to_string() } else { "Audio not attached".to_string() },
+                    message: if attached {
+                        "Audio attached".to_string()
+                    } else {
+                        "Audio not attached".to_string()
+                    },
                     data: Some(serde_json::json!({
                         "attached": attached,
                         "device_name": device_name,
@@ -594,8 +563,14 @@ impl EventDualityServer {
             Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
                 Err(ToolError::internal(error))
             }
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
-            Err(e) => Err(ToolError::internal(format!("Get audio status failed: {}", e))),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected reply: {:?}",
+                other
+            ))),
+            Err(e) => Err(ToolError::internal(format!(
+                "Get audio status failed: {}",
+                e
+            ))),
         }
     }
 
@@ -608,10 +583,13 @@ impl EventDualityServer {
 
         use chaosgarden::ipc::ShellRequest;
 
-        match manager.request(ShellRequest::AttachInput {
-            device_name: request.device_name,
-            sample_rate: request.sample_rate,
-        }).await {
+        match manager
+            .request(ShellRequest::AttachInput {
+                device_name: request.device_name,
+                sample_rate: request.sample_rate,
+            })
+            .await
+        {
             Ok(chaosgarden::ipc::ShellReply::Ok { result }) => {
                 let response = GardenResponse {
                     success: true,
@@ -625,7 +603,10 @@ impl EventDualityServer {
             Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
                 Err(ToolError::internal(error))
             }
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected reply: {:?}",
+                other
+            ))),
             Err(e) => Err(ToolError::internal(format!("Attach input failed: {}", e))),
         }
     }
@@ -651,7 +632,10 @@ impl EventDualityServer {
             Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
                 Err(ToolError::internal(error))
             }
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected reply: {:?}",
+                other
+            ))),
             Err(e) => Err(ToolError::internal(format!("Detach input failed: {}", e))),
         }
     }
@@ -677,7 +661,11 @@ impl EventDualityServer {
             }) => {
                 let response = GardenResponse {
                     success: true,
-                    message: if attached { "Input attached".to_string() } else { "Input not attached".to_string() },
+                    message: if attached {
+                        "Input attached".to_string()
+                    } else {
+                        "Input not attached".to_string()
+                    },
                     data: Some(serde_json::json!({
                         "attached": attached,
                         "device_name": device_name,
@@ -697,8 +685,14 @@ impl EventDualityServer {
             Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
                 Err(ToolError::internal(error))
             }
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
-            Err(e) => Err(ToolError::internal(format!("Get input status failed: {}", e))),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected reply: {:?}",
+                other
+            ))),
+            Err(e) => Err(ToolError::internal(format!(
+                "Get input status failed: {}",
+                e
+            ))),
         }
     }
 
@@ -709,10 +703,13 @@ impl EventDualityServer {
 
         use chaosgarden::ipc::ShellRequest;
 
-        match manager.request(ShellRequest::SetMonitor {
-            enabled: request.enabled,
-            gain: request.gain,
-        }).await {
+        match manager
+            .request(ShellRequest::SetMonitor {
+                enabled: request.enabled,
+                gain: request.gain,
+            })
+            .await
+        {
             Ok(chaosgarden::ipc::ShellReply::Ok { result }) => {
                 let response = GardenResponse {
                     success: true,
@@ -726,7 +723,10 @@ impl EventDualityServer {
             Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
                 Err(ToolError::internal(error))
             }
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected reply: {:?}",
+                other
+            ))),
             Err(e) => Err(ToolError::internal(format!("Set monitor failed: {}", e))),
         }
     }

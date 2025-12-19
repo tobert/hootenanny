@@ -1,4 +1,5 @@
 //! Response types for MCP tool output schemas
+#![allow(dead_code)]
 //!
 //! These types define the structured content returned by tools per MCP 2025-06-18 spec.
 //! Each implements JsonSchema for output schema generation.
@@ -72,7 +73,8 @@ pub struct JobStatusResponse {
 fn json_object_or_null_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
     serde_json::from_value(serde_json::json!({
         "type": ["object", "null"]
-    })).unwrap()
+    }))
+    .unwrap()
 }
 
 /// Response from job_list tool

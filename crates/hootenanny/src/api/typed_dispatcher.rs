@@ -13,10 +13,7 @@
 
 use crate::api::service::EventDualityServer;
 use hooteproto::{
-    envelope::ResponseEnvelope,
-    request::ToolRequest,
-    responses::ToolResponse,
-    timing::ToolTiming,
+    envelope::ResponseEnvelope, request::ToolRequest, responses::ToolResponse, timing::ToolTiming,
     ToolError,
 };
 use std::sync::Arc;
@@ -58,20 +55,20 @@ impl TypedDispatcher {
     async fn dispatch_sync(&self, request: ToolRequest) -> ResponseEnvelope {
         match request {
             // === ABC Notation ===
-            ToolRequest::AbcParse(req) => {
-                match self.server.abc_parse_typed(&req.abc).await {
-                    Ok(resp) => ResponseEnvelope::success(ToolResponse::AbcParsed(resp)),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
-            ToolRequest::AbcValidate(req) => {
-                match self.server.abc_validate_typed(&req.abc).await {
-                    Ok(resp) => ResponseEnvelope::success(ToolResponse::AbcValidated(resp)),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
+            ToolRequest::AbcParse(req) => match self.server.abc_parse_typed(&req.abc).await {
+                Ok(resp) => ResponseEnvelope::success(ToolResponse::AbcParsed(resp)),
+                Err(e) => ResponseEnvelope::error(e),
+            },
+            ToolRequest::AbcValidate(req) => match self.server.abc_validate_typed(&req.abc).await {
+                Ok(resp) => ResponseEnvelope::success(ToolResponse::AbcValidated(resp)),
+                Err(e) => ResponseEnvelope::error(e),
+            },
             ToolRequest::AbcTranspose(req) => {
-                match self.server.abc_transpose_typed(&req.abc, req.semitones, req.target_key.as_deref()).await {
+                match self
+                    .server
+                    .abc_transpose_typed(&req.abc, req.semitones, req.target_key.as_deref())
+                    .await
+                {
                     Ok(resp) => ResponseEnvelope::success(ToolResponse::AbcTransposed(resp)),
                     Err(e) => ResponseEnvelope::error(e),
                 }
@@ -79,39 +76,47 @@ impl TypedDispatcher {
 
             // === SoundFont ===
             ToolRequest::SoundfontInspect(req) => {
-                match self.server.soundfont_inspect_typed(&req.soundfont_hash, req.include_drum_map).await {
+                match self
+                    .server
+                    .soundfont_inspect_typed(&req.soundfont_hash, req.include_drum_map)
+                    .await
+                {
                     Ok(resp) => ResponseEnvelope::success(ToolResponse::SoundfontInfo(resp)),
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
             ToolRequest::SoundfontPresetInspect(req) => {
-                match self.server.soundfont_preset_inspect_typed(&req.soundfont_hash, req.bank, req.program).await {
+                match self
+                    .server
+                    .soundfont_preset_inspect_typed(&req.soundfont_hash, req.bank, req.program)
+                    .await
+                {
                     Ok(resp) => ResponseEnvelope::success(ToolResponse::SoundfontPresetInfo(resp)),
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
 
             // === Garden Status/Query ===
-            ToolRequest::GardenStatus => {
-                match self.server.garden_status_typed().await {
-                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenStatus(resp)),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
+            ToolRequest::GardenStatus => match self.server.garden_status_typed().await {
+                Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenStatus(resp)),
+                Err(e) => ResponseEnvelope::error(e),
+            },
             ToolRequest::GardenGetRegions(req) => {
-                match self.server.garden_get_regions_typed(req.start, req.end).await {
+                match self
+                    .server
+                    .garden_get_regions_typed(req.start, req.end)
+                    .await
+                {
                     Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenRegions(resp)),
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
 
             // === Jobs (status queries are sync) ===
-            ToolRequest::JobStatus(req) => {
-                match self.server.job_status_typed(&req.job_id).await {
-                    Ok(resp) => ResponseEnvelope::success(ToolResponse::JobStatus(resp)),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
+            ToolRequest::JobStatus(req) => match self.server.job_status_typed(&req.job_id).await {
+                Ok(resp) => ResponseEnvelope::success(ToolResponse::JobStatus(resp)),
+                Err(e) => ResponseEnvelope::error(e),
+            },
             ToolRequest::JobList(req) => {
                 match self.server.job_list_typed(req.status.as_deref()).await {
                     Ok(resp) => ResponseEnvelope::success(ToolResponse::JobList(resp)),
@@ -121,26 +126,34 @@ impl TypedDispatcher {
 
             // === Config ===
             ToolRequest::ConfigGet(req) => {
-                match self.server.config_get_typed(req.section.as_deref(), req.key.as_deref()).await {
+                match self
+                    .server
+                    .config_get_typed(req.section.as_deref(), req.key.as_deref())
+                    .await
+                {
                     Ok(resp) => ResponseEnvelope::success(ToolResponse::ConfigValue(resp)),
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
 
             // === Admin ===
-            ToolRequest::Ping => {
-                ResponseEnvelope::ack("pong")
-            }
+            ToolRequest::Ping => ResponseEnvelope::ack("pong"),
             ToolRequest::ListTools => {
                 use hooteproto::responses::ToolsListResponse;
                 let tools = crate::api::dispatch::list_tools();
                 let count = tools.len();
-                ResponseEnvelope::success(ToolResponse::ToolsList(ToolsListResponse { tools, count }))
+                ResponseEnvelope::success(ToolResponse::ToolsList(ToolsListResponse {
+                    tools,
+                    count,
+                }))
             }
 
             // Fallback for tools that should be sync but aren't implemented yet
             other => {
-                tracing::warn!(tool = other.name(), "Sync tool not yet implemented in typed dispatcher");
+                tracing::warn!(
+                    tool = other.name(),
+                    "Sync tool not yet implemented in typed dispatcher"
+                );
                 ResponseEnvelope::error(ToolError::internal(format!(
                     "Tool {} not yet implemented in typed dispatcher",
                     other.name()
@@ -165,7 +178,7 @@ impl TypedDispatcher {
     /// Dispatch long-running async tools - return job_id immediately
     async fn dispatch_async_return_job_id(&self, request: ToolRequest) -> ResponseEnvelope {
         let name = request.name();
-        let timing = request.timing();
+        let _timing = request.timing();
 
         // These tools should spawn a job and return immediately
         // For now, return an error indicating not implemented
@@ -198,55 +211,103 @@ impl TypedDispatcher {
         let result: Result<serde_json::Value, String> = match request {
             ToolRequest::GardenPlay => {
                 match self.server.garden_play_fire(Some(&job_id_str)).await {
-                    Ok(()) => Ok(serde_json::json!({"status": "ok", "command": "play", "job_id": job_id_str})),
+                    Ok(()) => Ok(
+                        serde_json::json!({"status": "ok", "command": "play", "job_id": job_id_str}),
+                    ),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
             ToolRequest::GardenPause => {
                 match self.server.garden_pause_fire(Some(&job_id_str)).await {
-                    Ok(()) => Ok(serde_json::json!({"status": "ok", "command": "pause", "job_id": job_id_str})),
+                    Ok(()) => Ok(
+                        serde_json::json!({"status": "ok", "command": "pause", "job_id": job_id_str}),
+                    ),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
             ToolRequest::GardenStop => {
                 match self.server.garden_stop_fire(Some(&job_id_str)).await {
-                    Ok(()) => Ok(serde_json::json!({"status": "ok", "command": "stop", "job_id": job_id_str})),
+                    Ok(()) => Ok(
+                        serde_json::json!({"status": "ok", "command": "stop", "job_id": job_id_str}),
+                    ),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
             ToolRequest::GardenSeek(req) => {
-                match self.server.garden_seek_fire(req.beat, Some(&job_id_str)).await {
-                    Ok(()) => Ok(serde_json::json!({"status": "ok", "command": "seek", "beat": req.beat, "job_id": job_id_str})),
+                match self
+                    .server
+                    .garden_seek_fire(req.beat, Some(&job_id_str))
+                    .await
+                {
+                    Ok(()) => Ok(
+                        serde_json::json!({"status": "ok", "command": "seek", "beat": req.beat, "job_id": job_id_str}),
+                    ),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
             ToolRequest::GardenSetTempo(req) => {
-                match self.server.garden_set_tempo_fire(req.bpm, Some(&job_id_str)).await {
-                    Ok(()) => Ok(serde_json::json!({"status": "ok", "command": "set_tempo", "bpm": req.bpm, "job_id": job_id_str})),
+                match self
+                    .server
+                    .garden_set_tempo_fire(req.bpm, Some(&job_id_str))
+                    .await
+                {
+                    Ok(()) => Ok(
+                        serde_json::json!({"status": "ok", "command": "set_tempo", "bpm": req.bpm, "job_id": job_id_str}),
+                    ),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
             ToolRequest::GardenEmergencyPause => {
-                match self.server.garden_emergency_pause_fire(Some(&job_id_str)).await {
-                    Ok(()) => Ok(serde_json::json!({"status": "ok", "command": "emergency_pause", "job_id": job_id_str})),
+                match self
+                    .server
+                    .garden_emergency_pause_fire(Some(&job_id_str))
+                    .await
+                {
+                    Ok(()) => Ok(
+                        serde_json::json!({"status": "ok", "command": "emergency_pause", "job_id": job_id_str}),
+                    ),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
             ToolRequest::GardenCreateRegion(req) => {
-                match self.server.garden_create_region_fire(req.position, req.duration, &req.behavior_type, &req.content_id, Some(&job_id_str)).await {
-                    Ok(region_id) => Ok(serde_json::json!({"status": "ok", "command": "create_region", "region_id": region_id, "job_id": job_id_str})),
+                match self
+                    .server
+                    .garden_create_region_fire(
+                        req.position,
+                        req.duration,
+                        &req.behavior_type,
+                        &req.content_id,
+                        Some(&job_id_str),
+                    )
+                    .await
+                {
+                    Ok(region_id) => Ok(
+                        serde_json::json!({"status": "ok", "command": "create_region", "region_id": region_id, "job_id": job_id_str}),
+                    ),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
             ToolRequest::GardenDeleteRegion(req) => {
-                match self.server.garden_delete_region_fire(&req.region_id, Some(&job_id_str)).await {
-                    Ok(()) => Ok(serde_json::json!({"status": "ok", "command": "delete_region", "region_id": req.region_id, "job_id": job_id_str})),
+                match self
+                    .server
+                    .garden_delete_region_fire(&req.region_id, Some(&job_id_str))
+                    .await
+                {
+                    Ok(()) => Ok(
+                        serde_json::json!({"status": "ok", "command": "delete_region", "region_id": req.region_id, "job_id": job_id_str}),
+                    ),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
             ToolRequest::GardenMoveRegion(req) => {
-                match self.server.garden_move_region_fire(&req.region_id, req.new_position, Some(&job_id_str)).await {
-                    Ok(()) => Ok(serde_json::json!({"status": "ok", "command": "move_region", "region_id": req.region_id, "new_position": req.new_position, "job_id": job_id_str})),
+                match self
+                    .server
+                    .garden_move_region_fire(&req.region_id, req.new_position, Some(&job_id_str))
+                    .await
+                {
+                    Ok(()) => Ok(
+                        serde_json::json!({"status": "ok", "command": "move_region", "region_id": req.region_id, "new_position": req.new_position, "job_id": job_id_str}),
+                    ),
                     Err(e) => Err(e.message().to_string()),
                 }
             }

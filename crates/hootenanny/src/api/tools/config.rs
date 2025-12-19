@@ -10,24 +10,14 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ConfigGetRequest {
     /// Optional section to return (paths, bind, telemetry, models, connections, media, defaults)
-    #[schemars(description = "Config section: 'paths', 'bind', 'telemetry', 'models', 'connections', 'media', 'defaults'. Omit for full config.")]
+    #[schemars(
+        description = "Config section: 'paths', 'bind', 'telemetry', 'models', 'connections', 'media', 'defaults'. Omit for full config."
+    )]
     pub section: Option<String>,
 
     /// Optional key within section
     #[schemars(description = "Specific key within section (e.g. 'cas_dir' in paths section)")]
     pub key: Option<String>,
-}
-
-/// Response for config_get
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConfigGetResponse {
-    /// The config data (structure depends on section/key)
-    #[serde(flatten)]
-    pub data: Value,
-
-    /// Source information
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sources: Option<ConfigSourcesInfo>,
 }
 
 /// Information about where config values came from
@@ -42,7 +32,11 @@ pub struct ConfigSourcesInfo {
 impl From<ConfigSources> for ConfigSourcesInfo {
     fn from(sources: ConfigSources) -> Self {
         Self {
-            files: sources.files.iter().map(|p| p.display().to_string()).collect(),
+            files: sources
+                .files
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect(),
             env_overrides: sources.env_overrides,
         }
     }

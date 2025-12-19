@@ -1,7 +1,10 @@
-use crate::api::responses::{JobStatusResponse, JobListResponse, JobSummary, JobCancelResponse, JobPollResponse, JobSleepResponse, GpuInfo, GpuSparklines};
+use crate::api::responses::{
+    GpuInfo, GpuSparklines, JobCancelResponse, JobListResponse, JobPollResponse, JobSleepResponse,
+    JobStatusResponse, JobSummary,
+};
+use crate::api::schema::{CancelJobRequest, GetJobStatusRequest, PollRequest, SleepRequest};
 use crate::api::service::EventDualityServer;
-use crate::api::schema::{GetJobStatusRequest, CancelJobRequest, PollRequest, SleepRequest};
-use hooteproto::{JobId, JobStatus, ToolOutput, ToolResult, ToolError};
+use hooteproto::{JobId, JobStatus, ToolError, ToolOutput, ToolResult};
 use tracing;
 
 impl EventDualityServer {
@@ -13,13 +16,12 @@ impl EventDualityServer {
             job.status = tracing::field::Empty,
         )
     )]
-    pub async fn get_job_status(
-        &self,
-        request: GetJobStatusRequest,
-    ) -> ToolResult {
+    pub async fn get_job_status(&self, request: GetJobStatusRequest) -> ToolResult {
         let job_id = JobId::from(request.job_id);
 
-        let job_info = self.job_store.get_job(&job_id)
+        let job_info = self
+            .job_store
+            .get_job(&job_id)
             .map_err(|e| ToolError::not_found("job", e.to_string()))?;
 
         tracing::Span::current().record("job.status", format!("{:?}", job_info.status));
@@ -61,21 +63,24 @@ impl EventDualityServer {
 
         tracing::Span::current().record("jobs.count", jobs.len());
 
-        let job_summaries: Vec<JobSummary> = jobs.iter().map(|j| {
-            let status = match j.status {
-                JobStatus::Pending => crate::api::responses::JobStatus::Pending,
-                JobStatus::Running => crate::api::responses::JobStatus::Running,
-                JobStatus::Complete => crate::api::responses::JobStatus::Completed,
-                JobStatus::Failed => crate::api::responses::JobStatus::Failed,
-                JobStatus::Cancelled => crate::api::responses::JobStatus::Cancelled,
-            };
-            JobSummary {
-                job_id: j.job_id.as_str().to_string(),
-                tool_name: j.source.clone(),
-                status,
-                created_at: j.created_at as i64,
-            }
-        }).collect();
+        let job_summaries: Vec<JobSummary> = jobs
+            .iter()
+            .map(|j| {
+                let status = match j.status {
+                    JobStatus::Pending => crate::api::responses::JobStatus::Pending,
+                    JobStatus::Running => crate::api::responses::JobStatus::Running,
+                    JobStatus::Complete => crate::api::responses::JobStatus::Completed,
+                    JobStatus::Failed => crate::api::responses::JobStatus::Failed,
+                    JobStatus::Cancelled => crate::api::responses::JobStatus::Cancelled,
+                };
+                JobSummary {
+                    job_id: j.job_id.as_str().to_string(),
+                    tool_name: j.source.clone(),
+                    status,
+                    created_at: j.created_at as i64,
+                }
+            })
+            .collect();
 
         let response = JobListResponse {
             total: job_summaries.len(),
@@ -95,13 +100,11 @@ impl EventDualityServer {
             job.id = %request.job_id,
         )
     )]
-    pub async fn cancel_job(
-        &self,
-        request: CancelJobRequest,
-    ) -> ToolResult {
+    pub async fn cancel_job(&self, request: CancelJobRequest) -> ToolResult {
         let job_id = JobId::from(request.job_id);
 
-        self.job_store.cancel_job(&job_id)
+        self.job_store
+            .cancel_job(&job_id)
             .map_err(|e| ToolError::internal(e.to_string()))?;
 
         let response = JobCancelResponse {
@@ -127,10 +130,7 @@ impl EventDualityServer {
             poll.reason = tracing::field::Empty,
         )
     )]
-    pub async fn poll(
-        &self,
-        request: PollRequest,
-    ) -> ToolResult {
+    pub async fn poll(&self, request: PollRequest) -> ToolResult {
         use std::time::{Duration, Instant};
 
         let timeout_ms = request.timeout_ms.min(10000);
@@ -140,13 +140,11 @@ impl EventDualityServer {
         if mode != "any" && mode != "all" {
             return Err(ToolError::validation(
                 "invalid_params",
-                format!("mode must be 'any' or 'all', got '{}'", mode)
+                format!("mode must be 'any' or 'all', got '{}'", mode),
             ));
         }
 
-        let job_ids: Vec<JobId> = request.job_ids.into_iter()
-            .map(JobId::from)
-            .collect();
+        let job_ids: Vec<JobId> = request.job_ids.into_iter().map(JobId::from).collect();
 
         let start = Instant::now();
         let poll_interval = Duration::from_millis(500);
@@ -158,13 +156,15 @@ impl EventDualityServer {
 
             for job_id in &job_ids {
                 match self.job_store.get_job(job_id) {
-                    Ok(job_info) => {
-                        match job_info.status {
-                            JobStatus::Complete => completed.push(job_id.as_str().to_string()),
-                            JobStatus::Failed | JobStatus::Cancelled => failed.push(job_id.as_str().to_string()),
-                            JobStatus::Pending | JobStatus::Running => pending.push(job_id.as_str().to_string()),
+                    Ok(job_info) => match job_info.status {
+                        JobStatus::Complete => completed.push(job_id.as_str().to_string()),
+                        JobStatus::Failed | JobStatus::Cancelled => {
+                            failed.push(job_id.as_str().to_string())
                         }
-                    }
+                        JobStatus::Pending | JobStatus::Running => {
+                            pending.push(job_id.as_str().to_string())
+                        }
+                    },
                     Err(_) => {
                         failed.push(job_id.as_str().to_string());
                     }
@@ -235,8 +235,13 @@ impl EventDualityServer {
             };
 
             return Ok(ToolOutput::new(
-                format!("Poll: {} completed, {} failed, {} pending ({})",
-                    response.completed.len(), response.failed.len(), response.pending.len(), reason),
+                format!(
+                    "Poll: {} completed, {} failed, {} pending ({})",
+                    response.completed.len(),
+                    response.failed.len(),
+                    response.pending.len(),
+                    reason
+                ),
                 &response,
             ));
         }
@@ -249,10 +254,7 @@ impl EventDualityServer {
             sleep.milliseconds = request.milliseconds,
         )
     )]
-    pub async fn sleep(
-        &self,
-        request: SleepRequest,
-    ) -> ToolResult {
+    pub async fn sleep(&self, request: SleepRequest) -> ToolResult {
         let ms = request.milliseconds.min(30000);
 
         tokio::time::sleep(std::time::Duration::from_millis(ms)).await;

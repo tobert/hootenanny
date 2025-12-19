@@ -8,36 +8,30 @@
 use crate::api::responses::GraphQueryResponse;
 use crate::api::schema::GraphQueryRequest;
 use crate::api::service::EventDualityServer;
-use hooteproto::{ToolOutput, ToolResult, ToolError};
+use hooteproto::{ToolError, ToolOutput, ToolResult};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use trustfall::{execute_query, FieldValue};
 
 impl EventDualityServer {
     #[tracing::instrument(name = "mcp.tool.graph_query", skip(self, request))]
-    pub async fn graph_query(
-        &self,
-        request: GraphQueryRequest,
-    ) -> ToolResult {
-        let variables = json_to_variables(&request.variables)
-            .map_err(|e| ToolError::validation("invalid_params", format!("Invalid variables: {}", e)))?;
+    pub async fn graph_query(&self, request: GraphQueryRequest) -> ToolResult {
+        let variables = json_to_variables(&request.variables).map_err(|e| {
+            ToolError::validation("invalid_params", format!("Invalid variables: {}", e))
+        })?;
 
         let schema = self.graph_adapter.schema();
         let adapter_arc: Arc<_> = Arc::clone(&self.graph_adapter);
-        let results_iter = execute_query(schema, adapter_arc, &request.query, variables)
-            .map_err(|e| ToolError::validation("invalid_params", format!("Query execution failed: {}", e)))?;
+        let results_iter =
+            execute_query(schema, adapter_arc, &request.query, variables).map_err(|e| {
+                ToolError::validation("invalid_params", format!("Query execution failed: {}", e))
+            })?;
 
         let limit = request.limit.unwrap_or(100);
-        let results: Vec<_> = results_iter
-            .take(limit)
-            .map(result_to_json)
-            .collect();
+        let results: Vec<_> = results_iter.take(limit).map(result_to_json).collect();
 
         let count = results.len();
-        let response = GraphQueryResponse {
-            results,
-            count,
-        };
+        let response = GraphQueryResponse { results, count };
 
         let json = serde_json::to_string_pretty(&response)
             .map_err(|e| ToolError::internal(format!("Failed to serialize: {}", e)))?;
@@ -66,22 +60,20 @@ fn json_to_field_value(value: &serde_json::Value) -> Result<FieldValue, String> 
             let items: Result<Vec<_>, _> = arr.iter().map(json_to_field_value).collect();
             Ok(FieldValue::List(items?.into()))
         }
-        serde_json::Value::Object(_) => Err(
-            "Objects not supported as FieldValue. Use flat variables only.".to_string(),
-        ),
+        serde_json::Value::Object(_) => {
+            Err("Objects not supported as FieldValue. Use flat variables only.".to_string())
+        }
     }
 }
 
-fn json_to_variables(
-    json: &serde_json::Value,
-) -> Result<BTreeMap<Arc<str>, FieldValue>, String> {
+fn json_to_variables(json: &serde_json::Value) -> Result<BTreeMap<Arc<str>, FieldValue>, String> {
     match json {
         serde_json::Value::Null => Ok(BTreeMap::new()),
         serde_json::Value::Object(map) => {
             let mut result = BTreeMap::new();
             for (key, value) in map {
-                let field_value = json_to_field_value(value)
-                    .map_err(|e| format!("Variable '{}': {}", key, e))?;
+                let field_value =
+                    json_to_field_value(value).map_err(|e| format!("Variable '{}': {}", key, e))?;
                 result.insert(Arc::from(key.as_str()), field_value);
             }
             Ok(result)

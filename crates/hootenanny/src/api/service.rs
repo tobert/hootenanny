@@ -89,26 +89,6 @@ impl EventDualityServer {
         self
     }
 
-    /// Broadcast an artifact creation event (fire-and-forget)
-    pub fn broadcast_artifact_created(
-        &self,
-        artifact_id: &str,
-        content_hash: &str,
-        tags: Vec<String>,
-        creator: Option<String>,
-    ) {
-        if let Some(ref broadcaster) = self.broadcaster {
-            let broadcaster = broadcaster.clone();
-            let artifact_id = artifact_id.to_string();
-            let content_hash = content_hash.to_string();
-            tokio::spawn(async move {
-                if let Err(e) = broadcaster.artifact_created(&artifact_id, &content_hash, tags, creator).await {
-                    tracing::warn!("Failed to broadcast artifact_created: {}", e);
-                }
-            });
-        }
-    }
-
     /// Start listening for stream events from chaosgarden
     ///
     /// This spawns a background task that:
@@ -150,7 +130,7 @@ impl EventDualityServer {
                         stream_uri,
                         sample_position,
                         byte_position,
-                        wall_clock,
+                        wall_clock: _,
                     } => {
                         debug!(
                             stream.uri = %stream_uri,
@@ -165,7 +145,7 @@ impl EventDualityServer {
                         path,
                         bytes_written,
                         samples_written,
-                        wall_clock,
+                        wall_clock: _,
                     } => {
                         info!(
                             stream.uri = %stream_uri,

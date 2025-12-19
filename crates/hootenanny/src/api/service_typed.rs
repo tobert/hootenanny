@@ -6,11 +6,10 @@
 use crate::api::service::EventDualityServer;
 use hooteproto::{
     responses::{
-        AbcParsedResponse, AbcValidatedResponse, AbcTransposedResponse, AbcValidationError,
-        SoundfontInfoResponse, SoundfontPreset, SoundfontPresetInfoResponse, SoundfontRegion,
-        GardenStatusResponse, GardenRegionsResponse, TransportState,
-        JobStatusResponse, JobListResponse, JobState, JobCounts,
-        ConfigValueResponse, ConfigValue,
+        AbcParsedResponse, AbcTransposedResponse, AbcValidatedResponse, AbcValidationError,
+        ConfigValue, ConfigValueResponse, GardenRegionsResponse, GardenStatusResponse, JobCounts,
+        JobListResponse, JobState, JobStatusResponse, SoundfontInfoResponse, SoundfontPreset,
+        SoundfontPresetInfoResponse, SoundfontRegion, TransportState,
     },
     ToolError,
 };
@@ -40,21 +39,33 @@ impl EventDualityServer {
 
         // Format meter from enum
         let meter_str = tune.header.meter.as_ref().map(|m| match m {
-            abc::Meter::Simple { numerator, denominator } => format!("{}/{}", numerator, denominator),
+            abc::Meter::Simple {
+                numerator,
+                denominator,
+            } => format!("{}/{}", numerator, denominator),
             abc::Meter::Common => "4/4".to_string(),
             abc::Meter::Cut => "2/2".to_string(),
             abc::Meter::None => "free".to_string(),
         });
 
         // Format key
-        let key_str = Some(format!("{:?}{}", tune.header.key.root,
-            tune.header.key.accidental.map(|a| format!("{:?}", a)).unwrap_or_default()));
+        let key_str = Some(format!(
+            "{:?}{}",
+            tune.header.key.root,
+            tune.header
+                .key
+                .accidental
+                .map(|a| format!("{:?}", a))
+                .unwrap_or_default()
+        ));
 
         // Extract tempo from Tempo struct if present
         let tempo_val = tune.header.tempo.as_ref().map(|t| t.bpm);
 
         // Count notes across all voices
-        let notes_count: usize = tune.voices.iter()
+        let notes_count: usize = tune
+            .voices
+            .iter()
             .flat_map(|v| v.elements.iter())
             .filter(|e| matches!(e, abc::Element::Note(_)))
             .count();
@@ -77,7 +88,10 @@ impl EventDualityServer {
     }
 
     /// Validate ABC notation - typed response
-    pub async fn abc_validate_typed(&self, abc_str: &str) -> Result<AbcValidatedResponse, ToolError> {
+    pub async fn abc_validate_typed(
+        &self,
+        abc_str: &str,
+    ) -> Result<AbcValidatedResponse, ToolError> {
         let parse_result = abc::parse(abc_str);
 
         let errors: Vec<AbcValidationError> = parse_result
@@ -89,10 +103,7 @@ impl EventDualityServer {
             })
             .collect();
 
-        let warnings: Vec<String> = parse_result
-            .warnings()
-            .map(|w| w.message.clone())
-            .collect();
+        let warnings: Vec<String> = parse_result.warnings().map(|w| w.message.clone()).collect();
 
         Ok(AbcValidatedResponse {
             valid: errors.is_empty(),
@@ -118,9 +129,17 @@ impl EventDualityServer {
         }
 
         // Format original key
-        let original_key = Some(format!("{:?}{}",
+        let original_key = Some(format!(
+            "{:?}{}",
             parse_result.value.header.key.root,
-            parse_result.value.header.key.accidental.map(|a| format!("{:?}", a)).unwrap_or_default()));
+            parse_result
+                .value
+                .header
+                .key
+                .accidental
+                .map(|a| format!("{:?}", a))
+                .unwrap_or_default()
+        ));
 
         let semitones_actual = if let Some(s) = semitones {
             s
@@ -135,9 +154,16 @@ impl EventDualityServer {
         };
 
         let transposed = abc::transpose(&parse_result.value, semitones_actual);
-        let new_key = Some(format!("{:?}{}",
+        let new_key = Some(format!(
+            "{:?}{}",
             transposed.header.key.root,
-            transposed.header.key.accidental.map(|a| format!("{:?}", a)).unwrap_or_default()));
+            transposed
+                .header
+                .key
+                .accidental
+                .map(|a| format!("{:?}", a))
+                .unwrap_or_default()
+        ));
         let abc_out = abc::to_abc(&transposed);
 
         Ok(AbcTransposedResponse {
@@ -255,19 +281,27 @@ impl EventDualityServer {
     pub async fn garden_status_typed(&self) -> Result<GardenStatusResponse, ToolError> {
         use chaosgarden::ipc::ShellReply;
 
-        let manager = self
-            .garden_manager
-            .as_ref()
-            .ok_or_else(|| ToolError::validation("not_connected", "Not connected to chaosgarden"))?;
-
-        let reply = manager.get_transport_state().await.map_err(|e| {
-            ToolError::service("chaosgarden", "status_failed", e.to_string())
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
         })?;
 
+        let reply = manager
+            .get_transport_state()
+            .await
+            .map_err(|e| ToolError::service("chaosgarden", "status_failed", e.to_string()))?;
+
         match reply {
-            ShellReply::TransportState { playing, position, tempo } => {
+            ShellReply::TransportState {
+                playing,
+                position,
+                tempo,
+            } => {
                 Ok(GardenStatusResponse {
-                    state: if playing { TransportState::Playing } else { TransportState::Stopped },
+                    state: if playing {
+                        TransportState::Playing
+                    } else {
+                        TransportState::Stopped
+                    },
                     position_beats: position.0,
                     tempo_bpm: tempo,
                     region_count: 0, // Would need separate query
@@ -276,7 +310,9 @@ impl EventDualityServer {
             ShellReply::Error { error, .. } => {
                 Err(ToolError::service("chaosgarden", "status_failed", error))
             }
-            _ => Err(ToolError::internal("Unexpected reply type for get_transport_state")),
+            _ => Err(ToolError::internal(
+                "Unexpected reply type for get_transport_state",
+            )),
         }
     }
 
@@ -289,10 +325,9 @@ impl EventDualityServer {
         use chaosgarden::ipc::{Beat, ShellReply, ShellRequest};
         use hooteproto::responses::GardenRegionInfo;
 
-        let manager = self
-            .garden_manager
-            .as_ref()
-            .ok_or_else(|| ToolError::validation("not_connected", "Not connected to chaosgarden"))?;
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
 
         // Convert f64 beat range to (Beat, Beat) tuple
         let range = match (start, end) {
@@ -313,16 +348,26 @@ impl EventDualityServer {
                         region_id: r.region_id.to_string(),
                         position: r.position.0,
                         duration: r.duration.0,
-                        behavior_type: if r.is_latent { "latent" } else { "play_content" }.to_string(),
+                        behavior_type: if r.is_latent {
+                            "latent"
+                        } else {
+                            "play_content"
+                        }
+                        .to_string(),
                         content_id: r.artifact_id.unwrap_or_default(),
                     })
                     .collect();
                 let count = converted.len();
-                Ok(GardenRegionsResponse { regions: converted, count })
+                Ok(GardenRegionsResponse {
+                    regions: converted,
+                    count,
+                })
             }
-            ShellReply::Error { error, .. } => {
-                Err(ToolError::service("chaosgarden", "get_regions_failed", error))
-            }
+            ShellReply::Error { error, .. } => Err(ToolError::service(
+                "chaosgarden",
+                "get_regions_failed",
+                error,
+            )),
             _ => Err(ToolError::internal("Unexpected reply type for GetRegions")),
         }
     }
@@ -338,10 +383,9 @@ impl EventDualityServer {
     pub async fn garden_play_fire(&self, job_id: Option<&str>) -> Result<(), ToolError> {
         use chaosgarden::ipc::ShellRequest;
 
-        let manager = self
-            .garden_manager
-            .as_ref()
-            .ok_or_else(|| ToolError::validation("not_connected", "Not connected to chaosgarden"))?;
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
         manager
             .request_with_job_id(ShellRequest::Play, job_id)
             .await
@@ -352,10 +396,9 @@ impl EventDualityServer {
     pub async fn garden_pause_fire(&self, job_id: Option<&str>) -> Result<(), ToolError> {
         use chaosgarden::ipc::ShellRequest;
 
-        let manager = self
-            .garden_manager
-            .as_ref()
-            .ok_or_else(|| ToolError::validation("not_connected", "Not connected to chaosgarden"))?;
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
         manager
             .request_with_job_id(ShellRequest::Pause, job_id)
             .await
@@ -366,10 +409,9 @@ impl EventDualityServer {
     pub async fn garden_stop_fire(&self, job_id: Option<&str>) -> Result<(), ToolError> {
         use chaosgarden::ipc::ShellRequest;
 
-        let manager = self
-            .garden_manager
-            .as_ref()
-            .ok_or_else(|| ToolError::validation("not_connected", "Not connected to chaosgarden"))?;
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
         manager
             .request_with_job_id(ShellRequest::Stop, job_id)
             .await
@@ -380,10 +422,9 @@ impl EventDualityServer {
     pub async fn garden_seek_fire(&self, beat: f64, job_id: Option<&str>) -> Result<(), ToolError> {
         use chaosgarden::ipc::{Beat, ShellRequest};
 
-        let manager = self
-            .garden_manager
-            .as_ref()
-            .ok_or_else(|| ToolError::validation("not_connected", "Not connected to chaosgarden"))?;
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
         manager
             .request_with_job_id(ShellRequest::Seek { beat: Beat(beat) }, job_id)
             .await
@@ -391,13 +432,16 @@ impl EventDualityServer {
         Ok(())
     }
 
-    pub async fn garden_set_tempo_fire(&self, bpm: f64, job_id: Option<&str>) -> Result<(), ToolError> {
+    pub async fn garden_set_tempo_fire(
+        &self,
+        bpm: f64,
+        job_id: Option<&str>,
+    ) -> Result<(), ToolError> {
         use chaosgarden::ipc::ShellRequest;
 
-        let manager = self
-            .garden_manager
-            .as_ref()
-            .ok_or_else(|| ToolError::validation("not_connected", "Not connected to chaosgarden"))?;
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
         manager
             .request_with_job_id(ShellRequest::SetTempo { bpm }, job_id)
             .await
@@ -405,18 +449,19 @@ impl EventDualityServer {
         Ok(())
     }
 
-    pub async fn garden_emergency_pause_fire(&self, job_id: Option<&str>) -> Result<(), ToolError> {
+    pub async fn garden_emergency_pause_fire(&self, _job_id: Option<&str>) -> Result<(), ToolError> {
         use chaosgarden::ipc::ControlRequest;
 
-        let manager = self
-            .garden_manager
-            .as_ref()
-            .ok_or_else(|| ToolError::validation("not_connected", "Not connected to chaosgarden"))?;
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
         // Emergency pause goes on control channel (no job_id support there yet)
         manager
             .control(ControlRequest::EmergencyPause)
             .await
-            .map_err(|e| ToolError::service("chaosgarden", "emergency_pause_failed", e.to_string()))?;
+            .map_err(|e| {
+                ToolError::service("chaosgarden", "emergency_pause_failed", e.to_string())
+            })?;
         Ok(())
     }
 
@@ -430,10 +475,9 @@ impl EventDualityServer {
     ) -> Result<String, ToolError> {
         use chaosgarden::ipc::{Beat, Behavior, ShellReply, ShellRequest};
 
-        let manager = self
-            .garden_manager
-            .as_ref()
-            .ok_or_else(|| ToolError::validation("not_connected", "Not connected to chaosgarden"))?;
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
 
         let behavior = match behavior_type {
             "play_content" => Behavior::PlayContent {
@@ -442,7 +486,12 @@ impl EventDualityServer {
             "latent" => Behavior::Latent {
                 job_id: content_id.to_string(),
             },
-            _ => return Err(ToolError::validation("invalid_behavior", format!("Unknown behavior type: {}", behavior_type))),
+            _ => {
+                return Err(ToolError::validation(
+                    "invalid_behavior",
+                    format!("Unknown behavior type: {}", behavior_type),
+                ))
+            }
         };
 
         let reply = manager
@@ -455,45 +504,69 @@ impl EventDualityServer {
                 job_id,
             )
             .await
-            .map_err(|e| ToolError::service("chaosgarden", "create_region_failed", e.to_string()))?;
+            .map_err(|e| {
+                ToolError::service("chaosgarden", "create_region_failed", e.to_string())
+            })?;
 
         match reply {
             ShellReply::RegionCreated { region_id } => Ok(region_id.to_string()),
-            ShellReply::Error { error, .. } => Err(ToolError::service("chaosgarden", "create_region_error", error)),
+            ShellReply::Error { error, .. } => Err(ToolError::service(
+                "chaosgarden",
+                "create_region_error",
+                error,
+            )),
             _ => Err(ToolError::internal("unexpected reply from chaosgarden")),
         }
     }
 
-    pub async fn garden_delete_region_fire(&self, region_id: &str, job_id: Option<&str>) -> Result<(), ToolError> {
+    pub async fn garden_delete_region_fire(
+        &self,
+        region_id: &str,
+        job_id: Option<&str>,
+    ) -> Result<(), ToolError> {
         use chaosgarden::ipc::{ShellReply, ShellRequest};
 
-        let manager = self
-            .garden_manager
-            .as_ref()
-            .ok_or_else(|| ToolError::validation("not_connected", "Not connected to chaosgarden"))?;
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
 
         let region_uuid = uuid::Uuid::parse_str(region_id)
             .map_err(|_| ToolError::validation("invalid_uuid", "Invalid region_id UUID format"))?;
 
         let reply = manager
-            .request_with_job_id(ShellRequest::DeleteRegion { region_id: region_uuid }, job_id)
+            .request_with_job_id(
+                ShellRequest::DeleteRegion {
+                    region_id: region_uuid,
+                },
+                job_id,
+            )
             .await
-            .map_err(|e| ToolError::service("chaosgarden", "delete_region_failed", e.to_string()))?;
+            .map_err(|e| {
+                ToolError::service("chaosgarden", "delete_region_failed", e.to_string())
+            })?;
 
         match reply {
             ShellReply::Ok { .. } => Ok(()),
-            ShellReply::Error { error, .. } => Err(ToolError::service("chaosgarden", "delete_region_error", error)),
+            ShellReply::Error { error, .. } => Err(ToolError::service(
+                "chaosgarden",
+                "delete_region_error",
+                error,
+            )),
             _ => Err(ToolError::internal("unexpected reply from chaosgarden")),
         }
     }
 
-    pub async fn garden_move_region_fire(&self, region_id: &str, new_position: f64, job_id: Option<&str>) -> Result<(), ToolError> {
+    pub async fn garden_move_region_fire(
+        &self,
+        region_id: &str,
+        new_position: f64,
+        job_id: Option<&str>,
+    ) -> Result<(), ToolError> {
         use chaosgarden::ipc::{Beat, ShellReply, ShellRequest};
 
-        let manager = self
-            .garden_manager
-            .as_ref()
-            .ok_or_else(|| ToolError::validation("not_connected", "Not connected to chaosgarden"))?;
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
 
         let region_uuid = uuid::Uuid::parse_str(region_id)
             .map_err(|_| ToolError::validation("invalid_uuid", "Invalid region_id UUID format"))?;
@@ -511,7 +584,11 @@ impl EventDualityServer {
 
         match reply {
             ShellReply::Ok { .. } => Ok(()),
-            ShellReply::Error { error, .. } => Err(ToolError::service("chaosgarden", "move_region_error", error)),
+            ShellReply::Error { error, .. } => Err(ToolError::service(
+                "chaosgarden",
+                "move_region_error",
+                error,
+            )),
             _ => Err(ToolError::internal("unexpected reply from chaosgarden")),
         }
     }
@@ -551,7 +628,10 @@ impl EventDualityServer {
     }
 
     /// List jobs - typed response
-    pub async fn job_list_typed(&self, status_filter: Option<&str>) -> Result<JobListResponse, ToolError> {
+    pub async fn job_list_typed(
+        &self,
+        status_filter: Option<&str>,
+    ) -> Result<JobListResponse, ToolError> {
         use hooteproto::JobStatus;
 
         let jobs_raw = self.job_store.list_jobs();
@@ -634,22 +714,46 @@ impl EventDualityServer {
             (None, None) => {
                 // Return full config as nested object
                 ConfigValue::Object(std::collections::HashMap::from([
-                    ("paths".to_string(), ConfigValue::Object(std::collections::HashMap::from([
-                        ("state_dir".to_string(), ConfigValue::String(config.infra.paths.state_dir.display().to_string())),
-                        ("cas_dir".to_string(), ConfigValue::String(config.infra.paths.cas_dir.display().to_string())),
-                    ]))),
-                    ("bind".to_string(), ConfigValue::Object(std::collections::HashMap::from([
-                        ("http_port".to_string(), ConfigValue::Integer(config.infra.bind.http_port as i64)),
-                    ]))),
+                    (
+                        "paths".to_string(),
+                        ConfigValue::Object(std::collections::HashMap::from([
+                            (
+                                "state_dir".to_string(),
+                                ConfigValue::String(
+                                    config.infra.paths.state_dir.display().to_string(),
+                                ),
+                            ),
+                            (
+                                "cas_dir".to_string(),
+                                ConfigValue::String(
+                                    config.infra.paths.cas_dir.display().to_string(),
+                                ),
+                            ),
+                        ])),
+                    ),
+                    (
+                        "bind".to_string(),
+                        ConfigValue::Object(std::collections::HashMap::from([(
+                            "http_port".to_string(),
+                            ConfigValue::Integer(config.infra.bind.http_port as i64),
+                        )])),
+                    ),
                 ]))
             }
-            (Some("paths"), None) => {
-                ConfigValue::Object(std::collections::HashMap::from([
-                    ("state_dir".to_string(), ConfigValue::String(config.infra.paths.state_dir.display().to_string())),
-                    ("cas_dir".to_string(), ConfigValue::String(config.infra.paths.cas_dir.display().to_string())),
-                    ("socket_dir".to_string(), ConfigValue::String(config.infra.paths.socket_dir.display().to_string())),
-                ]))
-            }
+            (Some("paths"), None) => ConfigValue::Object(std::collections::HashMap::from([
+                (
+                    "state_dir".to_string(),
+                    ConfigValue::String(config.infra.paths.state_dir.display().to_string()),
+                ),
+                (
+                    "cas_dir".to_string(),
+                    ConfigValue::String(config.infra.paths.cas_dir.display().to_string()),
+                ),
+                (
+                    "socket_dir".to_string(),
+                    ConfigValue::String(config.infra.paths.socket_dir.display().to_string()),
+                ),
+            ])),
             (Some("paths"), Some("cas_dir")) => {
                 ConfigValue::String(config.infra.paths.cas_dir.display().to_string())
             }
