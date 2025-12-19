@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use audio_graph_mcp::{Database, DeviceFingerprint, IdentityMatcher, PipeWireSource};
 use audio_graph_mcp::sources::DeviceEvent;
+use audio_graph_mcp::{Database, DeviceFingerprint, IdentityMatcher, PipeWireSource};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
@@ -49,9 +49,7 @@ impl DeviceEventManager {
 
                     info!(
                         "🔌 Device connected: {} ({:?}) -> {:?}",
-                        node.name,
-                        node.media_class,
-                        identity_name
+                        node.name, node.media_class, identity_name
                     );
 
                     // Broadcast to ZMQ subscribers

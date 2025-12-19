@@ -194,7 +194,7 @@ impl JobStore {
                 );
 
                 // Check if completed before cutoff
-                let is_old = job.completed_at.map_or(false, |t| t < cutoff);
+                let is_old = job.completed_at.is_some_and(|t| t < cutoff);
 
                 is_terminal && is_old
             })
@@ -237,7 +237,7 @@ impl JobStore {
                     job.status,
                     JobStatus::Complete | JobStatus::Failed | JobStatus::Cancelled
                 );
-                let is_old = job.completed_at.map_or(false, |t| t < cutoff);
+                let is_old = job.completed_at.is_some_and(|t| t < cutoff);
 
                 matches_source && is_terminal && is_old
             })
@@ -359,7 +359,9 @@ mod tests {
         // Create and complete a job
         let job_id = store.create_job("test_tool".to_string());
         store.mark_running(&job_id).unwrap();
-        store.mark_complete(&job_id, serde_json::json!({"result": "ok"})).unwrap();
+        store
+            .mark_complete(&job_id, serde_json::json!({"result": "ok"}))
+            .unwrap();
 
         // Manually backdate the completion time
         {
@@ -371,7 +373,7 @@ mod tests {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
                         .as_secs()
-                        .saturating_sub(100)
+                        .saturating_sub(100),
                 );
             }
         }
@@ -394,9 +396,13 @@ mod tests {
 
         // Complete both
         store.mark_running(&garden_job).unwrap();
-        store.mark_complete(&garden_job, serde_json::json!({})).unwrap();
+        store
+            .mark_complete(&garden_job, serde_json::json!({}))
+            .unwrap();
         store.mark_running(&other_job).unwrap();
-        store.mark_complete(&other_job, serde_json::json!({})).unwrap();
+        store
+            .mark_complete(&other_job, serde_json::json!({}))
+            .unwrap();
 
         // Backdate both jobs
         {

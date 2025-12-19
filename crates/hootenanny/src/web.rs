@@ -6,7 +6,6 @@
 //! Note: MCP handlers have migrated to the baton crate.
 
 use crate::artifact_store::{ArtifactStore, FileStore};
-use cas::{ContentStore, FileStore as CasFileStore};
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -15,6 +14,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use cas::{ContentStore, FileStore as CasFileStore};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 use tokio_util::io::ReaderStream;
@@ -59,9 +59,7 @@ async fn download_artifact(State(state): State<WebState>, Path(id): Path<String>
         let mut artifact = match store.get(&id) {
             Ok(Some(a)) => a,
             Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-            Err(e) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
-            }
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         };
 
         // Record access
@@ -101,7 +99,13 @@ async fn download_artifact(State(state): State<WebState>, Path(id): Path<String>
             None => return StatusCode::NOT_FOUND.into_response(),
         };
 
-        (content_hash, cas_ref.mime_type, path, access_count, artifact_id_str)
+        (
+            content_hash,
+            cas_ref.mime_type,
+            path,
+            access_count,
+            artifact_id_str,
+        )
     };
 
     // Stream content
@@ -148,10 +152,7 @@ struct ArtifactMetaResponse {
 
 /// Get artifact metadata as JSON
 #[tracing::instrument(name = "http.artifact.meta", skip(state))]
-async fn artifact_meta(
-    State(state): State<WebState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn artifact_meta(State(state): State<WebState>, Path(id): Path<String>) -> impl IntoResponse {
     let store = match state.artifact_store.read() {
         Ok(s) => s,
         Err(_) => {
@@ -167,7 +168,12 @@ async fn artifact_meta(
             // Get CAS metadata for MIME type and size
             let (mime_type, size_bytes) = {
                 let cas_hash: Result<cas::ContentHash, _> = artifact.content_hash.as_str().parse();
-                match cas_hash.and_then(|h| state.cas.inspect(&h).map_err(|_| cas::HashError::InvalidLength(0))) {
+                match cas_hash.and_then(|h| {
+                    state
+                        .cas
+                        .inspect(&h)
+                        .map_err(|_| cas::HashError::InvalidLength(0))
+                }) {
                     Ok(Some(r)) => (Some(r.mime_type), Some(r.size_bytes)),
                     _ => (None, None),
                 }
@@ -187,19 +193,19 @@ async fn artifact_meta(
                     .as_ref()
                     .map(|s| s.as_str().to_string()),
                 variation_index: artifact.variation_index,
-                parent_id: artifact
-                    .parent_id
-                    .as_ref()
-                    .map(|s| s.as_str().to_string()),
+                parent_id: artifact.parent_id.as_ref().map(|s| s.as_str().to_string()),
                 access_count: artifact.access_count,
                 last_accessed: artifact.last_accessed.map(|t| t.to_rfc3339()),
                 metadata: artifact.metadata.clone(),
             };
 
-            (StatusCode::OK, Json(serde_json::to_value(response).unwrap_or_else(|e| {
-                tracing::error!("Failed to serialize artifact metadata: {}", e);
-                serde_json::json!({"error": "serialization failed"})
-            })))
+            (
+                StatusCode::OK,
+                Json(serde_json::to_value(response).unwrap_or_else(|e| {
+                    tracing::error!("Failed to serialize artifact metadata: {}", e);
+                    serde_json::json!({"error": "serialization failed"})
+                })),
+            )
         }
         Ok(None) => (
             StatusCode::NOT_FOUND,
@@ -274,10 +280,13 @@ async fn list_artifacts(
         })
         .collect();
 
-    (StatusCode::OK, Json(serde_json::to_value(filtered).unwrap_or_else(|e| {
-        tracing::error!("Failed to serialize artifact list: {}", e);
-        serde_json::json!({"error": "serialization failed"})
-    })))
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(filtered).unwrap_or_else(|e| {
+            tracing::error!("Failed to serialize artifact list: {}", e);
+            serde_json::json!({"error": "serialization failed"})
+        })),
+    )
 }
 
 #[cfg(test)]
@@ -318,9 +327,7 @@ mod tests {
         artifact_store.flush().unwrap();
 
         let state = WebState {
-            artifact_store: Arc::new(RwLock::new(
-                FileStore::new(&artifact_path).unwrap(),
-            )),
+            artifact_store: Arc::new(RwLock::new(FileStore::new(&artifact_path).unwrap())),
             cas: Arc::new(cas),
         };
 
@@ -379,7 +386,10 @@ mod tests {
         assert_eq!(json["id"], "test_artifact");
         assert_eq!(json["creator"], "test_creator");
         assert_eq!(json["mime_type"], "text/plain");
-        assert!(json["content_url"].as_str().unwrap().contains("test_artifact"));
+        assert!(json["content_url"]
+            .as_str()
+            .unwrap()
+            .contains("test_artifact"));
     }
 
     #[tokio::test]

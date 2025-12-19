@@ -3,8 +3,8 @@
 //! Tools for interacting with local Orpheus (music) and DeepSeek (code) models.
 //! Handles CAS integration automatically.
 
-use cas::{CasReference, ContentHash, ContentStore, FileStore};
 use anyhow::{Context, Result};
+use cas::{CasReference, ContentHash, ContentStore, FileStore};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -41,17 +41,10 @@ pub trait LocalModelTools {
     ) -> anyhow::Result<OrpheusGenerateResult>;
 
     /// Store a file in CAS manually.
-    async fn cas_store(
-        &self,
-        content_base64: String,
-        mime_type: String,
-    ) -> anyhow::Result<String>;
+    async fn cas_store(&self, content_base64: String, mime_type: String) -> anyhow::Result<String>;
 
     /// Inspect a file in CAS (metadata only).
-    async fn cas_inspect(
-        &self,
-        hash: String,
-    ) -> anyhow::Result<CasReference>;
+    async fn cas_inspect(&self, hash: String) -> anyhow::Result<CasReference>;
 }
 
 // --- Implementation ---
@@ -79,7 +72,9 @@ impl LocalModels {
     // Helper to resolve CAS hash to bytes
     fn resolve_cas(&self, hash: &str) -> Result<Vec<u8>> {
         let content_hash: ContentHash = hash.parse().context("Invalid hash format")?;
-        self.cas.retrieve(&content_hash)?.context("CAS object not found")
+        self.cas
+            .retrieve(&content_hash)?
+            .context("CAS object not found")
     }
 
     // Helper to store bytes to CAS
@@ -101,7 +96,11 @@ impl LocalModels {
         if span_context.is_valid() {
             let trace_id = span_context.trace_id();
             let span_id = span_context.span_id();
-            let flags = if span_context.is_sampled() { "01" } else { "00" };
+            let flags = if span_context.is_sampled() {
+                "01"
+            } else {
+                "00"
+            };
 
             let traceparent = format!("00-{}-{}-{}", trace_id, span_id, flags);
             builder.header("traceparent", traceparent)
@@ -116,30 +115,23 @@ impl LocalModels {
 // Here is the logic that would go inside the trait implementation.
 
 impl LocalModels {
-    pub async fn store_cas_content(
-        &self,
-        content: &[u8],
-        mime_type: &str,
-    ) -> Result<String> {
-        let hash = self.cas.store(content, mime_type)
+    pub async fn store_cas_content(&self, content: &[u8], mime_type: &str) -> Result<String> {
+        let hash = self
+            .cas
+            .store(content, mime_type)
             .context("Failed to store content in CAS")?;
         Ok(hash.into_inner())
     }
 
-    pub async fn inspect_cas_content(
-        &self,
-        hash: &str,
-    ) -> Result<CasReference> {
+    pub async fn inspect_cas_content(&self, hash: &str) -> Result<CasReference> {
         let content_hash: ContentHash = hash.parse().context("Invalid hash format")?;
-        self.cas.inspect(&content_hash)?
+        self.cas
+            .inspect(&content_hash)?
             .ok_or_else(|| anyhow::anyhow!("CAS object with hash {} not found", hash))
     }
 
     #[allow(dead_code)]
-    pub async fn read_cas_content(
-        &self,
-        hash: &str,
-    ) -> Result<Vec<u8>> {
+    pub async fn read_cas_content(&self, hash: &str) -> Result<Vec<u8>> {
         self.resolve_cas(hash)
     }
 
@@ -156,10 +148,22 @@ impl LocalModels {
         request_body.insert("task".to_string(), serde_json::json!(task));
 
         // Always send these values, using defaults when None to ensure Python receives them
-        request_body.insert("temperature".to_string(), serde_json::json!(params.temperature.unwrap_or(1.0)));
-        request_body.insert("top_p".to_string(), serde_json::json!(params.top_p.unwrap_or(0.95)));
-        request_body.insert("max_tokens".to_string(), serde_json::json!(params.max_tokens.unwrap_or(1024)));
-        request_body.insert("num_variations".to_string(), serde_json::json!(params.num_variations.unwrap_or(1)));
+        request_body.insert(
+            "temperature".to_string(),
+            serde_json::json!(params.temperature.unwrap_or(1.0)),
+        );
+        request_body.insert(
+            "top_p".to_string(),
+            serde_json::json!(params.top_p.unwrap_or(0.95)),
+        );
+        request_body.insert(
+            "max_tokens".to_string(),
+            serde_json::json!(params.max_tokens.unwrap_or(1024)),
+        );
+        request_body.insert(
+            "num_variations".to_string(),
+            serde_json::json!(params.num_variations.unwrap_or(1)),
+        );
 
         if let Some(job_id) = client_job_id {
             request_body.insert("client_job_id".to_string(), serde_json::json!(job_id));
@@ -168,29 +172,32 @@ impl LocalModels {
         if let Some(hash) = input_hash {
             let midi_bytes = self.resolve_cas(&hash)?;
             // Convert raw bytes to base64 for API
-            use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+            use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
             let b64_midi = BASE64.encode(midi_bytes);
             request_body.insert("midi_input".to_string(), serde_json::json!(b64_midi));
         }
 
-        let builder = self.client.post(format!("{}/predict", self.orpheus_url))
+        let builder = self
+            .client
+            .post(format!("{}/predict", self.orpheus_url))
             .json(&request_body);
         let builder = self.inject_trace_context(builder);
-        let resp = builder.send()
-            .await
-            .context("Failed to call Orpheus API")?;
+        let resp = builder.send().await.context("Failed to call Orpheus API")?;
 
         let status = resp.status();
 
         // Handle HTTP 429 - GPU busy, retry
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            let retry_after = resp.headers()
+            let retry_after = resp
+                .headers()
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(5);
 
-            let error_body = resp.text().await
+            let error_body = resp
+                .text()
+                .await
                 .unwrap_or_else(|_| "<failed to read error body>".to_string());
 
             tracing::warn!(
@@ -205,29 +212,36 @@ impl LocalModels {
 
         if !status.is_success() {
             // Capture error response body for better debugging
-            let error_body = resp.text().await.unwrap_or_else(|_| "<failed to read error body>".to_string());
+            let error_body = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "<failed to read error body>".to_string());
             anyhow::bail!("Orpheus API error {}: {}", status, error_body);
         }
 
-        let resp_json: serde_json::Value = resp.json().await
+        let resp_json: serde_json::Value = resp
+            .json()
+            .await
             .context("Failed to parse Orpheus response as JSON")?;
 
         // Extract variations array from new API format
         if let Some(variations) = resp_json.get("variations").and_then(|v| v.as_array()) {
-            use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+            use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
             let mut output_hashes = Vec::new();
             let mut num_tokens_list = Vec::new();
 
             for variation in variations {
                 if let Some(midi_b64) = variation.get("midi_base64").and_then(|v| v.as_str()) {
-                    let midi_bytes = BASE64.decode(midi_b64)
+                    let midi_bytes = BASE64
+                        .decode(midi_b64)
                         .context("Failed to decode variation MIDI")?;
 
                     let hash = self.store_cas(&midi_bytes, "audio/midi")?;
                     output_hashes.push(hash);
 
-                    let tokens = variation.get("num_tokens")
+                    let tokens = variation
+                        .get("num_tokens")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0);
                     num_tokens_list.push(tokens);
@@ -240,7 +254,11 @@ impl LocalModels {
             let summary = if output_hashes.len() == 1 {
                 format!("Generated {} tokens", total_tokens)
             } else {
-                format!("Generated {} variations ({} tokens total)", output_hashes.len(), total_tokens)
+                format!(
+                    "Generated {} variations ({} tokens total)",
+                    output_hashes.len(),
+                    total_tokens
+                )
             };
 
             Ok(OrpheusGenerateResult {
@@ -264,34 +282,54 @@ impl LocalModels {
         max_tokens: Option<u32>,
         client_job_id: Option<String>,
     ) -> Result<OrpheusGenerateResult> {
-        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
         let section_a_bytes = self.resolve_cas(&section_a_hash)?;
 
         let mut request_body = serde_json::Map::new();
-        request_body.insert("section_a".to_string(), serde_json::json!(BASE64.encode(&section_a_bytes)));
+        request_body.insert(
+            "section_a".to_string(),
+            serde_json::json!(BASE64.encode(&section_a_bytes)),
+        );
 
         if let Some(ref hash) = section_b_hash {
             let section_b_bytes = self.resolve_cas(hash)?;
-            request_body.insert("section_b".to_string(), serde_json::json!(BASE64.encode(&section_b_bytes)));
+            request_body.insert(
+                "section_b".to_string(),
+                serde_json::json!(BASE64.encode(&section_b_bytes)),
+            );
         }
 
-        request_body.insert("temperature".to_string(), serde_json::json!(temperature.unwrap_or(1.0)));
-        request_body.insert("top_p".to_string(), serde_json::json!(top_p.unwrap_or(0.95)));
-        request_body.insert("max_tokens".to_string(), serde_json::json!(max_tokens.unwrap_or(1024)));
+        request_body.insert(
+            "temperature".to_string(),
+            serde_json::json!(temperature.unwrap_or(1.0)),
+        );
+        request_body.insert(
+            "top_p".to_string(),
+            serde_json::json!(top_p.unwrap_or(0.95)),
+        );
+        request_body.insert(
+            "max_tokens".to_string(),
+            serde_json::json!(max_tokens.unwrap_or(1024)),
+        );
 
         if let Some(job_id) = client_job_id {
             request_body.insert("client_job_id".to_string(), serde_json::json!(job_id));
         }
 
-        let builder = self.client.post("http://127.0.0.1:2002/predict")
+        let builder = self
+            .client
+            .post("http://127.0.0.1:2002/predict")
             .json(&request_body);
         let builder = self.inject_trace_context(builder);
 
         let resp = match builder.send().await {
             Ok(r) => r,
             Err(e) if e.is_connect() => {
-                anyhow::bail!("Bridge service unavailable at port 2002 - is it running? Error: {}", e)
+                anyhow::bail!(
+                    "Bridge service unavailable at port 2002 - is it running? Error: {}",
+                    e
+                )
             }
             Err(e) if e.is_timeout() => {
                 anyhow::bail!("Bridge service timeout")
@@ -302,7 +340,8 @@ impl LocalModels {
         let status = resp.status();
 
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            let retry_after = resp.headers()
+            let retry_after = resp
+                .headers()
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.parse::<u64>().ok())
@@ -312,12 +351,16 @@ impl LocalModels {
         }
 
         if !status.is_success() {
-            let error_body = resp.text().await
+            let error_body = resp
+                .text()
+                .await
                 .unwrap_or_else(|_| "<failed to read error body>".to_string());
             anyhow::bail!("Bridge API error {}: {}", status, error_body);
         }
 
-        let resp_json: serde_json::Value = resp.json().await
+        let resp_json: serde_json::Value = resp
+            .json()
+            .await
             .context("Failed to parse bridge response as JSON")?;
 
         if let Some(variations) = resp_json.get("variations").and_then(|v| v.as_array()) {
@@ -326,13 +369,15 @@ impl LocalModels {
 
             for variation in variations {
                 if let Some(midi_b64) = variation.get("midi_base64").and_then(|v| v.as_str()) {
-                    let midi_bytes = BASE64.decode(midi_b64)
+                    let midi_bytes = BASE64
+                        .decode(midi_b64)
                         .context("Failed to decode bridge MIDI")?;
 
                     let hash = self.store_cas(&midi_bytes, "audio/midi")?;
                     output_hashes.push(hash);
 
-                    let tokens = variation.get("num_tokens")
+                    let tokens = variation
+                        .get("num_tokens")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0);
                     num_tokens_list.push(tokens);
@@ -356,25 +401,30 @@ impl LocalModels {
     }
 
     /// Call the Orpheus classifier service (port 2001) to classify MIDI
-    pub async fn run_orpheus_classifier(
-        &self,
-        midi_hash: String,
-    ) -> Result<serde_json::Value> {
-        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    pub async fn run_orpheus_classifier(&self, midi_hash: String) -> Result<serde_json::Value> {
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
         let midi_bytes = self.resolve_cas(&midi_hash)?;
 
         let mut request_body = serde_json::Map::new();
-        request_body.insert("midi_input".to_string(), serde_json::json!(BASE64.encode(&midi_bytes)));
+        request_body.insert(
+            "midi_input".to_string(),
+            serde_json::json!(BASE64.encode(&midi_bytes)),
+        );
 
-        let builder = self.client.post("http://127.0.0.1:2001/predict")
+        let builder = self
+            .client
+            .post("http://127.0.0.1:2001/predict")
             .json(&request_body);
         let builder = self.inject_trace_context(builder);
 
         let resp = match builder.send().await {
             Ok(r) => r,
             Err(e) if e.is_connect() => {
-                anyhow::bail!("Classifier service unavailable at port 2001 - is it running? Error: {}", e)
+                anyhow::bail!(
+                    "Classifier service unavailable at port 2001 - is it running? Error: {}",
+                    e
+                )
             }
             Err(e) if e.is_timeout() => {
                 anyhow::bail!("Classifier service timeout")
@@ -385,12 +435,16 @@ impl LocalModels {
         let status = resp.status();
 
         if !status.is_success() {
-            let error_body = resp.text().await
+            let error_body = resp
+                .text()
+                .await
                 .unwrap_or_else(|_| "<failed to read error body>".to_string());
             anyhow::bail!("Classifier API error {}: {}", status, error_body);
         }
 
-        let resp_json: serde_json::Value = resp.json().await
+        let resp_json: serde_json::Value = resp
+            .json()
+            .await
             .context("Failed to parse classifier response as JSON")?;
 
         Ok(resp_json)
@@ -406,32 +460,52 @@ impl LocalModels {
         num_variations: Option<u32>,
         client_job_id: Option<String>,
     ) -> Result<OrpheusGenerateResult> {
-        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
         let mut request_body = serde_json::Map::new();
 
         if let Some(ref hash) = seed_hash {
             let seed_bytes = self.resolve_cas(hash)?;
-            request_body.insert("seed".to_string(), serde_json::json!(BASE64.encode(&seed_bytes)));
+            request_body.insert(
+                "seed".to_string(),
+                serde_json::json!(BASE64.encode(&seed_bytes)),
+            );
         }
 
-        request_body.insert("temperature".to_string(), serde_json::json!(temperature.unwrap_or(1.0)));
-        request_body.insert("top_p".to_string(), serde_json::json!(top_p.unwrap_or(0.95)));
-        request_body.insert("max_tokens".to_string(), serde_json::json!(max_tokens.unwrap_or(1024)));
-        request_body.insert("num_variations".to_string(), serde_json::json!(num_variations.unwrap_or(1) as i64));
+        request_body.insert(
+            "temperature".to_string(),
+            serde_json::json!(temperature.unwrap_or(1.0)),
+        );
+        request_body.insert(
+            "top_p".to_string(),
+            serde_json::json!(top_p.unwrap_or(0.95)),
+        );
+        request_body.insert(
+            "max_tokens".to_string(),
+            serde_json::json!(max_tokens.unwrap_or(1024)),
+        );
+        request_body.insert(
+            "num_variations".to_string(),
+            serde_json::json!(num_variations.unwrap_or(1) as i64),
+        );
 
         if let Some(job_id) = client_job_id {
             request_body.insert("client_job_id".to_string(), serde_json::json!(job_id));
         }
 
-        let builder = self.client.post("http://127.0.0.1:2003/predict")
+        let builder = self
+            .client
+            .post("http://127.0.0.1:2003/predict")
             .json(&request_body);
         let builder = self.inject_trace_context(builder);
 
         let resp = match builder.send().await {
             Ok(r) => r,
             Err(e) if e.is_connect() => {
-                anyhow::bail!("Loops service unavailable at port 2003 - is it running? Error: {}", e)
+                anyhow::bail!(
+                    "Loops service unavailable at port 2003 - is it running? Error: {}",
+                    e
+                )
             }
             Err(e) if e.is_timeout() => {
                 anyhow::bail!("Loops service timeout")
@@ -442,7 +516,8 @@ impl LocalModels {
         let status = resp.status();
 
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            let retry_after = resp.headers()
+            let retry_after = resp
+                .headers()
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.parse::<u64>().ok())
@@ -452,12 +527,16 @@ impl LocalModels {
         }
 
         if !status.is_success() {
-            let error_body = resp.text().await
+            let error_body = resp
+                .text()
+                .await
                 .unwrap_or_else(|_| "<failed to read error body>".to_string());
             anyhow::bail!("Loops API error {}: {}", status, error_body);
         }
 
-        let resp_json: serde_json::Value = resp.json().await
+        let resp_json: serde_json::Value = resp
+            .json()
+            .await
             .context("Failed to parse loops response as JSON")?;
 
         if let Some(variations) = resp_json.get("variations").and_then(|v| v.as_array()) {
@@ -466,20 +545,23 @@ impl LocalModels {
 
             for variation in variations {
                 if let Some(midi_b64) = variation.get("midi_base64").and_then(|v| v.as_str()) {
-                    let midi_bytes = BASE64.decode(midi_b64)
+                    let midi_bytes = BASE64
+                        .decode(midi_b64)
                         .context("Failed to decode loops MIDI")?;
 
                     let hash = self.store_cas(&midi_bytes, "audio/midi")?;
                     output_hashes.push(hash);
 
-                    let tokens = variation.get("num_tokens")
+                    let tokens = variation
+                        .get("num_tokens")
                         .and_then(|v| v.as_i64())
                         .unwrap_or(0) as u64;
                     num_tokens_list.push(tokens);
                 }
             }
 
-            let summary = format!("Generated {} drum loop variations ({} tokens total)",
+            let summary = format!(
+                "Generated {} drum loop variations ({} tokens total)",
                 output_hashes.len(),
                 num_tokens_list.iter().sum::<u64>()
             );
@@ -521,31 +603,39 @@ impl LocalModels {
             "client_job_id": client_job_id,
         });
 
-        let builder = self.client
+        let builder = self
+            .client
             .post(url)
             .json(&body)
             .timeout(std::time::Duration::from_secs(120));
 
         let builder = self.inject_trace_context(builder);
-        let resp = builder.send()
+        let resp = builder
+            .send()
             .await
             .context("Failed to call MusicGen API")?;
 
         let status = resp.status();
 
         if status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-            let error_body = resp.text().await
+            let error_body = resp
+                .text()
+                .await
                 .unwrap_or_else(|_| "Service busy".to_string());
             anyhow::bail!("MusicGen service busy: {}", error_body);
         }
 
         if !status.is_success() {
-            let error_body = resp.text().await
+            let error_body = resp
+                .text()
+                .await
                 .unwrap_or_else(|_| "<failed to read error body>".to_string());
             anyhow::bail!("MusicGen API error {}: {}", status, error_body);
         }
 
-        let resp_json: serde_json::Value = resp.json().await
+        let resp_json: serde_json::Value = resp
+            .json()
+            .await
             .context("Failed to parse MusicGen response as JSON")?;
 
         Ok(resp_json)
@@ -570,31 +660,36 @@ impl LocalModels {
             "client_job_id": client_job_id,
         });
 
-        let builder = self.client
+        let builder = self
+            .client
             .post(url)
             .json(&body)
             .timeout(std::time::Duration::from_secs(60));
 
         let builder = self.inject_trace_context(builder);
-        let resp = builder.send()
-            .await
-            .context("Failed to call CLAP API")?;
+        let resp = builder.send().await.context("Failed to call CLAP API")?;
 
         let status = resp.status();
 
         if status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-            let error_body = resp.text().await
+            let error_body = resp
+                .text()
+                .await
                 .unwrap_or_else(|_| "Service busy".to_string());
             anyhow::bail!("CLAP service busy: {}", error_body);
         }
 
         if !status.is_success() {
-            let error_body = resp.text().await
+            let error_body = resp
+                .text()
+                .await
                 .unwrap_or_else(|_| "<failed to read error body>".to_string());
             anyhow::bail!("CLAP API error {}: {}", status, error_body);
         }
 
-        let resp_json: serde_json::Value = resp.json().await
+        let resp_json: serde_json::Value = resp
+            .json()
+            .await
             .context("Failed to parse CLAP response as JSON")?;
 
         Ok(resp_json)
@@ -621,37 +716,44 @@ impl LocalModels {
             "client_job_id": client_job_id,
         });
 
-        let builder = self.client
+        let builder = self
+            .client
             .post(url)
             .json(&body)
             .timeout(std::time::Duration::from_secs(600)); // YuE is very slow!
 
         let builder = self.inject_trace_context(builder);
-        let resp = builder.send()
-            .await
-            .context("Failed to call YuE API")?;
+        let resp = builder.send().await.context("Failed to call YuE API")?;
 
         let status = resp.status();
 
         if status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
-            let error_body = resp.text().await
+            let error_body = resp
+                .text()
+                .await
                 .unwrap_or_else(|_| "Validation error".to_string());
             anyhow::bail!("YuE validation error: {}", error_body);
         }
 
         if status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-            let error_body = resp.text().await
+            let error_body = resp
+                .text()
+                .await
                 .unwrap_or_else(|_| "Service busy".to_string());
             anyhow::bail!("YuE service busy: {}", error_body);
         }
 
         if !status.is_success() {
-            let error_body = resp.text().await
+            let error_body = resp
+                .text()
+                .await
                 .unwrap_or_else(|_| "<failed to read error body>".to_string());
             anyhow::bail!("YuE API error {}: {}", status, error_body);
         }
 
-        let resp_json: serde_json::Value = resp.json().await
+        let resp_json: serde_json::Value = resp
+            .json()
+            .await
             .context("Failed to parse YuE response as JSON")?;
 
         Ok(resp_json)

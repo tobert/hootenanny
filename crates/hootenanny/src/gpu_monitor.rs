@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -107,7 +109,8 @@ impl GpuMonitor {
 
     /// Fetch current status from the observer service
     pub async fn fetch_status(&self) -> Result<ObserverStatus> {
-        let response = self.client
+        let response = self
+            .client
             .get(&self.base_url)
             .send()
             .await
@@ -126,7 +129,8 @@ impl GpuMonitor {
     /// Get a simple health check
     pub async fn health(&self) -> Result<String> {
         let url = format!("{}/health", self.base_url);
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .send()
             .await
@@ -161,8 +165,10 @@ mod tests {
             Ok(status) => {
                 println!("✅ Got status: {}", status.summary);
                 println!("   Health: {}", status.health);
-                println!("   GPU: {}% util, {:.1}/{:.1}GB VRAM",
-                    status.gpu.util_pct, status.gpu.vram_used_gb, status.gpu.vram_total_gb);
+                println!(
+                    "   GPU: {}% util, {:.1}/{:.1}GB VRAM",
+                    status.gpu.util_pct, status.gpu.vram_used_gb, status.gpu.vram_total_gb
+                );
                 assert!(!status.summary.is_empty());
             }
             Err(e) => {

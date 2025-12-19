@@ -14,17 +14,19 @@ mod web;
 mod zmq;
 
 use anyhow::{Context, Result};
-use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb, PipeWireListener, PipeWireSnapshot, PipeWireSource};
-use clap::Parser;
 use api::service::EventDualityServer;
+use audio_graph_mcp::{
+    AudioGraphAdapter, Database as AudioGraphDb, PipeWireListener, PipeWireSnapshot, PipeWireSource,
+};
 use cas::FileStore;
+use clap::Parser;
 use hooteconf::HootConfig;
 use mcp_tools::local_models::LocalModels;
 use sessions::SessionManager;
-use streams::{SlicingEngine, StreamManager};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
+use streams::{SlicingEngine, StreamManager};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -103,7 +105,10 @@ async fn main() -> Result<()> {
 
     // --- Local Models Initialization ---
     info!("🤖 Initializing Local Models client...");
-    let orpheus_url = config.bootstrap.models.get("orpheus")
+    let orpheus_url = config
+        .bootstrap
+        .models
+        .get("orpheus")
         .cloned()
         .unwrap_or_else(|| "http://127.0.0.1:2000".to_string());
     let orpheus_port: u16 = orpheus_url
@@ -119,7 +124,7 @@ async fn main() -> Result<()> {
     let artifact_store_path = state_dir.join("artifacts.json");
     let artifact_store = Arc::new(RwLock::new(
         artifact_store::FileStore::new(&artifact_store_path)
-            .context("Failed to initialize artifact store")?
+            .context("Failed to initialize artifact store")?,
     ));
     info!("   Artifact store at: {}", artifact_store_path.display());
 
@@ -138,7 +143,8 @@ async fn main() -> Result<()> {
 
     // --- Audio Graph Initialization ---
     info!("🎛️  Initializing Audio Graph...");
-    let audio_graph_db = Arc::new(AudioGraphDb::in_memory().context("Failed to create audio graph db")?);
+    let audio_graph_db =
+        Arc::new(AudioGraphDb::in_memory().context("Failed to create audio graph db")?);
     let artifact_source = Arc::new(artifact_store::FileStoreSource::new(artifact_store.clone()));
 
     // Create shared PipeWire snapshot for live device tracking
@@ -164,7 +170,7 @@ async fn main() -> Result<()> {
             pipewire_snapshot.clone(),
             artifact_source,
         )
-        .context("Failed to create audio graph adapter")?
+        .context("Failed to create audio graph adapter")?,
     );
     info!("   Audio graph ready (in-memory, with Trustfall adapter + artifacts + live PipeWire)");
 
@@ -176,7 +182,10 @@ async fn main() -> Result<()> {
         let manager: Option<zmq::GardenManager> = if chaosgarden_endpoint == "local" {
             Some(zmq::GardenManager::local())
         } else if chaosgarden_endpoint.starts_with("tcp://") {
-            let parts: Vec<&str> = chaosgarden_endpoint.trim_start_matches("tcp://").split(':').collect();
+            let parts: Vec<&str> = chaosgarden_endpoint
+                .trim_start_matches("tcp://")
+                .split(':')
+                .collect();
             if parts.len() == 2 {
                 if let Ok(port) = parts[1].parse::<u16>() {
                     Some(zmq::GardenManager::tcp(parts[0], port))
@@ -195,10 +204,7 @@ async fn main() -> Result<()> {
 
         if let Some(manager) = manager {
             // Non-blocking connect with timeout
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                manager.connect()
-            ).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(2), manager.connect()).await {
                 Ok(Ok(())) => {
                     info!("   Connected to chaosgarden!");
                     if let Err(e) = manager.start_event_listener().await {
@@ -286,19 +292,21 @@ async fn main() -> Result<()> {
     info!("   Slicing engine ready");
 
     // Create the EventDualityServer
-    let event_duality_server = Arc::new(EventDualityServer::new(
-        local_models.clone(),
-        artifact_store.clone(),
-        job_store.clone(),
-        audio_graph_db.clone(),
-        graph_adapter.clone(),
-        gpu_monitor.clone(),
-    )
-    .with_garden(garden_manager.clone())
-    .with_broadcaster(Some(broadcast_publisher))
-    .with_stream_manager(Some(stream_manager.clone()))
-    .with_session_manager(Some(session_manager.clone()))
-    .with_slicing_engine(Some(slicing_engine.clone())));
+    let event_duality_server = Arc::new(
+        EventDualityServer::new(
+            local_models.clone(),
+            artifact_store.clone(),
+            job_store.clone(),
+            audio_graph_db.clone(),
+            graph_adapter.clone(),
+            gpu_monitor.clone(),
+        )
+        .with_garden(garden_manager.clone())
+        .with_broadcaster(Some(broadcast_publisher))
+        .with_stream_manager(Some(stream_manager.clone()))
+        .with_session_manager(Some(session_manager.clone()))
+        .with_slicing_engine(Some(slicing_engine.clone())),
+    );
 
     // --- Start Stream Event Handler (if chaosgarden connected) ---
     if garden_manager.is_some() {
@@ -368,14 +376,20 @@ async fn main() -> Result<()> {
         let mut backends = serde_json::Map::new();
 
         if let Some(ref luanette) = state.luanette {
-            backends.insert("luanette".to_string(), luanette.health.health_summary().await);
+            backends.insert(
+                "luanette".to_string(),
+                luanette.health.health_summary().await,
+            );
         }
 
         if let Some(ref garden) = state.garden {
-            backends.insert("chaosgarden".to_string(), serde_json::json!({
-                "connected": garden.is_connected().await,
-                "state": format!("{:?}", garden.state().await),
-            }));
+            backends.insert(
+                "chaosgarden".to_string(),
+                serde_json::json!({
+                    "connected": garden.is_connected().await,
+                    "state": format!("{:?}", garden.state().await),
+                }),
+            );
         }
 
         axum::Json(serde_json::json!({

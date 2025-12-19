@@ -26,24 +26,25 @@ pub fn render_midi_to_wav(
 ) -> Result<Vec<u8>> {
     // Load SoundFont from bytes
     let mut sf_cursor = Cursor::new(soundfont_bytes);
-    let sound_font = Arc::new(SoundFont::new(&mut sf_cursor)
-        .map_err(|e| {
-            let error_msg = format!("{:?}", e);
-            if error_msg.contains("SanityCheckFailed") {
-                anyhow::anyhow!(
-                    "SoundFont failed compatibility check (RustySynth SanityCheckFailed). \
+    let sound_font = Arc::new(SoundFont::new(&mut sf_cursor).map_err(|e| {
+        let error_msg = format!("{:?}", e);
+        if error_msg.contains("SanityCheckFailed") {
+            anyhow::anyhow!(
+                "SoundFont failed compatibility check (RustySynth SanityCheckFailed). \
                     This SF2 may use features not supported by RustySynth. \
                     Try a simpler SoundFont like GeneralUser GS, FluidR3, or TR-808 drums."
-                )
-            } else {
-                anyhow::anyhow!("Failed to load SoundFont: {}", e)
-            }
-        })?);
+            )
+        } else {
+            anyhow::anyhow!("Failed to load SoundFont: {}", e)
+        }
+    })?);
 
     // Load MIDI from bytes
     let mut midi_cursor = Cursor::new(midi_bytes);
-    let midi = Arc::new(MidiFile::new(&mut midi_cursor)
-        .map_err(|e| anyhow::anyhow!("Failed to parse MIDI file: {}", e))?);
+    let midi = Arc::new(
+        MidiFile::new(&mut midi_cursor)
+            .map_err(|e| anyhow::anyhow!("Failed to parse MIDI file: {}", e))?,
+    );
 
     // Create synthesizer
     let settings = SynthesizerSettings::new(sample_rate as i32);
@@ -66,8 +67,7 @@ pub fn render_midi_to_wav(
     sequencer.render(&mut left[..], &mut right[..]);
 
     // Convert to WAV bytes
-    let wav_bytes = samples_to_wav(&left, &right, sample_rate)
-        .context("Failed to encode WAV")?;
+    let wav_bytes = samples_to_wav(&left, &right, sample_rate).context("Failed to encode WAV")?;
 
     Ok(wav_bytes)
 }
@@ -90,21 +90,21 @@ fn samples_to_wav(left: &[f32], right: &[f32], sample_rate: u32) -> Result<Vec<u
     };
 
     let mut cursor = Cursor::new(Vec::new());
-    let mut writer = WavWriter::new(&mut cursor, spec)
-        .context("Failed to create WAV writer")?;
+    let mut writer = WavWriter::new(&mut cursor, spec).context("Failed to create WAV writer")?;
 
     // Interleave samples and convert to i16
     for (&l, &r) in left.iter().zip(right.iter()) {
         let l_sample = (l.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
         let r_sample = (r.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-        writer.write_sample(l_sample)
+        writer
+            .write_sample(l_sample)
             .context("Failed to write left sample")?;
-        writer.write_sample(r_sample)
+        writer
+            .write_sample(r_sample)
             .context("Failed to write right sample")?;
     }
 
-    writer.finalize()
-        .context("Failed to finalize WAV")?;
+    writer.finalize().context("Failed to finalize WAV")?;
 
     Ok(cursor.into_inner())
 }
@@ -179,7 +179,9 @@ pub struct SoundfontInspection {
 
 /// Convert MIDI note number to note name
 fn midi_note_to_name(note: i32) -> String {
-    const NOTE_NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    const NOTE_NAMES: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
     let octave = (note / 12) - 1;
     let note_idx = (note % 12) as usize;
     format!("{}{}", NOTE_NAMES[note_idx], octave)
@@ -193,7 +195,10 @@ fn midi_note_to_name(note: i32) -> String {
 ///
 /// # Returns
 /// SoundfontInspection with presets, instruments, and optional drum mappings
-pub fn inspect_soundfont(soundfont_bytes: &[u8], include_drum_map: bool) -> Result<SoundfontInspection> {
+pub fn inspect_soundfont(
+    soundfont_bytes: &[u8],
+    include_drum_map: bool,
+) -> Result<SoundfontInspection> {
     let mut cursor = Cursor::new(soundfont_bytes);
     let soundfont = SoundFont::new(&mut cursor)
         .map_err(|e| anyhow::anyhow!("Failed to load SoundFont: {:?}", e))?;
@@ -221,9 +226,7 @@ pub fn inspect_soundfont(soundfont_bytes: &[u8], include_drum_map: bool) -> Resu
         .collect();
 
     // Sort by bank then program
-    preset_infos.sort_by(|a, b| {
-        a.bank.cmp(&b.bank).then(a.program.cmp(&b.program))
-    });
+    preset_infos.sort_by(|a, b| a.bank.cmp(&b.bank).then(a.program.cmp(&b.program)));
 
     let mut drum_mappings = Vec::new();
 
@@ -247,7 +250,11 @@ pub fn inspect_soundfont(soundfont_bytes: &[u8], include_drum_map: bool) -> Resu
                     let key_range = if key_lo == key_hi {
                         midi_note_to_name(key_lo)
                     } else {
-                        format!("{}-{}", midi_note_to_name(key_lo), midi_note_to_name(key_hi))
+                        format!(
+                            "{}-{}",
+                            midi_note_to_name(key_lo),
+                            midi_note_to_name(key_hi)
+                        )
                     };
 
                     regions.push(PresetRegion {
@@ -323,7 +330,11 @@ pub fn inspect_preset(soundfont_bytes: &[u8], bank: i32, program: i32) -> Result
         let keys = if key_lo == key_hi {
             midi_note_to_name(key_lo)
         } else {
-            format!("{}-{}", midi_note_to_name(key_lo), midi_note_to_name(key_hi))
+            format!(
+                "{}-{}",
+                midi_note_to_name(key_lo),
+                midi_note_to_name(key_hi)
+            )
         };
 
         let velocity = if vel_lo == 0 && vel_hi == 127 {
@@ -340,11 +351,17 @@ pub fn inspect_preset(soundfont_bytes: &[u8], bank: i32, program: i32) -> Result
             format!("#{}", inst_id)
         };
 
-        regions.push(RegionDetail { keys, velocity, instrument });
+        regions.push(RegionDetail {
+            keys,
+            velocity,
+            instrument,
+        });
     }
 
     regions.sort_by_key(|r| {
-        r.keys.split('-').next()
+        r.keys
+            .split('-')
+            .next()
             .and_then(|s| s.chars().last())
             .map(|c| c.to_digit(10).unwrap_or(0) as i32)
             .unwrap_or(0)

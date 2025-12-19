@@ -61,8 +61,7 @@ pub fn init(otlp_endpoint: &str) -> Result<()> {
         .build()
         .context("Failed to create OTLP log exporter")?;
 
-    let log_processor =
-        opentelemetry_sdk::logs::BatchLogProcessor::builder(log_exporter).build();
+    let log_processor = opentelemetry_sdk::logs::BatchLogProcessor::builder(log_exporter).build();
 
     let logger_provider = opentelemetry_sdk::logs::SdkLoggerProvider::builder()
         .with_log_processor(log_processor)
@@ -120,7 +119,9 @@ pub fn init(otlp_endpoint: &str) -> Result<()> {
 /// handlers will complete in bounded time. No explicit shutdown call is needed
 /// in opentelemetry 0.28 - the providers flush on drop.
 pub fn shutdown() -> Result<()> {
-    tracing::info!("🔭 Shutting down OpenTelemetry (providers will flush on drop with 5s timeout)...");
+    tracing::info!(
+        "🔭 Shutting down OpenTelemetry (providers will flush on drop with 5s timeout)..."
+    );
     Ok(())
 }
 
@@ -169,7 +170,9 @@ pub fn current_span_id() -> Option<String> {
 ///
 /// Returns None if the traceparent is invalid or missing.
 pub fn parse_traceparent(traceparent: Option<&str>) -> Option<opentelemetry::Context> {
-    use opentelemetry::trace::{SpanContext, SpanId, TraceContextExt, TraceFlags, TraceId, TraceState};
+    use opentelemetry::trace::{
+        SpanContext, SpanId, TraceContextExt, TraceFlags, TraceId, TraceState,
+    };
 
     let tp = traceparent?;
     let parts: Vec<&str> = tp.split('-').collect();
