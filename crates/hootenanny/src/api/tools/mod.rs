@@ -1,14 +1,8 @@
 pub mod abc;
 pub mod beat_this;
 pub mod cas;
-pub mod clap;
 pub mod config;
 pub mod garden;
 pub mod graph_context;
 pub mod graph_query;
 pub mod jobs;
-pub mod musicgen;
-pub mod orpheus;
-pub mod sessions;
-pub mod streams;
-pub mod yue;
