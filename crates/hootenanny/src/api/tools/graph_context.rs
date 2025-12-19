@@ -3,21 +3,18 @@
 //! Provides bounded context about artifacts for sub-agent conversations.
 //! Uses Trustfall queries through the graph_adapter for artifact queries.
 
-use crate::api::responses::{GraphContextResponse, ContextSummary, AddAnnotationResponse};
+use crate::api::responses::{AddAnnotationResponse, ContextSummary, GraphContextResponse};
 use crate::api::schema::{AddAnnotationRequest, GraphContextRequest};
 use crate::api::service::EventDualityServer;
 use audio_graph_mcp::sources::AnnotationData;
-use hooteproto::{ToolOutput, ToolResult, ToolError};
+use hooteproto::{ToolError, ToolOutput, ToolResult};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use trustfall::{execute_query, FieldValue};
 
 impl EventDualityServer {
     #[tracing::instrument(name = "mcp.tool.graph_context", skip(self, request))]
-    pub async fn graph_context(
-        &self,
-        request: GraphContextRequest,
-    ) -> ToolResult {
+    pub async fn graph_context(&self, request: GraphContextRequest) -> ToolResult {
         let limit = request.limit.unwrap_or(20);
 
         let (query, variables) = build_artifact_query(&request);
@@ -145,15 +142,13 @@ impl EventDualityServer {
     }
 
     #[tracing::instrument(name = "mcp.tool.add_annotation", skip(self, request))]
-    pub async fn add_annotation(
-        &self,
-        request: AddAnnotationRequest,
-    ) -> ToolResult {
+    pub async fn add_annotation(&self, request: AddAnnotationRequest) -> ToolResult {
         use audio_graph_mcp::sources::ArtifactSource;
 
-        let artifact_store = self.artifact_store.read().map_err(|e| {
-            ToolError::internal(format!("Failed to read artifact store: {}", e))
-        })?;
+        let artifact_store = self
+            .artifact_store
+            .read()
+            .map_err(|e| ToolError::internal(format!("Failed to read artifact store: {}", e)))?;
 
         let artifact_exists = ArtifactSource::get(&*artifact_store, &request.artifact_id)
             .map_err(|e| ToolError::internal(format!("Failed to get artifact: {}", e)))?
@@ -173,9 +168,8 @@ impl EventDualityServer {
 
         let annotation_id = annotation.id.clone();
 
-        ArtifactSource::add_annotation(&*artifact_store, annotation).map_err(|e| {
-            ToolError::internal(format!("Failed to store annotation: {}", e))
-        })?;
+        ArtifactSource::add_annotation(&*artifact_store, annotation)
+            .map_err(|e| ToolError::internal(format!("Failed to store annotation: {}", e)))?;
 
         let response = AddAnnotationResponse {
             artifact_id: request.artifact_id.clone(),
@@ -190,23 +184,22 @@ impl EventDualityServer {
     }
 }
 
-fn build_artifact_query(
-    request: &GraphContextRequest,
-) -> (String, BTreeMap<Arc<str>, FieldValue>) {
-    let mut variables: BTreeMap<Arc<str>, FieldValue> = BTreeMap::new();
+fn build_artifact_query(request: &GraphContextRequest) -> (String, BTreeMap<Arc<str>, FieldValue>) {
+    let variables: BTreeMap<Arc<str>, FieldValue> = BTreeMap::new();
     let mut params = Vec::new();
 
+    // Trustfall entry point parameters must be literal values, not variables.
+    // Escape double quotes in the values to prevent query injection.
     if let Some(ref tag) = request.tag {
-        variables.insert("tag".into(), FieldValue::String(tag.clone().into()));
-        params.push("tag: $tag");
+        let escaped = tag.replace('\\', "\\\\").replace('"', "\\\"");
+        params.push(format!("tag: \"{}\"", escaped));
     }
     if let Some(ref creator) = request.creator {
-        variables.insert("creator".into(), FieldValue::String(creator.clone().into()));
-        params.push("creator: $creator");
+        let escaped = creator.replace('\\', "\\\\").replace('"', "\\\"");
+        params.push(format!("creator: \"{}\"", escaped));
     }
     if let Some(minutes) = request.within_minutes {
-        variables.insert("within_minutes".into(), FieldValue::Int64(minutes));
-        params.push("within_minutes: $within_minutes");
+        params.push(format!("within_minutes: {}", minutes));
     }
 
     let entry_point = if params.is_empty() {
