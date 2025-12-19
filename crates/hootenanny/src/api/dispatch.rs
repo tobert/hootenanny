@@ -6,9 +6,9 @@
 use crate::api::schema::*;
 use crate::api::service::EventDualityServer;
 use audio_graph_mcp::{graph_bind, graph_connect, graph_find, graph_tag, HintKind};
-use hooteproto::{ToolResult, ToolError, ToolInfo};
-use serde_json::Value;
+use hooteproto::{ToolError, ToolInfo, ToolResult};
 use schemars::JsonSchema;
+use serde_json::Value;
 
 /// Result of tool dispatch - either success with JSON or error with details
 pub type DispatchResult = Result<Value, DispatchError>;
@@ -96,13 +96,17 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Upload file and create artifact".to_string(),
             input_schema: schema_for::<ArtifactUploadRequest>(),
         },
-
-        // Conversion Tools
         ToolInfo {
-            name: "convert_midi_to_wav".to_string(),
-            description: "Render MIDI to WAV using SoundFont".to_string(),
-            input_schema: schema_for::<MidiToWavRequest>(),
+            name: "artifact_list".to_string(),
+            description: "List artifacts".to_string(),
+            input_schema: schema_for::<ArtifactListRequest>(),
         },
+        ToolInfo {
+            name: "artifact_get".to_string(),
+            description: "Get artifact by ID".to_string(),
+            input_schema: schema_for::<ArtifactGetRequest>(),
+        },
+        // SoundFont Tools
         ToolInfo {
             name: "soundfont_inspect".to_string(),
             description: "Inspect SoundFont presets".to_string(),
@@ -113,39 +117,6 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Inspect specific SoundFont preset".to_string(),
             input_schema: schema_for::<SoundfontPresetInspectRequest>(),
         },
-
-        // Orpheus Tools
-        ToolInfo {
-            name: "orpheus_generate".to_string(),
-            description: "Generate MIDI from scratch".to_string(),
-            input_schema: schema_for::<OrpheusGenerateRequest>(),
-        },
-        ToolInfo {
-            name: "orpheus_generate_seeded".to_string(),
-            description: "Generate MIDI from seed".to_string(),
-            input_schema: schema_for::<OrpheusGenerateSeededRequest>(),
-        },
-        ToolInfo {
-            name: "orpheus_continue".to_string(),
-            description: "Continue existing MIDI".to_string(),
-            input_schema: schema_for::<OrpheusContinueRequest>(),
-        },
-        ToolInfo {
-            name: "orpheus_bridge".to_string(),
-            description: "Create bridge between two MIDI sections".to_string(),
-            input_schema: schema_for::<OrpheusBridgeRequest>(),
-        },
-        ToolInfo {
-            name: "orpheus_loops".to_string(),
-            description: "Generate loopable MIDI".to_string(),
-            input_schema: schema_for::<OrpheusLoopsRequest>(),
-        },
-        ToolInfo {
-            name: "orpheus_classify".to_string(),
-            description: "Classify MIDI content".to_string(),
-            input_schema: schema_for::<OrpheusClassifyRequest>(),
-        },
-
         // Job Tools
         ToolInfo {
             name: "job_status".to_string(),
@@ -177,7 +148,6 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Sleep for a duration".to_string(),
             input_schema: schema_for::<SleepRequest>(),
         },
-
         // Graph Tools
         ToolInfo {
             name: "graph_bind".to_string(),
@@ -214,17 +184,11 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Add annotation to artifact".to_string(),
             input_schema: schema_for::<AddAnnotationRequest>(),
         },
-
         // ABC Tools
         ToolInfo {
             name: "abc_parse".to_string(),
             description: "Parse ABC notation".to_string(),
             input_schema: schema_for::<AbcParseRequest>(),
-        },
-        ToolInfo {
-            name: "abc_to_midi".to_string(),
-            description: "Convert ABC to MIDI".to_string(),
-            input_schema: schema_for::<AbcToMidiRequest>(),
         },
         ToolInfo {
             name: "abc_validate".to_string(),
@@ -236,31 +200,6 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Transpose ABC notation".to_string(),
             input_schema: schema_for::<AbcTransposeRequest>(),
         },
-
-        // Analysis Tools
-        ToolInfo {
-            name: "beatthis_analyze".to_string(),
-            description: "Analyze beats in audio".to_string(),
-            input_schema: schema_for::<AnalyzeBeatsRequest>(),
-        },
-        ToolInfo {
-            name: "clap_analyze".to_string(),
-            description: "Analyze audio with CLAP".to_string(),
-            input_schema: schema_for::<ClapAnalyzeRequest>(),
-        },
-
-        // Generation Tools
-        ToolInfo {
-            name: "musicgen_generate".to_string(),
-            description: "Generate audio with MusicGen".to_string(),
-            input_schema: schema_for::<MusicgenGenerateRequest>(),
-        },
-        ToolInfo {
-            name: "yue_generate".to_string(),
-            description: "Generate song with YuE".to_string(),
-            input_schema: schema_for::<YueGenerateRequest>(),
-        },
-
         // Garden Tools
         ToolInfo {
             name: "garden_status".to_string(),
@@ -308,13 +247,7 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Get configuration values (read-only)".to_string(),
             input_schema: schema_for::<super::tools::config::ConfigGetRequest>(),
         },
-
         // Garden region operations
-        ToolInfo {
-            name: "garden_create_region".to_string(),
-            description: "Create a region on the timeline".to_string(),
-            input_schema: schema_for::<super::tools::garden::GardenCreateRegionRequest>(),
-        },
         ToolInfo {
             name: "garden_delete_region".to_string(),
             description: "Delete a region from the timeline".to_string(),
@@ -329,6 +262,11 @@ pub fn list_tools() -> Vec<ToolInfo> {
             name: "garden_get_regions".to_string(),
             description: "Get regions from the timeline".to_string(),
             input_schema: schema_for::<super::tools::garden::GardenGetRegionsRequest>(),
+        },
+        ToolInfo {
+            name: "schedule".to_string(),
+            description: "Schedule content on the timeline for playback".to_string(),
+            input_schema: schema_for::<super::native::ScheduleRequest>(),
         },
         // Audio attachment
         ToolInfo {
@@ -367,15 +305,37 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Set monitor enabled/gain (input -> output passthrough)".to_string(),
             input_schema: schema_for::<super::tools::garden::GardenSetMonitorRequest>(),
         },
+        // Model-Native API Tools
+        ToolInfo {
+            name: "sample".to_string(),
+            description: "Generate content from a generative space (orpheus, musicgen, yue)".to_string(),
+            input_schema: schema_for::<crate::api::native::SampleRequest>(),
+        },
+        ToolInfo {
+            name: "extend".to_string(),
+            description: "Continue/extend existing content using Orpheus continuation".to_string(),
+            input_schema: schema_for::<crate::api::native::ExtendRequest>(),
+        },
+        ToolInfo {
+            name: "project".to_string(),
+            description: "Project content between formats (MIDI to audio, ABC to MIDI)".to_string(),
+            input_schema: schema_for::<crate::api::native::ProjectRequest>(),
+        },
+        ToolInfo {
+            name: "analyze".to_string(),
+            description: "Analyze content (classification, beats, embeddings, genre, mood)".to_string(),
+            input_schema: schema_for::<crate::api::native::AnalyzeRequest>(),
+        },
+        ToolInfo {
+            name: "bridge".to_string(),
+            description: "Create smooth transition between MIDI sections".to_string(),
+            input_schema: schema_for::<crate::api::native::BridgeRequest>(),
+        },
     ]
 }
 
 /// Dispatch a tool call to the appropriate handler
-pub async fn dispatch_tool(
-    server: &EventDualityServer,
-    name: &str,
-    args: Value,
-) -> DispatchResult {
+pub async fn dispatch_tool(server: &EventDualityServer, name: &str, args: Value) -> DispatchResult {
     match name {
         // CAS tools
         "cas_store" => {
@@ -386,9 +346,7 @@ pub async fn dispatch_tool(
             let request: CasInspectRequest = parse_args(args)?;
             tool_to_json(server.cas_inspect(request).await)
         }
-        "cas_stats" => {
-            tool_to_json(server.cas_stats().await)
-        }
+        "cas_stats" => tool_to_json(server.cas_stats().await),
         "cas_upload_file" => {
             let request: UploadFileRequest = parse_args(args)?;
             tool_to_json(server.upload_file(request).await)
@@ -397,12 +355,16 @@ pub async fn dispatch_tool(
             let request: ArtifactUploadRequest = parse_args(args)?;
             tool_to_json(server.artifact_upload(request).await)
         }
-
-        // Conversion tools
-        "convert_midi_to_wav" => {
-            let request: MidiToWavRequest = parse_args(args)?;
-            tool_to_json(server.midi_to_wav(request).await)
+        "artifact_list" => {
+            let request: ArtifactListRequest = parse_args(args)?;
+            tool_to_json(server.artifact_list(request).await)
         }
+        "artifact_get" => {
+            let request: ArtifactGetRequest = parse_args(args)?;
+            tool_to_json(server.artifact_get(request).await)
+        }
+
+        // SoundFont tools
         "soundfont_inspect" => {
             let request: SoundfontInspectRequest = parse_args(args)?;
             tool_to_json(server.soundfont_inspect(request).await)
@@ -412,40 +374,12 @@ pub async fn dispatch_tool(
             tool_to_json(server.soundfont_preset_inspect(request).await)
         }
 
-        // Orpheus tools
-        "orpheus_generate" => {
-            let request: OrpheusGenerateRequest = parse_args(args)?;
-            tool_to_json(server.orpheus_generate(request).await)
-        }
-        "orpheus_generate_seeded" => {
-            let request: OrpheusGenerateSeededRequest = parse_args(args)?;
-            tool_to_json(server.orpheus_generate_seeded(request).await)
-        }
-        "orpheus_continue" => {
-            let request: OrpheusContinueRequest = parse_args(args)?;
-            tool_to_json(server.orpheus_continue(request).await)
-        }
-        "orpheus_bridge" => {
-            let request: OrpheusBridgeRequest = parse_args(args)?;
-            tool_to_json(server.orpheus_bridge(request).await)
-        }
-        "orpheus_loops" => {
-            let request: OrpheusLoopsRequest = parse_args(args)?;
-            tool_to_json(server.orpheus_loops(request).await)
-        }
-        "orpheus_classify" => {
-            let request: OrpheusClassifyRequest = parse_args(args)?;
-            tool_to_json(server.orpheus_classify(request).await)
-        }
-
         // Job tools
         "job_status" => {
             let request: GetJobStatusRequest = parse_args(args)?;
             tool_to_json(server.get_job_status(request).await)
         }
-        "job_list" => {
-            tool_to_json(server.list_jobs().await)
-        }
+        "job_list" => tool_to_json(server.list_jobs().await),
         "job_cancel" => {
             let request: CancelJobRequest = parse_args(args)?;
             tool_to_json(server.cancel_job(request).await)
@@ -494,10 +428,6 @@ pub async fn dispatch_tool(
             let request: AbcParseRequest = parse_args(args)?;
             tool_to_json(server.abc_parse(request).await)
         }
-        "abc_to_midi" => {
-            let request: AbcToMidiRequest = parse_args(args)?;
-            tool_to_json(server.abc_to_midi(request).await)
-        }
         "abc_validate" => {
             let request: AbcValidateRequest = parse_args(args)?;
             tool_to_json(server.abc_validate(request).await)
@@ -507,39 +437,11 @@ pub async fn dispatch_tool(
             tool_to_json(server.abc_transpose(request).await)
         }
 
-        // Analysis tools
-        "beatthis_analyze" => {
-            let request: AnalyzeBeatsRequest = parse_args(args)?;
-            tool_to_json(server.analyze_beats(request).await)
-        }
-        "clap_analyze" => {
-            let request: ClapAnalyzeRequest = parse_args(args)?;
-            tool_to_json(server.clap_analyze(request).await)
-        }
-
-        // Generation tools
-        "musicgen_generate" => {
-            let request: MusicgenGenerateRequest = parse_args(args)?;
-            tool_to_json(server.musicgen_generate(request).await)
-        }
-        "yue_generate" => {
-            let request: YueGenerateRequest = parse_args(args)?;
-            tool_to_json(server.yue_generate(request).await)
-        }
-
         // Garden tools
-        "garden_status" => {
-            tool_to_json(server.garden_status().await)
-        }
-        "garden_play" => {
-            tool_to_json(server.garden_play().await)
-        }
-        "garden_pause" => {
-            tool_to_json(server.garden_pause().await)
-        }
-        "garden_stop" => {
-            tool_to_json(server.garden_stop().await)
-        }
+        "garden_status" => tool_to_json(server.garden_status().await),
+        "garden_play" => tool_to_json(server.garden_play().await),
+        "garden_pause" => tool_to_json(server.garden_pause().await),
+        "garden_stop" => tool_to_json(server.garden_stop().await),
         "garden_seek" => {
             let request: super::tools::garden::GardenSeekRequest = parse_args(args)?;
             tool_to_json(server.garden_seek(request).await)
@@ -552,9 +454,7 @@ pub async fn dispatch_tool(
             let request: super::tools::garden::GardenQueryRequest = parse_args(args)?;
             tool_to_json(server.garden_query(request).await)
         }
-        "garden_emergency_pause" => {
-            tool_to_json(server.garden_emergency_pause().await)
-        }
+        "garden_emergency_pause" => tool_to_json(server.garden_emergency_pause().await),
 
         // Config tools
         "config_get" => {
@@ -562,10 +462,7 @@ pub async fn dispatch_tool(
             tool_to_json(server.config_get(request).await)
         }
 
-        "garden_create_region" => {
-            let request: super::tools::garden::GardenCreateRegionRequest = parse_args(args)?;
-            tool_to_json(server.garden_create_region(request).await)
-        }
+        // Garden region tools
         "garden_delete_region" => {
             let request: super::tools::garden::GardenDeleteRegionRequest = parse_args(args)?;
             tool_to_json(server.garden_delete_region(request).await)
@@ -578,30 +475,48 @@ pub async fn dispatch_tool(
             let request: super::tools::garden::GardenGetRegionsRequest = parse_args(args)?;
             tool_to_json(server.garden_get_regions(request).await)
         }
+        "schedule" => {
+            let request: super::native::ScheduleRequest = parse_args(args)?;
+            tool_to_json(server.schedule(request).await)
+        }
         "garden_attach_audio" => {
             let request: super::tools::garden::GardenAttachAudioRequest = parse_args(args)?;
             tool_to_json(server.garden_attach_audio(request).await)
         }
-        "garden_detach_audio" => {
-            tool_to_json(server.garden_detach_audio().await)
-        }
-        "garden_audio_status" => {
-            tool_to_json(server.garden_audio_status().await)
-        }
+        "garden_detach_audio" => tool_to_json(server.garden_detach_audio().await),
+        "garden_audio_status" => tool_to_json(server.garden_audio_status().await),
         // Monitor input
         "garden_attach_input" => {
             let request: super::tools::garden::GardenAttachInputRequest = parse_args(args)?;
             tool_to_json(server.garden_attach_input(request).await)
         }
-        "garden_detach_input" => {
-            tool_to_json(server.garden_detach_input().await)
-        }
-        "garden_input_status" => {
-            tool_to_json(server.garden_input_status().await)
-        }
+        "garden_detach_input" => tool_to_json(server.garden_detach_input().await),
+        "garden_input_status" => tool_to_json(server.garden_input_status().await),
         "garden_set_monitor" => {
             let request: super::tools::garden::GardenSetMonitorRequest = parse_args(args)?;
             tool_to_json(server.garden_set_monitor(request).await)
+        }
+
+        // Model-Native API Tools
+        "sample" => {
+            let request: crate::api::native::SampleRequest = parse_args(args)?;
+            tool_to_json(server.sample(request).await)
+        }
+        "extend" => {
+            let request: crate::api::native::ExtendRequest = parse_args(args)?;
+            tool_to_json(server.extend(request).await)
+        }
+        "project" => {
+            let request: crate::api::native::ProjectRequest = parse_args(args)?;
+            tool_to_json(server.project(request).await)
+        }
+        "analyze" => {
+            let request: crate::api::native::AnalyzeRequest = parse_args(args)?;
+            tool_to_json(server.analyze(request).await)
+        }
+        "bridge" => {
+            let request: crate::api::native::BridgeRequest = parse_args(args)?;
+            tool_to_json(server.bridge(request).await)
         }
 
         _ => Err(DispatchError::not_found(name)),
@@ -655,12 +570,7 @@ fn dispatch_graph_bind(server: &EventDualityServer, request: GraphBindRequest) -
 
 fn dispatch_graph_tag(server: &EventDualityServer, request: GraphTagRequest) -> DispatchResult {
     let add = vec![(request.namespace.clone(), request.value.clone())];
-    match graph_tag(
-        &server.audio_graph_db,
-        &request.identity_id,
-        add,
-        vec![],
-    ) {
+    match graph_tag(&server.audio_graph_db, &request.identity_id, add, vec![]) {
         Ok(tags) => Ok(serde_json::json!({
             "identity_id": request.identity_id,
             "tags": tags.iter().map(|t| serde_json::json!({
