@@ -22,6 +22,12 @@ use std::time::Duration;
 use zmq_server::{Server, ServerConfig};
 use clients::{ClientManager, UpstreamConfig};
 
+/// Parse a key=value parameter
+fn parse_param(s: &str) -> Result<(String, String), String> {
+    let pos = s.find('=').ok_or_else(|| format!("invalid param, expected key=value: {}", s))?;
+    Ok((s[..pos].to_string(), s[pos + 1..].to_string()))
+}
+
 /// Luanette - Lua Scripting Server for Hootenanny
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -54,6 +60,26 @@ enum Commands {
         #[arg(long, default_value = "tcp://localhost:5580")]
         hootenanny: String,
     },
+
+    /// Run a Lua script directly (for testing)
+    Run {
+        /// Path to Lua script file
+        script: String,
+
+        /// Hootenanny ZMQ endpoint for tool calls
+        #[arg(long, default_value = "tcp://localhost:5580")]
+        hootenanny: String,
+
+        /// Script parameters as key=value pairs
+        #[arg(short, long, value_parser = parse_param)]
+        param: Vec<(String, String)>,
+    },
+
+    /// Evaluate Lua code directly
+    Eval {
+        /// Lua code to evaluate
+        code: String,
+    },
 }
 
 #[tokio::main]
@@ -74,6 +100,12 @@ async fn main() -> Result<()> {
     match command {
         Commands::Zmq { bind, name, hootenanny } => {
             run_zmq_server(&bind, &name, cli.timeout, &hootenanny).await?;
+        }
+        Commands::Run { script, hootenanny, param } => {
+            run_script(&script, cli.timeout, &hootenanny, param).await?;
+        }
+        Commands::Eval { code } => {
+            eval_code(&code, cli.timeout).await?;
         }
     }
 
@@ -161,5 +193,88 @@ async fn run_zmq_server(bind: &str, name: &str, timeout_secs: u64, hootenanny_en
     server.run(shutdown_rx).await?;
 
     tracing::info!("Shutdown complete");
+    Ok(())
+}
+
+/// Run a Lua script file directly (for testing)
+async fn run_script(path: &str, timeout_secs: u64, hootenanny_endpoint: &str, params: Vec<(String, String)>) -> Result<()> {
+    use std::fs;
+
+    println!("🌙 Running script: {}", path);
+
+    // Read script file
+    let script = fs::read_to_string(path).context("Failed to read script file")?;
+
+    // Create client manager and connect to hootenanny
+    let mut client_manager = ClientManager::new();
+    client_manager
+        .add_upstream(UpstreamConfig {
+            namespace: "hootenanny".to_string(),
+            endpoint: hootenanny_endpoint.to_string(),
+            timeout_ms: timeout_secs * 1000,
+        })
+        .await
+        .context("Failed to connect to hootenanny")?;
+
+    println!("   Connected to hootenanny at {}", hootenanny_endpoint);
+
+    let client_manager = Arc::new(client_manager);
+
+    // Create Lua runtime WITH MCP bridge
+    let sandbox_config = SandboxConfig {
+        timeout: Duration::from_secs(timeout_secs),
+    };
+    let runtime = LuaRuntime::with_mcp_bridge(sandbox_config, client_manager);
+
+    // Build params as JSON
+    let mut params_json = serde_json::Map::new();
+    for (key, value) in params {
+        // Try to parse as number first
+        if let Ok(n) = value.parse::<f64>() {
+            params_json.insert(key, serde_json::json!(n));
+        } else {
+            params_json.insert(key, serde_json::json!(value));
+        }
+    }
+
+    // Execute script using async execute() method
+    let result = runtime.execute(&script, serde_json::Value::Object(params_json)).await?;
+
+    // Print result
+    match &result.result {
+        serde_json::Value::Object(obj) => {
+            println!("\n📦 Result:");
+            for (k, v) in obj {
+                println!("   {} = {}", k, v);
+            }
+        }
+        serde_json::Value::Null => {
+            println!("\n✅ Script completed (no return value)");
+        }
+        other => {
+            println!("\n📦 Result: {}", other);
+        }
+    }
+
+    println!("   Duration: {:?}", result.duration);
+
+    Ok(())
+}
+
+/// Evaluate Lua code directly (simple REPL mode)
+async fn eval_code(code: &str, timeout_secs: u64) -> Result<()> {
+    // Create Lua runtime WITHOUT MCP bridge (for quick eval)
+    let sandbox_config = SandboxConfig {
+        timeout: Duration::from_secs(timeout_secs),
+    };
+    let runtime = LuaRuntime::new(sandbox_config);
+
+    let result = runtime.eval(code).await?;
+
+    match &result.result {
+        serde_json::Value::Null => {}
+        other => println!("{}", other),
+    }
+
     Ok(())
 }

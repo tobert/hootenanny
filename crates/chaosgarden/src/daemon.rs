@@ -116,6 +116,7 @@ pub struct GardenDaemon {
     // Audio mixer state (control plane for all mixing)
     // The mixer holds channels with gain/pan/mute/solo controls.
     // Ring buffers are transport and stay separate.
+    #[allow(dead_code)]
     mixer: MixerState,
     // Reference to the monitor channel in the mixer (for convenience)
     monitor_channel: Arc<MixerChannel>,
@@ -255,6 +256,7 @@ impl GardenDaemon {
         info!("Playback paused at beat {}", transport.position.0);
     }
 
+    #[allow(dead_code)]
     fn stop(&self) {
         self.tick_clock.write().unwrap().stop();
         let mut transport = self.transport.write().unwrap();
@@ -287,6 +289,7 @@ impl GardenDaemon {
         info!("Set tempo to {} BPM", bpm);
     }
 
+    #[allow(dead_code)]
     fn get_transport_state(&self) -> (bool, Beat, f64) {
         let transport = self.transport.read().unwrap();
         let tempo = self.tempo_map.read().unwrap().tempo_at(Tick(0));
@@ -330,6 +333,21 @@ impl GardenDaemon {
             None => return, // No output attached
         };
 
+        // Check if ring has room for a full buffer before processing
+        // This prevents the engine from advancing ahead of actual playback
+        // 256 frames * 2 channels = 512 samples minimum
+        const MIN_RING_SPACE: usize = 512;
+        {
+            let ring = match timeline_ring.lock() {
+                Ok(r) => r,
+                Err(_) => return,
+            };
+            if ring.available() < MIN_RING_SPACE {
+                // Ring is full, skip this tick - RT callback will drain it
+                return;
+            }
+        }
+
         // Get playback engine
         let mut engine_guard = self.playback_engine.write().unwrap();
         let engine = match engine_guard.as_mut() {
@@ -356,11 +374,7 @@ impl GardenDaemon {
                 // Write output to timeline ring
                 if let Ok(mut ring) = timeline_ring.lock() {
                     // AudioBuffer.samples is interleaved [L, R, L, R, ...]
-                    let written = ring.write(&output_buffer.samples);
-                    if written < output_buffer.samples.len() {
-                        // Ring is full - this is expected if playback is ahead of output
-                        // The RT callback will drain it
-                    }
+                    ring.write(&output_buffer.samples);
                 }
             }
             Err(e) => {

@@ -91,6 +91,7 @@ pub struct PipeWireOutputStream {
     // Stats for monitoring (updated by RT callback)
     stats: Arc<StreamStats>,
     // Track whether monitor was attached (for logging)
+    #[allow(dead_code)]
     has_monitor: bool,
 }
 

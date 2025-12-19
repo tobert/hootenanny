@@ -58,15 +58,17 @@ async fn main() -> Result<()> {
     info!("GardenDaemon initialized");
 
     // Spawn tick loop to advance position based on wall time
+    // Tick interval matches buffer processing time: 256 samples at 48kHz = 5.33ms
+    // Use 5ms for a slight margin to avoid ring buffer overflow
     let tick_handler = Arc::clone(&handler);
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(1));
+        let mut interval = tokio::time::interval(Duration::from_millis(5));
         loop {
             interval.tick().await;
             tick_handler.tick();
         }
     });
-    info!("Tick loop started (1ms interval)");
+    info!("Tick loop started (5ms interval, matches 256-sample buffer at 48kHz)");
 
     server.run(handler).await?;
 

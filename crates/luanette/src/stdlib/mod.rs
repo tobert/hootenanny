@@ -10,6 +10,7 @@
 //! - `audio.*` - Audio processing (WAV I/O, resample, normalize)
 //! - `cas.*` - Content Addressable Storage (local filesystem access)
 //! - `midi.*` - MIDI read/write/transform
+//! - `native.*` - Model-native vocabulary (space, context, sample, project)
 //! - `soundfont.*` - SoundFont inspection (local, no ZMQ)
 //! - `temp.*` - Temporary file management
 //! - `workflow.*` - High-level helpers (wait_job, etc.)
@@ -19,6 +20,7 @@ pub mod artifact;
 pub mod audio;
 pub mod cas;
 pub mod midi;
+pub mod native;
 pub mod soundfont;
 pub mod temp;
 pub mod workflow;
@@ -32,6 +34,7 @@ pub fn register_all(lua: &Lua) -> Result<()> {
     audio::register_audio_globals(lua)?;
     cas::register_cas_globals(lua)?;
     midi::register_midi_globals(lua)?;
+    native::register_native_globals(lua)?; // space(), context(), encoding()
     soundfont::register_soundfont_globals(lua)?;
     temp::register_temp_globals(lua)?;
     // Note: artifact and workflow are registered after tool_globals since they depend on hootenanny.*
@@ -41,6 +44,7 @@ pub fn register_all(lua: &Lua) -> Result<()> {
 /// Register modules that depend on tool_globals (must be called after)
 pub fn register_dependent_modules(lua: &Lua) -> Result<()> {
     artifact::register_artifact_globals(lua)?;
+    native::register_native_tool_functions(lua)?; // sample(), project(), schedule(), extend()
     workflow::register_workflow_globals(lua)?;
     Ok(())
 }
