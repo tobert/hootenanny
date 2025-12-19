@@ -20,7 +20,7 @@ use bytes::Bytes;
 use cas::ContentStore;
 use hooteproto::{
     capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope, Command, ContentType,
-    Envelope, HootFrame, Payload, ReadyPayload, ToolInfo, PROTOCOL_VERSION,
+    HootFrame, Payload, ToolInfo, PROTOCOL_VERSION,
 };
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -197,14 +197,19 @@ impl HooteprotoServer {
                     ContentType::CapnProto => {
                         // First, parse the entire capnp message to Payload
                         // (must complete before await to avoid holding reader across await point)
-                        let payload_result: Result<Payload, capnp::Error> = match frame.read_capnp() {
+                        let payload_result: Result<Payload, capnp::Error> = match frame.read_capnp()
+                        {
                             Ok(reader) => {
                                 match reader.get_root::<envelope_capnp::envelope::Reader>() {
-                                    Ok(envelope_reader) => capnp_envelope_to_payload(envelope_reader),
+                                    Ok(envelope_reader) => {
+                                        capnp_envelope_to_payload(envelope_reader)
+                                    }
                                     Err(e) => Err(e),
                                 }
                             }
-                            Err(e) => Err(capnp::Error::failed(format!("Failed to read capnp: {}", e))),
+                            Err(e) => {
+                                Err(capnp::Error::failed(format!("Failed to read capnp: {}", e)))
+                            }
                         };
 
                         // Reader is dropped here, now we can safely await
@@ -213,11 +218,12 @@ impl HooteprotoServer {
                                 // Dispatch the request
                                 let result = self.dispatch(payload).instrument(span).await;
 
-                                                // Convert response back to capnp
+                                // Convert response back to capnp
                                 match payload_to_capnp_envelope(frame.request_id, &result) {
                                     Ok(response_msg) => {
                                         // Serialize to bytes
-                                        let bytes = capnp::serialize::write_message_to_words(&response_msg);
+                                        let bytes =
+                                            capnp::serialize::write_message_to_words(&response_msg);
                                         HootFrame {
                                             command: Command::Reply,
                                             content_type: ContentType::CapnProto,
@@ -234,8 +240,11 @@ impl HooteprotoServer {
                                             message: e.to_string(),
                                             details: None,
                                         };
-                                        let error_msg = payload_to_capnp_envelope(frame.request_id, &error_payload)
-                                            .expect("Failed to serialize error");
+                                        let error_msg = payload_to_capnp_envelope(
+                                            frame.request_id,
+                                            &error_payload,
+                                        )
+                                        .expect("Failed to serialize error");
                                         HootFrame::reply_capnp(frame.request_id, &error_msg)
                                     }
                                 }
@@ -247,8 +256,9 @@ impl HooteprotoServer {
                                     message: e.to_string(),
                                     details: None,
                                 };
-                                let error_msg = payload_to_capnp_envelope(frame.request_id, &error_payload)
-                                    .expect("Failed to serialize error");
+                                let error_msg =
+                                    payload_to_capnp_envelope(frame.request_id, &error_payload)
+                                        .expect("Failed to serialize error");
                                 HootFrame::reply_capnp(frame.request_id, &error_msg)
                             }
                         }
@@ -257,7 +267,10 @@ impl HooteprotoServer {
                         // Not supported - return error
                         let error_payload = Payload::Error {
                             code: "unsupported_content_type".to_string(),
-                            message: format!("Content type {:?} not supported. Use CapnProto.", frame.content_type),
+                            message: format!(
+                                "Content type {:?} not supported. Use CapnProto.",
+                                frame.content_type
+                            ),
                             details: None,
                         };
                         let error_msg = payload_to_capnp_envelope(frame.request_id, &error_payload)
@@ -300,7 +313,6 @@ impl HooteprotoServer {
         Ok(())
     }
 
-
     async fn dispatch(&self, payload: Payload) -> Payload {
         // Handle administrative messages first
         match &payload {
@@ -321,9 +333,13 @@ impl HooteprotoServer {
         // CasStore is intercepted here because Payload::CasStore uses `data` field
         // but dispatch_tool expects CasStoreRequest with `content_base64` field
         match &payload {
-            Payload::CasStore { data, mime_type } => return self.cas_store(data.clone(), Some(mime_type.clone())).await,
+            Payload::CasStore { data, mime_type } => {
+                return self.cas_store(data.clone(), Some(mime_type.clone())).await
+            }
             Payload::CasGet { hash } => return self.cas_get(hash).await,
-            Payload::ArtifactList { tag, creator } => return self.artifact_list(tag.clone(), creator.clone()).await,
+            Payload::ArtifactList { tag, creator } => {
+                return self.artifact_list(tag.clone(), creator.clone()).await
+            }
             Payload::ArtifactGet { id } => return self.artifact_get(id).await,
             _ => {}
         }
@@ -356,7 +372,10 @@ impl HooteprotoServer {
             Payload::ArtifactGet { id } => self.artifact_get(&id).await,
 
             other => {
-                warn!("Unhandled payload in standalone mode: {:?}", payload_type_name(&other));
+                warn!(
+                    "Unhandled payload in standalone mode: {:?}",
+                    payload_type_name(&other)
+                );
                 Payload::Error {
                     code: "not_implemented".to_string(),
                     message: format!(
@@ -384,7 +403,11 @@ impl HooteprotoServer {
             debug!("ToolCall dispatch: {}", name);
             return match dispatch_tool(server, &name, args).await {
                 Ok(result) => Payload::Success { result },
-                Err(DispatchError { code, message, details }) => Payload::Error {
+                Err(DispatchError {
+                    code,
+                    message,
+                    details,
+                }) => Payload::Error {
                     code,
                     message,
                     details,
@@ -403,7 +426,10 @@ impl HooteprotoServer {
             }
             Ok(None) => {
                 // Tool not yet converted - fall back to JSON dispatch
-                debug!("Falling back to JSON dispatch for: {:?}", payload_type_name(&payload));
+                debug!(
+                    "Falling back to JSON dispatch for: {:?}",
+                    payload_type_name(&payload)
+                );
             }
             Err(e) => {
                 // Conversion error
@@ -430,7 +456,11 @@ impl HooteprotoServer {
         // Call the tool via dispatch
         match dispatch_tool(server, &tool_name, args).await {
             Ok(result) => Payload::Success { result },
-            Err(DispatchError { code, message, details }) => Payload::Error {
+            Err(DispatchError {
+                code,
+                message,
+                details,
+            }) => Payload::Error {
                 code,
                 message,
                 details,
@@ -578,8 +608,10 @@ impl HooteprotoServer {
                 let artifacts: Vec<_> = all_artifacts
                     .into_iter()
                     .filter(|a| {
-                        let tag_match = tag.as_ref().is_none_or(|t| a.tags.iter().any(|at| at == t));
-                        let creator_match = creator.as_ref().is_none_or(|c| a.creator.as_str() == c);
+                        let tag_match =
+                            tag.as_ref().is_none_or(|t| a.tags.iter().any(|at| at == t));
+                        let creator_match =
+                            creator.as_ref().is_none_or(|c| a.creator.as_str() == c);
                         tag_match && creator_match
                     })
                     .collect();
@@ -787,10 +819,8 @@ fn payload_to_tool_args(payload: Payload) -> anyhow::Result<(String, serde_json:
     // The payload is tagged, so we need to extract the inner object
     // After serialization: {"type":"cas_store","data":"...","mime_type":"..."}
     // We want just: {"data":"...","mime_type":"..."}
-    let mut args = json.as_object()
-        .cloned()
-        .unwrap_or_default();
-    args.remove("type");  // Remove the discriminator tag
+    let mut args = json.as_object().cloned().unwrap_or_default();
+    args.remove("type"); // Remove the discriminator tag
 
     Ok((tool_name, serde_json::Value::Object(args)))
 }

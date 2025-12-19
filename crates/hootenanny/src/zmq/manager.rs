@@ -13,8 +13,7 @@ use tracing::{debug, error, info, warn};
 
 use super::garden_client::GardenClient;
 use chaosgarden::ipc::{
-    ControlReply, ControlRequest, GardenEndpoints, IOPubEvent, QueryReply, ShellReply,
-    ShellRequest,
+    ControlReply, ControlRequest, GardenEndpoints, IOPubEvent, QueryReply, ShellReply, ShellRequest,
 };
 
 /// Connection state to chaosgarden

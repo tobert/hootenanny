@@ -6,8 +6,8 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use chaosgarden::ipc::{
-    ControlReply, ControlRequest, GardenEndpoints, IOPubEvent, Message, MessageHeader,
-    QueryReply, QueryRequest, ShellReply, ShellRequest,
+    ControlReply, ControlRequest, GardenEndpoints, IOPubEvent, Message, QueryReply,
+    QueryRequest, ShellReply, ShellRequest,
 };
 use futures::stream::Stream;
 use hooteproto::{Command, ContentType, HootFrame, PROTOCOL_VERSION};
@@ -16,7 +16,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use zeromq::{DealerSocket, ReqSocket, Socket, SocketRecv, SocketSend, SubSocket, ZmqMessage};
@@ -41,10 +40,9 @@ impl GardenClient {
 
         // Create and connect all sockets
         let mut control = DealerSocket::new();
-        control
-            .connect(&endpoints.control)
-            .await
-            .with_context(|| format!("Failed to connect control socket to {}", endpoints.control))?;
+        control.connect(&endpoints.control).await.with_context(|| {
+            format!("Failed to connect control socket to {}", endpoints.control)
+        })?;
 
         let mut shell = DealerSocket::new();
         shell
@@ -63,7 +61,12 @@ impl GardenClient {
         heartbeat
             .connect(&endpoints.heartbeat)
             .await
-            .with_context(|| format!("Failed to connect heartbeat socket to {}", endpoints.heartbeat))?;
+            .with_context(|| {
+                format!(
+                    "Failed to connect heartbeat socket to {}",
+                    endpoints.heartbeat
+                )
+            })?;
 
         let mut query = ReqSocket::new();
         query
@@ -90,6 +93,7 @@ impl GardenClient {
     }
 
     /// Send a shell request
+    #[allow(dead_code)]
     pub async fn request(&self, req: ShellRequest) -> Result<ShellReply> {
         self.request_with_job_id(req, None).await
     }
@@ -98,7 +102,7 @@ impl GardenClient {
     pub async fn request_with_job_id(
         &self,
         req: ShellRequest,
-        job_id: Option<&str>,
+        _job_id: Option<&str>,
     ) -> Result<ShellReply> {
         let msg = Message::new(self.session, "shell_request", req);
         let msg_json = serde_json::to_vec(&msg).context("Failed to serialize shell request")?;
@@ -132,17 +136,16 @@ impl GardenClient {
             .context("Shell response receive timeout")??;
 
         // Parse response
-        let response_frames: Vec<Bytes> = response
-            .into_vec()
-            .into_iter()
-            .map(Bytes::from)
-            .collect();
+        let response_frames: Vec<Bytes> = response.into_vec();
 
         let response_frame =
             HootFrame::from_frames(&response_frames).context("Failed to parse response frame")?;
 
         if response_frame.content_type != ContentType::Json {
-            anyhow::bail!("Expected JSON response, got {:?}", response_frame.content_type);
+            anyhow::bail!(
+                "Expected JSON response, got {:?}",
+                response_frame.content_type
+            );
         }
 
         let response_msg: Message<ShellReply> = serde_json::from_slice(&response_frame.body)
@@ -185,17 +188,16 @@ impl GardenClient {
             .context("Control response receive timeout")??;
 
         // Parse response
-        let response_frames: Vec<Bytes> = response
-            .into_vec()
-            .into_iter()
-            .map(Bytes::from)
-            .collect();
+        let response_frames: Vec<Bytes> = response.into_vec();
 
         let response_frame =
             HootFrame::from_frames(&response_frames).context("Failed to parse response frame")?;
 
         if response_frame.content_type != ContentType::Json {
-            anyhow::bail!("Expected JSON response, got {:?}", response_frame.content_type);
+            anyhow::bail!(
+                "Expected JSON response, got {:?}",
+                response_frame.content_type
+            );
         }
 
         let response_msg: Message<ControlReply> = serde_json::from_slice(&response_frame.body)
@@ -247,17 +249,16 @@ impl GardenClient {
             .context("Query response timeout")??;
 
         // Parse response
-        let response_frames: Vec<Bytes> = response
-            .into_vec()
-            .into_iter()
-            .map(Bytes::from)
-            .collect();
+        let response_frames: Vec<Bytes> = response.into_vec();
 
         let response_frame =
             HootFrame::from_frames(&response_frames).context("Failed to parse response frame")?;
 
         if response_frame.content_type != ContentType::Json {
-            anyhow::bail!("Expected JSON response, got {:?}", response_frame.content_type);
+            anyhow::bail!(
+                "Expected JSON response, got {:?}",
+                response_frame.content_type
+            );
         }
 
         let response_msg: Message<QueryReply> = serde_json::from_slice(&response_frame.body)
@@ -285,12 +286,13 @@ impl GardenClient {
             .context("Heartbeat receive timeout")??;
 
         // Check for HOOT01 heartbeat reply
-        let response_frames: Vec<Bytes> = response
-            .iter()
-            .map(|f| Bytes::copy_from_slice(f))
-            .collect();
+        let response_frames: Vec<Bytes> =
+            response.iter().map(|f| Bytes::copy_from_slice(f)).collect();
 
-        if response_frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
+        if response_frames
+            .iter()
+            .any(|f| f.as_ref() == PROTOCOL_VERSION)
+        {
             match HootFrame::from_frames(&response_frames) {
                 Ok(resp_frame) if resp_frame.command == Command::Heartbeat => Ok(true),
                 Ok(_) => Ok(true), // Got a different command - still alive
@@ -318,11 +320,7 @@ impl GardenClient {
 
                 match msg {
                     Ok(zmq_msg) => {
-                        let frames: Vec<Bytes> = zmq_msg
-                            .into_vec()
-                            .into_iter()
-                            .map(Bytes::from)
-                            .collect();
+                        let frames: Vec<Bytes> = zmq_msg.into_vec();
 
                         // Skip subscription filter frame if present
                         let frame_result = if frames.len() > 1 && frames[0].is_empty() {

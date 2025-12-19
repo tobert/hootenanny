@@ -1,4 +1,5 @@
 //! Capture sessions - group multiple streams with timing and segments.
+#![allow(dead_code)]
 //!
 //! Sessions provide the organizational layer above individual streams, enabling:
 //! - Multi-stream coordination (audio + MIDI together)
@@ -34,7 +35,3 @@ pub mod manager;
 pub mod types;
 
 pub use manager::SessionManager;
-pub use types::{
-    CaptureSession, ClockSnapshot, SegmentId, SessionCheckpoint, SessionId, SessionMode,
-    SessionSegment, SessionStatus, SessionTimeline,
-};

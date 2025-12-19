@@ -147,7 +147,7 @@ impl LuanetteClient {
 
     /// Send a payload to luanette and wait for response
     pub async fn request(&self, payload: Payload, traceparent: Option<String>) -> Result<Payload> {
-        use hooteproto::{payload_to_capnp_envelope, capnp_envelope_to_payload, envelope_capnp};
+        use hooteproto::{capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope};
 
         // Generate request ID
         let request_id = Uuid::new_v4();
@@ -173,7 +173,10 @@ impl LuanetteClient {
         let frames = frame.to_frames();
         let zmq_msg = frames_to_zmq_message(&frames);
 
-        debug!("Sending capnp request to luanette ({} bytes)", frame.body.len());
+        debug!(
+            "Sending capnp request to luanette ({} bytes)",
+            frame.body.len()
+        );
 
         let mut socket = self.socket.write().await;
 
@@ -190,20 +193,18 @@ impl LuanetteClient {
             .context("Failed to receive")?;
 
         // Parse HootFrame from response
-        let response_frames: Vec<Bytes> = response
-            .into_vec()
-            .into_iter()
-            .map(|bytes| Bytes::from(bytes))
-            .collect();
+        let response_frames: Vec<Bytes> = response.into_vec();
 
         let response_frame = HootFrame::from_frames(&response_frames)
             .context("Failed to parse response HootFrame")?;
 
         // Parse Cap'n Proto response
-        let reader = response_frame.read_capnp()
+        let reader = response_frame
+            .read_capnp()
             .context("Failed to read capnp from response")?;
 
-        let envelope_reader = reader.get_root::<envelope_capnp::envelope::Reader>()
+        let envelope_reader = reader
+            .get_root::<envelope_capnp::envelope::Reader>()
             .context("Failed to get envelope root")?;
 
         let response_payload = capnp_envelope_to_payload(envelope_reader)
@@ -234,12 +235,13 @@ impl LuanetteClient {
             .context("Heartbeat receive failed")?;
 
         // Parse response - check for HOOT01 heartbeat reply
-        let response_frames: Vec<Bytes> = response
-            .iter()
-            .map(|f| Bytes::copy_from_slice(f))
-            .collect();
+        let response_frames: Vec<Bytes> =
+            response.iter().map(|f| Bytes::copy_from_slice(f)).collect();
 
-        if response_frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
+        if response_frames
+            .iter()
+            .any(|f| f.as_ref() == PROTOCOL_VERSION)
+        {
             match HootFrame::from_frames(&response_frames) {
                 Ok(resp_frame) if resp_frame.command == Command::Heartbeat => {
                     self.health.record_success().await;

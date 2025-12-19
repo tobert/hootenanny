@@ -312,6 +312,7 @@ mod tests {
 
 /// Spawn a background task that sends heartbeats to all tracked clients
 /// and cleans up stale ones.
+#[allow(dead_code)]
 pub fn spawn_server_heartbeat_task(
     tracker: Arc<ClientTracker>,
     send_heartbeat: impl Fn(Bytes) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>
@@ -325,7 +326,10 @@ pub fn spawn_server_heartbeat_task(
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        info!("🫀 Server heartbeat task started (interval: {:?})", interval);
+        info!(
+            "🫀 Server heartbeat task started (interval: {:?})",
+            interval
+        );
 
         loop {
             tokio::select! {
@@ -339,17 +343,15 @@ pub fn spawn_server_heartbeat_task(
                         if success {
                             tracker.record_activity(&identity).await;
                             debug!("Heartbeat OK to client {}", hex_identity(&identity));
-                        } else {
-                            if let Some(failures) = tracker.record_failure(&identity).await {
-                                warn!(
-                                    "Heartbeat failed to client {} ({} failures)",
-                                    hex_identity(&identity),
-                                    failures
-                                );
+                        } else if let Some(failures) = tracker.record_failure(&identity).await {
+                            warn!(
+                                "Heartbeat failed to client {} ({} failures)",
+                                hex_identity(&identity),
+                                failures
+                            );
 
-                                if tracker.should_remove(&identity).await {
-                                    tracker.remove(&identity).await;
-                                }
+                            if tracker.should_remove(&identity).await {
+                                tracker.remove(&identity).await;
                             }
                         }
                     }

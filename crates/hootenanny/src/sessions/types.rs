@@ -307,7 +307,8 @@ mod tests {
     #[test]
     fn test_session_segment() {
         let id = SegmentId::new("seg-1");
-        let mut segment = SessionSegment::new(id.clone(), ClockSnapshot::now(SessionCheckpoint::Start));
+        let mut segment =
+            SessionSegment::new(id.clone(), ClockSnapshot::now(SessionCheckpoint::Start));
 
         assert_eq!(segment.id, id);
         assert!(segment.is_active());

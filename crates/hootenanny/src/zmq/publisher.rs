@@ -4,7 +4,7 @@
 //! Messages are serialized using Cap'n Proto for cross-language compatibility.
 
 use anyhow::{Context, Result};
-use hooteproto::{broadcast_capnp, common_capnp, Broadcast};
+use hooteproto::{broadcast_capnp, Broadcast};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 use zeromq::{PubSocket, Socket, SocketSend, ZmqMessage};
@@ -86,11 +86,7 @@ impl BroadcastPublisher {
     }
 
     /// Publish a device disconnected event
-    pub async fn device_disconnected(
-        &self,
-        pipewire_id: u32,
-        name: Option<&str>,
-    ) -> Result<()> {
+    pub async fn device_disconnected(&self, pipewire_id: u32, name: Option<&str>) -> Result<()> {
         self.publish(Broadcast::DeviceDisconnected {
             pipewire_id,
             name: name.map(|s| s.to_string()),
@@ -137,7 +133,10 @@ impl PublisherServer {
 
             // Write to bytes
             let bytes = capnp::serialize::write_message_to_words(&message);
-            debug!("Publishing broadcast: {:?}", broadcast_variant_name(&broadcast));
+            debug!(
+                "Publishing broadcast: {:?}",
+                broadcast_variant_name(&broadcast)
+            );
             let msg = ZmqMessage::from(bytes);
             if let Err(e) = socket.send(msg).await {
                 warn!("Failed to publish broadcast: {}", e);
@@ -168,7 +167,11 @@ fn broadcast_to_capnp(
             let mut invalidate = builder.reborrow().init_script_invalidate();
             invalidate.set_hash(hash);
         }
-        Broadcast::JobStateChanged { job_id, state, result } => {
+        Broadcast::JobStateChanged {
+            job_id,
+            state,
+            result,
+        } => {
             let mut job = builder.reborrow().init_job_state_changed();
             job.set_job_id(job_id);
             job.set_state(state);
@@ -178,13 +181,22 @@ fn broadcast_to_capnp(
                 job.set_result("");
             }
         }
-        Broadcast::Progress { job_id, percent, message } => {
+        Broadcast::Progress {
+            job_id,
+            percent,
+            message,
+        } => {
             let mut prog = builder.reborrow().init_progress();
             prog.set_job_id(job_id);
             prog.set_percent(*percent);
             prog.set_message(message);
         }
-        Broadcast::ArtifactCreated { artifact_id, content_hash, tags, creator } => {
+        Broadcast::ArtifactCreated {
+            artifact_id,
+            content_hash,
+            tags,
+            creator,
+        } => {
             let mut artifact = builder.reborrow().init_artifact_created();
             artifact.set_artifact_id(artifact_id);
             artifact.set_content_hash(content_hash);
@@ -196,19 +208,31 @@ fn broadcast_to_capnp(
 
             artifact.set_creator(creator.as_deref().unwrap_or(""));
         }
-        Broadcast::TransportStateChanged { state, position_beats, tempo_bpm } => {
+        Broadcast::TransportStateChanged {
+            state,
+            position_beats,
+            tempo_bpm,
+        } => {
             let mut transport = builder.reborrow().init_transport_state_changed();
             transport.set_state(state);
             transport.set_position_beats(*position_beats);
             transport.set_tempo_bpm(*tempo_bpm);
         }
-        Broadcast::MarkerReached { position_beats, marker_type, metadata } => {
+        Broadcast::MarkerReached {
+            position_beats,
+            marker_type,
+            metadata,
+        } => {
             let mut marker = builder.reborrow().init_marker_reached();
             marker.set_position_beats(*position_beats);
             marker.set_marker_type(marker_type);
             marker.set_metadata(&serde_json::to_string(metadata)?);
         }
-        Broadcast::BeatTick { beat, position_beats, tempo_bpm } => {
+        Broadcast::BeatTick {
+            beat,
+            position_beats,
+            tempo_bpm,
+        } => {
             let mut tick = builder.reborrow().init_beat_tick();
 
             // Set timestamp to current time
@@ -223,7 +247,11 @@ fn broadcast_to_capnp(
             tick.set_position_beats(*position_beats);
             tick.set_tempo_bpm(*tempo_bpm);
         }
-        Broadcast::Log { level, message, source } => {
+        Broadcast::Log {
+            level,
+            message,
+            source,
+        } => {
             let mut log = builder.reborrow().init_log();
             log.set_level(level);
             log.set_message(message);

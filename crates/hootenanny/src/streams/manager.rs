@@ -44,16 +44,20 @@ impl StreamManager {
         }
 
         // Store definition in CAS
-        let definition_json = serde_json::to_vec(&definition)
-            .context("failed to serialize stream definition")?;
-        let definition_hash = self.cas.store(&definition_json, "application/json")
+        let definition_json =
+            serde_json::to_vec(&definition).context("failed to serialize stream definition")?;
+        let definition_hash = self
+            .cas
+            .store(&definition_json, "application/json")
             .context("failed to store stream definition")?;
 
         // Create manifest
         let manifest = StreamManifest::new(uri.clone(), definition_hash);
 
         // Create first staging chunk and close it for chaosgarden to mmap
-        let mut chunk = self.cas.create_staging()
+        let mut chunk = self
+            .cas
+            .create_staging()
             .context("failed to create staging chunk")?;
         chunk.close(); // Close file handle so chaosgarden can mmap it
 
@@ -68,7 +72,11 @@ impl StreamManager {
 
         streams.insert(uri.clone(), active_stream);
 
-        info!("started stream: {} (first chunk: {})", uri, chunk_path.display());
+        info!(
+            "started stream: {} (first chunk: {})",
+            uri,
+            chunk_path.display()
+        );
 
         Ok(chunk_path)
     }
@@ -89,10 +97,7 @@ impl StreamManager {
             .get_mut(uri)
             .with_context(|| format!("stream not found: {}", uri))?;
 
-        let chunk = active
-            .current_chunk
-            .take()
-            .context("no active chunk")?;
+        let chunk = active.current_chunk.take().context("no active chunk")?;
 
         let chunk_id = chunk.id().clone();
 
@@ -109,14 +114,20 @@ impl StreamManager {
             crate::streams::types::StreamFormat::Midi => "audio/midi",
         };
 
-        let seal_result = self.cas.seal(&chunk, mime_type)
+        let seal_result = self
+            .cas
+            .seal(&chunk, mime_type)
             .with_context(|| format!("failed to seal chunk {:?}", chunk_id))?;
 
         // Update manifest to mark chunk as sealed
-        active.manifest.seal_last_chunk(seal_result.content_hash.clone())?;
+        active
+            .manifest
+            .seal_last_chunk(seal_result.content_hash.clone())?;
 
         // Create new staging chunk and close it for chaosgarden
-        let mut new_chunk = self.cas.create_staging()
+        let mut new_chunk = self
+            .cas
+            .create_staging()
             .context("failed to create new staging chunk")?;
         new_chunk.close();
         let new_chunk_path = new_chunk.path().clone();
@@ -125,7 +136,8 @@ impl StreamManager {
 
         info!(
             "rotated chunk for stream: {} (new chunk: {})",
-            uri, new_chunk_path.display()
+            uri,
+            new_chunk_path.display()
         );
 
         Ok(new_chunk_path)
@@ -166,11 +178,15 @@ impl StreamManager {
             };
 
             let chunk_id = chunk.id().clone();
-            let seal_result = self.cas.seal(&chunk, mime_type)
+            let seal_result = self
+                .cas
+                .seal(&chunk, mime_type)
                 .context("failed to seal final chunk")?;
 
             // Add chunk to manifest if it's not already there (e.g., if we're stopping before first chunk_full)
-            if active.manifest.chunks.is_empty() || !matches!(active.manifest.chunks.last(), Some(ChunkReference::Staging { id, .. }) if id == &chunk_id) {
+            if active.manifest.chunks.is_empty()
+                || !matches!(active.manifest.chunks.last(), Some(ChunkReference::Staging { id, .. }) if id == &chunk_id)
+            {
                 active.manifest.add_chunk(ChunkReference::Staging {
                     id: chunk_id,
                     bytes_written: 0,
@@ -184,15 +200,14 @@ impl StreamManager {
         active.status = StreamStatus::Stopped;
 
         // Store manifest as artifact
-        let manifest_json = serde_json::to_vec(&active.manifest)
-            .context("failed to serialize manifest")?;
-        let manifest_hash = self.cas.store(&manifest_json, "application/json")
+        let manifest_json =
+            serde_json::to_vec(&active.manifest).context("failed to serialize manifest")?;
+        let manifest_hash = self
+            .cas
+            .store(&manifest_json, "application/json")
             .context("failed to store manifest")?;
 
-        info!(
-            "stopped stream: {} (manifest: {})",
-            uri, manifest_hash
-        );
+        info!("stopped stream: {} (manifest: {})", uri, manifest_hash);
 
         Ok(manifest_hash)
     }
@@ -218,8 +233,8 @@ impl StreamManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::{AudioFormat, SampleFormat, StreamFormat};
+    use super::*;
     use tempfile::TempDir;
 
     fn setup_test_store() -> (TempDir, Arc<FileStore>) {

@@ -82,12 +82,22 @@ impl StreamManifest {
     }
 
     /// Update the last chunk (for staging chunks being written)
-    pub fn update_last_chunk(&mut self, bytes_written: u64, samples_written: Option<u64>) -> Result<()> {
-        let last = self.chunks.last_mut()
+    pub fn update_last_chunk(
+        &mut self,
+        bytes_written: u64,
+        samples_written: Option<u64>,
+    ) -> Result<()> {
+        let last = self
+            .chunks
+            .last_mut()
             .ok_or_else(|| anyhow::anyhow!("no chunks in manifest"))?;
 
         match last {
-            ChunkReference::Staging { bytes_written: ref mut bw, samples_written: ref mut sw, .. } => {
+            ChunkReference::Staging {
+                bytes_written: ref mut bw,
+                samples_written: ref mut sw,
+                ..
+            } => {
                 let byte_delta = bytes_written.saturating_sub(*bw);
                 *bw = bytes_written;
                 *sw = samples_written;
@@ -109,11 +119,17 @@ impl StreamManifest {
 
     /// Seal the last chunk (convert from staging to sealed)
     pub fn seal_last_chunk(&mut self, hash: ContentHash) -> Result<()> {
-        let last = self.chunks.pop()
+        let last = self
+            .chunks
+            .pop()
             .ok_or_else(|| anyhow::anyhow!("no chunks to seal"))?;
 
         match last {
-            ChunkReference::Staging { bytes_written, samples_written, .. } => {
+            ChunkReference::Staging {
+                bytes_written,
+                samples_written,
+                ..
+            } => {
                 self.chunks.push(ChunkReference::Sealed {
                     hash,
                     byte_count: bytes_written,
@@ -223,7 +239,11 @@ mod tests {
         assert_eq!(manifest.chunk_count(), 1);
         assert!(manifest.chunks[0].is_sealed());
         match &manifest.chunks[0] {
-            ChunkReference::Sealed { hash, byte_count, sample_count } => {
+            ChunkReference::Sealed {
+                hash,
+                byte_count,
+                sample_count,
+            } => {
                 assert_eq!(hash, &seal_hash);
                 assert_eq!(*byte_count, 512);
                 assert_eq!(*sample_count, Some(128));

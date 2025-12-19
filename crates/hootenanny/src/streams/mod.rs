@@ -1,4 +1,5 @@
 //! Stream capture - manage streaming input to CAS-backed chunks.
+#![allow(dead_code)]
 //!
 //! This module handles the hootenanny side of stream capture:
 //! - Stream lifecycle (create, start, stop)
@@ -12,8 +13,5 @@ pub mod slicing;
 pub mod types;
 
 pub use manager::StreamManager;
-pub use manifest::{ChunkReference, StreamManifest};
-pub use slicing::{SliceOutput, SliceRequest, SliceResult, SlicingEngine, TimeSpec};
-pub use types::{
-    AudioFormat, SampleFormat, StreamDefinition, StreamFormat, StreamStatus, StreamUri,
-};
+pub use slicing::SlicingEngine;
+pub use types::StreamUri;

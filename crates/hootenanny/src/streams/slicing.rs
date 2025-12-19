@@ -4,7 +4,7 @@
 //! (chunk-reference manifests that can be rendered on demand).
 
 use super::manifest::{ChunkReference, StreamManifest};
-use super::types::{AudioFormat, SampleFormat, StreamFormat, StreamUri};
+use super::types::{AudioFormat, StreamFormat, StreamUri};
 use anyhow::{Context, Result};
 use cas::{ContentHash, ContentStore, FileStore};
 use serde::{Deserialize, Serialize};
@@ -210,8 +210,7 @@ impl SlicingEngine {
         }
 
         // Create a temporary file to write the WAV data
-        let mut temp_file =
-            tempfile::NamedTempFile::new().context("failed to create temp file")?;
+        let mut temp_file = tempfile::NamedTempFile::new().context("failed to create temp file")?;
 
         // Write WAV header
         let sample_count = (sample_range.end - sample_range.start) as u32;
@@ -353,9 +352,7 @@ impl SlicingEngine {
             // Only process sealed chunks for now
             let (chunk_hash, chunk_samples) = match chunk_ref {
                 ChunkReference::Sealed {
-                    hash,
-                    sample_count,
-                    ..
+                    hash, sample_count, ..
                 } => (
                     hash.clone(),
                     sample_count.context("audio chunk missing sample count")?,
@@ -376,8 +373,7 @@ impl SlicingEngine {
                 let slice_end_sample = sample_range.end.min(chunk_end_sample) - current_sample;
 
                 let byte_offset = slice_start_sample * bytes_per_sample as u64;
-                let byte_length =
-                    (slice_end_sample - slice_start_sample) * bytes_per_sample as u64;
+                let byte_length = (slice_end_sample - slice_start_sample) * bytes_per_sample as u64;
 
                 chunk_slices.push(ChunkSlice {
                     chunk_hash,
@@ -440,8 +436,8 @@ impl SlicingEngine {
 
 #[cfg(test)]
 mod tests {
+    use super::super::types::{AudioFormat, SampleFormat, StreamDefinition, StreamFormat};
     use super::*;
-    use super::super::types::StreamDefinition;
     use tempfile::TempDir;
 
     fn setup_test_store() -> (TempDir, FileStore) {
@@ -585,10 +581,7 @@ mod tests {
 
         assert_eq!(result.sample_range, Some(500..2500));
         assert_eq!(result.source_chunks.len(), 3);
-        assert_eq!(
-            result.mime_type,
-            "application/x-hootenanny-virtual-slice"
-        );
+        assert_eq!(result.mime_type, "application/x-hootenanny-virtual-slice");
 
         // Load and verify the virtual manifest
         let manifest_data = store

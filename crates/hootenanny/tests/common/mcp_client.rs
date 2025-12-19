@@ -58,7 +58,7 @@ impl McpClient {
 
         // Explicitly request the old session ID
         mcp_client.establish_session_with_id(session_id).await?;
-        
+
         Ok(mcp_client)
     }
 
@@ -117,11 +117,13 @@ impl McpClient {
         // Only initialize if we are NOT resuming (simple heuristic for test)
         // Real clients might re-initialize or just query capabilities
         if session_id_hint.is_empty() {
-             eprintln!("[MCP] Starting MCP initialization handshake...");
-             self.initialize().await.context("MCP initialization failed")?;
-             eprintln!("[MCP] MCP client fully connected and initialized");
+            eprintln!("[MCP] Starting MCP initialization handshake...");
+            self.initialize()
+                .await
+                .context("MCP initialization failed")?;
+            eprintln!("[MCP] MCP client fully connected and initialized");
         } else {
-             eprintln!("[MCP] Session resumed (skipping handshake)");
+            eprintln!("[MCP] Session resumed (skipping handshake)");
         }
 
         Ok(())
@@ -185,15 +187,9 @@ impl McpClient {
 
         let mut tool_infos = Vec::new();
         for tool in tools {
-            let name = tool["name"]
-                .as_str()
-                .unwrap_or("unknown")
-                .to_string();
+            let name = tool["name"].as_str().unwrap_or("unknown").to_string();
 
-            let description = tool["description"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
+            let description = tool["description"].as_str().unwrap_or("").to_string();
 
             // Format parameters nicely
             let parameters = if let Some(input_schema) = tool.get("inputSchema") {
@@ -255,8 +251,9 @@ impl McpClient {
                     if let Some(first) = arr.first() {
                         if let Some(text) = first.get("text") {
                             // The text is a JSON string, so we need to parse it
-                            let parsed_text: Value = serde_json::from_str(text.as_str().unwrap_or(""))
-                                .context("Failed to parse text field in response")?;
+                            let parsed_text: Value =
+                                serde_json::from_str(text.as_str().unwrap_or(""))
+                                    .context("Failed to parse text field in response")?;
                             return Ok(parsed_text);
                         }
                     }
@@ -271,10 +268,7 @@ impl McpClient {
 
     /// Send an MCP request via HTTP POST and wait for the response from the SSE stream
     async fn send_request(&self, id: u64, request: Value) -> Result<Value> {
-        let session_id = self
-            .session_id
-            .as_ref()
-            .context("No active session")?;
+        let session_id = self.session_id.as_ref().context("No active session")?;
 
         let (tx, rx) = oneshot::channel();
         self.responses.lock().await.insert(id, tx);
@@ -291,10 +285,7 @@ impl McpClient {
             .context("Failed to send request")?;
 
         if response.status() != reqwest::StatusCode::ACCEPTED {
-            return Err(anyhow!(
-                "Request failed with status: {}",
-                response.status()
-            ));
+            return Err(anyhow!("Request failed with status: {}", response.status()));
         }
 
         // Wait for the response from the SSE listener
@@ -308,10 +299,7 @@ impl McpClient {
 
     /// Send a notification (no ID, no response expected)
     async fn send_notification(&self, notification: Value) -> Result<()> {
-        let session_id = self
-            .session_id
-            .as_ref()
-            .context("No active session")?;
+        let session_id = self.session_id.as_ref().context("No active session")?;
 
         let post_url = format!("{}/message?sessionId={}", self.base_url, session_id);
 
@@ -321,7 +309,7 @@ impl McpClient {
                 .post(&post_url)
                 .header("Content-Type", "application/json")
                 .body(notification.to_string())
-                .send()
+                .send(),
         )
         .await
         .context("Timeout sending notification")?
@@ -344,7 +332,9 @@ fn extract_session_id(text: &str) -> Option<String> {
     for line in text.lines() {
         eprintln!("[EXTRACT] Checking line: {:?}", line);
         // Handle raw URI format
-        if line.starts_with("data: /mcp/message?sessionId=") || line.starts_with("data: /message?sessionId=") {
+        if line.starts_with("data: /mcp/message?sessionId=")
+            || line.starts_with("data: /message?sessionId=")
+        {
             let session_id = line.split("sessionId=").nth(1)?.trim().to_string();
             eprintln!("[EXTRACT] Found raw format session ID: {}", session_id);
             return Some(session_id);
@@ -378,7 +368,10 @@ mod tests {
     fn test_extract_session_id_json_format() {
         let text = "event: endpoint\ndata: {\"uri\":\"/mcp/message?sessionId=747c3a2c-a487-4db2-a06b-f9746e8ecf73\"}\n\n";
         let result = extract_session_id(text);
-        assert_eq!(result, Some("747c3a2c-a487-4db2-a06b-f9746e8ecf73".to_string()));
+        assert_eq!(
+            result,
+            Some("747c3a2c-a487-4db2-a06b-f9746e8ecf73".to_string())
+        );
     }
 
     #[test]
@@ -406,7 +399,11 @@ async fn listen_for_responses(
             Ok(chunk) => {
                 chunk_count += 1;
                 let text = String::from_utf8_lossy(&chunk);
-                eprintln!("[MCP-LISTENER] Chunk {}: {:?}", chunk_count, &text[..text.len().min(100)]);
+                eprintln!(
+                    "[MCP-LISTENER] Chunk {}: {:?}",
+                    chunk_count,
+                    &text[..text.len().min(100)]
+                );
 
                 // Append to buffer and process complete lines
                 buffer.push_str(&text);
@@ -424,8 +421,13 @@ async fn listen_for_responses(
                             // Extract session ID from endpoint event if we haven't sent it yet
                             if let Some(sender) = session_sender.take() {
                                 if current_event_type.as_deref() == Some("endpoint") {
-                                    if let Some(session_id) = extract_session_id_from_data(&current_data) {
-                                        eprintln!("[MCP-LISTENER] Extracted session ID: {}", session_id);
+                                    if let Some(session_id) =
+                                        extract_session_id_from_data(&current_data)
+                                    {
+                                        eprintln!(
+                                            "[MCP-LISTENER] Extracted session ID: {}",
+                                            session_id
+                                        );
                                         let _ = sender.send(session_id);
                                         current_data.clear();
                                         current_event_type = None;
@@ -440,19 +442,29 @@ async fn listen_for_responses(
                             if current_event_type.as_deref() == Some("message") {
                                 match serde_json::from_str::<Value>(&current_data) {
                                     Ok(value) => {
-                                        eprintln!("[MCP-LISTENER] Parsed message (len={})", current_data.len());
+                                        eprintln!(
+                                            "[MCP-LISTENER] Parsed message (len={})",
+                                            current_data.len()
+                                        );
                                         if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
                                             let mut resp_map = responses.lock().await;
                                             if let Some(sender) = resp_map.remove(&id) {
                                                 eprintln!("[MCP-LISTENER] Dispatching response for id: {}", id);
                                                 let _ = sender.send(value);
                                             } else {
-                                                eprintln!("[MCP-LISTENER] No waiting receiver for id: {}", id);
+                                                eprintln!(
+                                                    "[MCP-LISTENER] No waiting receiver for id: {}",
+                                                    id
+                                                );
                                             }
                                         }
                                     }
                                     Err(e) => {
-                                        eprintln!("[MCP-LISTENER] Failed to parse JSON (len={}): {}", current_data.len(), e);
+                                        eprintln!(
+                                            "[MCP-LISTENER] Failed to parse JSON (len={}): {}",
+                                            current_data.len(),
+                                            e
+                                        );
                                     }
                                 }
                             }

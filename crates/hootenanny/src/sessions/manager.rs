@@ -1,7 +1,7 @@
 //! Session manager - coordinates capture sessions across multiple streams.
 
 use super::types::{
-    CaptureSession, ClockSnapshot, SessionCheckpoint, SessionId, SessionMode, SessionStatus,
+    CaptureSession, ClockSnapshot, SessionId, SessionMode, SessionStatus,
 };
 use crate::streams::{StreamManager, StreamUri};
 use anyhow::{Context, Result};
@@ -18,6 +18,7 @@ struct ActiveSession {
 /// Manager for capture session lifecycle
 pub struct SessionManager {
     cas: Arc<FileStore>,
+    #[allow(dead_code)]
     stream_manager: Arc<StreamManager>,
     active_sessions: Arc<RwLock<HashMap<SessionId, ActiveSession>>>,
 }
@@ -34,11 +35,7 @@ impl SessionManager {
     /// Create a new capture session
     ///
     /// The session is created but not started. Call `play()` to begin recording.
-    pub fn create_session(
-        &self,
-        mode: SessionMode,
-        streams: Vec<StreamUri>,
-    ) -> Result<SessionId> {
+    pub fn create_session(&self, mode: SessionMode, streams: Vec<StreamUri>) -> Result<SessionId> {
         let session_id = SessionId::generate();
 
         let mut sessions = self.active_sessions.write().unwrap();
@@ -51,12 +48,7 @@ impl SessionManager {
 
         info!("created session: {}", session_id);
 
-        sessions.insert(
-            session_id.clone(),
-            ActiveSession {
-                session,
-            },
-        );
+        sessions.insert(session_id.clone(), ActiveSession { session });
 
         Ok(session_id)
     }
@@ -120,17 +112,14 @@ impl SessionManager {
         active.session.stop();
 
         // Store session as artifact
-        let session_json = serde_json::to_vec(&active.session)
-            .context("failed to serialize session")?;
+        let session_json =
+            serde_json::to_vec(&active.session).context("failed to serialize session")?;
         let session_hash = self
             .cas
             .store(&session_json, "application/json")
             .context("failed to store session")?;
 
-        info!(
-            "stopped session: {} (hash: {})",
-            session_id, session_hash
-        );
+        info!("stopped session: {} (hash: {})", session_id, session_hash);
 
         Ok(session_hash)
     }
@@ -154,7 +143,11 @@ impl SessionManager {
     }
 
     /// Update timeline with a clock snapshot
-    pub fn add_clock_snapshot(&self, session_id: &SessionId, snapshot: ClockSnapshot) -> Result<()> {
+    pub fn add_clock_snapshot(
+        &self,
+        session_id: &SessionId,
+        snapshot: ClockSnapshot,
+    ) -> Result<()> {
         let mut sessions = self.active_sessions.write().unwrap();
 
         let active = sessions
@@ -201,8 +194,8 @@ impl SessionManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::{SessionCheckpoint, SessionMode};
+    use super::*;
     use tempfile::TempDir;
 
     fn setup_test_managers() -> (TempDir, Arc<FileStore>, Arc<StreamManager>, SessionManager) {
