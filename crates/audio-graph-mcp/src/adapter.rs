@@ -518,7 +518,7 @@ impl<'a> trustfall::provider::BasicAdapter<'a> for AudioGraphAdapter {
                     if let Vertex::PipeWireNode(n) = v {
                         // Extract fingerprints from the PipeWire node
                         let pw_source = crate::sources::pipewire::PipeWireSource::new();
-                        let fingerprints = pw_source.extract_fingerprints(&n);
+                        let fingerprints = pw_source.extract_fingerprints(n);
 
                         // Try to match against known identities
                         let matcher = crate::matcher::IdentityMatcher::new(&db);

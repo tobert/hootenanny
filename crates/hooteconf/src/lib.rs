@@ -87,7 +87,7 @@ pub enum ConfigError {
 }
 
 /// Complete Hootenanny configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HootConfig {
     /// Infrastructure - cannot change at runtime.
     #[serde(flatten)]
@@ -96,15 +96,6 @@ pub struct HootConfig {
     /// Bootstrap - seeds runtime state.
     #[serde(default)]
     pub bootstrap: BootstrapConfig,
-}
-
-impl Default for HootConfig {
-    fn default() -> Self {
-        Self {
-            infra: InfraConfig::default(),
-            bootstrap: BootstrapConfig::default(),
-        }
-    }
 }
 
 impl HootConfig {

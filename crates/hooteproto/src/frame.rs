@@ -289,7 +289,7 @@ impl HootFrame {
             self.traceparent
                 .as_ref()
                 .map(|t| Bytes::from(t.clone()))
-                .unwrap_or_else(Bytes::new),
+                .unwrap_or_default(),
         );
 
         // Frame 6: Body

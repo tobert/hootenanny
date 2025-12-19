@@ -348,24 +348,25 @@ pub fn apply_env_overrides(config: &mut HootConfig, sources: &mut ConfigSources)
 
 /// Expand ~ and environment variables in a path.
 pub fn expand_path(path: &str) -> PathBuf {
-    let expanded = if path.starts_with("~/") {
+    let expanded = if let Some(stripped) = path.strip_prefix("~/") {
         if let Some(home) = directories::BaseDirs::new().map(|d| d.home_dir().to_path_buf()) {
-            home.join(&path[2..])
+            home.join(stripped)
         } else {
             PathBuf::from(path)
         }
-    } else if path.starts_with('$') {
+    } else if let Some(stripped) = path.strip_prefix('$') {
         // Handle $VAR/rest/of/path
-        if let Some(slash_pos) = path.find('/') {
-            let var_name = &path[1..slash_pos];
+        if let Some(slash_pos) = stripped.find('/') {
+            let var_name = &stripped[..slash_pos];
             if let Ok(var_value) = env::var(var_name) {
-                PathBuf::from(var_value).join(&path[slash_pos + 1..])
+                PathBuf::from(var_value).join(&stripped[slash_pos + 1..])
             } else {
                 PathBuf::from(path)
             }
         } else {
-            let var_name = &path[1..];
-            env::var(var_name).map(PathBuf::from).unwrap_or_else(|_| PathBuf::from(path))
+            env::var(stripped)
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from(path))
         }
     } else {
         PathBuf::from(path)

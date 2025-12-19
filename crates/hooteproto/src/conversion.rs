@@ -1126,7 +1126,7 @@ fn payload_to_capnp_payload(
     match payload {
         Payload::Success { result } => {
             let mut success = builder.reborrow().init_success();
-            success.set_result(&serde_json::to_string(result).unwrap_or_default());
+            success.set_result(serde_json::to_string(result).unwrap_or_default());
         }
 
         Payload::Error { code, message, details } => {
@@ -1134,7 +1134,7 @@ fn payload_to_capnp_payload(
             error.set_code(code);
             error.set_message(message);
             if let Some(ref d) = details {
-                error.set_details(&serde_json::to_string(d).unwrap_or_default());
+                error.set_details(serde_json::to_string(d).unwrap_or_default());
             } else {
                 error.set_details("");
             }
@@ -1148,7 +1148,9 @@ fn payload_to_capnp_payload(
                 let mut tool_builder = tools_builder.reborrow().get(i as u32);
                 tool_builder.set_name(&tool.name);
                 tool_builder.set_description(&tool.description);
-                tool_builder.set_input_schema(&serde_json::to_string(&tool.input_schema).unwrap_or_default());
+                tool_builder.set_input_schema(
+                    serde_json::to_string(&tool.input_schema).unwrap_or_default(),
+                );
             }
         }
 
@@ -1196,7 +1198,7 @@ fn payload_to_capnp_payload(
             let mut q = builder.reborrow().init_garden_query();
             q.set_query(query);
             if let Some(ref vars) = variables {
-                q.set_variables(&serde_json::to_string(vars).unwrap_or_default());
+                q.set_variables(serde_json::to_string(vars).unwrap_or_default());
             } else {
                 q.set_variables("");
             }
@@ -1260,7 +1262,7 @@ fn payload_to_capnp_payload(
             let mut marker = builder.reborrow().init_timeline_add_marker();
             marker.set_position_beats(*position_beats);
             marker.set_marker_type(marker_type);
-            marker.set_metadata(&serde_json::to_string(metadata).unwrap_or_default());
+            marker.set_metadata(serde_json::to_string(metadata).unwrap_or_default());
         }
 
         Payload::TimelineEvent { event_type, position_beats, tempo, metadata } => {
@@ -1268,7 +1270,7 @@ fn payload_to_capnp_payload(
             event.set_event_type(timeline_event_type_to_capnp(event_type));
             event.set_position_beats(*position_beats);
             event.set_tempo(*tempo);
-            event.set_metadata(&serde_json::to_string(metadata).unwrap_or_default());
+            event.set_metadata(serde_json::to_string(metadata).unwrap_or_default());
         }
 
         // === Stream Commands (Direct envelope) ===
@@ -1533,14 +1535,14 @@ fn payload_to_capnp_payload(
                 }
             }
             req.set_creator(creator.as_deref().unwrap_or(""));
-            req.set_metadata(&serde_json::to_string(metadata).unwrap_or_default());
+            req.set_metadata(serde_json::to_string(metadata).unwrap_or_default());
         }
 
         // === Graph Tools (ToolRequest) ===
         Payload::GraphQuery { query, variables, limit } => {
             let mut req = builder.reborrow().init_tool_request().init_graph_query();
             req.set_query(query);
-            req.set_variables(&serde_json::to_string(variables).unwrap_or_default());
+            req.set_variables(serde_json::to_string(variables).unwrap_or_default());
             req.set_limit(limit.unwrap_or(100) as u32);
         }
 
@@ -1613,7 +1615,12 @@ fn payload_to_capnp_payload(
         Payload::LuaEval { code, params } => {
             let mut req = builder.reborrow().init_tool_request().init_lua_eval();
             req.set_code(code);
-            req.set_params(&params.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default()).unwrap_or_default());
+            req.set_params(
+                params
+                    .as_ref()
+                    .map(|p| serde_json::to_string(p).unwrap_or_default())
+                    .unwrap_or_default(),
+            );
         }
 
         Payload::LuaDescribe { script_hash } => {
@@ -1644,7 +1651,7 @@ fn payload_to_capnp_payload(
         Payload::JobExecute { script_hash, params, tags } => {
             let mut req = builder.reborrow().init_tool_request().init_job_execute();
             req.set_script_hash(script_hash);
-            req.set_params(&serde_json::to_string(params).unwrap_or_default());
+            req.set_params(serde_json::to_string(params).unwrap_or_default());
             if let Some(ref tags_vec) = tags {
                 let mut tags_builder = req.reborrow().init_tags(tags_vec.len() as u32);
                 for (i, tag) in tags_vec.iter().enumerate() {
@@ -1742,7 +1749,7 @@ fn payload_to_capnp_payload(
         Payload::ToolCall { name, args } => {
             let mut tool_call = builder.reborrow().init_tool_call();
             tool_call.set_name(name);
-            tool_call.set_args(&serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string()));
+            tool_call.set_args(serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string()));
         }
     }
 

@@ -224,7 +224,7 @@ impl JobInfo {
 
         // Result as JSON string (or empty)
         if let Some(ref result) = self.result {
-            builder.set_result(&serde_json::to_string(result).unwrap_or_default());
+            builder.set_result(serde_json::to_string(result).unwrap_or_default());
         } else {
             builder.set_result("");
         }
