@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use crate::api;
+
 /// Persistent Python interpreter with globals that survive across evals
 pub struct Kernel {
     globals: Py<PyDict>,
@@ -19,11 +21,44 @@ impl Kernel {
             let builtins = py.import("builtins")?;
             globals.set_item("__builtins__", builtins)?;
 
+            // Register and inject vibeweaver module
+            Self::inject_vibeweaver_api(py, &globals)?;
+
             Ok(Self {
                 globals: globals.unbind(),
             })
         })
         .context("Failed to initialize Python kernel")
+    }
+
+    /// Inject vibeweaver API functions into globals
+    fn inject_vibeweaver_api(py: Python<'_>, globals: &Bound<'_, PyDict>) -> PyResult<()> {
+        // Create the vibeweaver module
+        let module = PyModule::new(py, "vibeweaver")?;
+        api::vibeweaver(&module)?;
+
+        // Add module to globals so `import vibeweaver` works
+        globals.set_item("vibeweaver", &module)?;
+
+        // Also inject commonly-used functions directly into globals for convenience
+        // This allows `session()` instead of `vibeweaver.session()`
+        globals.set_item("session", module.getattr("session")?)?;
+        globals.set_item("tempo", module.getattr("tempo")?)?;
+        globals.set_item("sample", module.getattr("sample")?)?;
+        globals.set_item("latent", module.getattr("latent")?)?;
+        globals.set_item("schedule", module.getattr("schedule")?)?;
+        globals.set_item("audition", module.getattr("audition")?)?;
+        globals.set_item("marker", module.getattr("marker")?)?;
+        globals.set_item("play", module.getattr("play")?)?;
+        globals.set_item("pause", module.getattr("pause")?)?;
+        globals.set_item("stop", module.getattr("stop")?)?;
+        globals.set_item("seek", module.getattr("seek")?)?;
+        globals.set_item("on_beat", module.getattr("on_beat")?)?;
+        globals.set_item("on_marker", module.getattr("on_marker")?)?;
+        globals.set_item("on_artifact", module.getattr("on_artifact")?)?;
+        globals.set_item("gather", module.getattr("gather")?)?;
+
+        Ok(())
     }
 
     /// Evaluate Python expression, returning the result
@@ -88,7 +123,7 @@ impl Kernel {
         self.globals.bind(py).clone()
     }
 
-    /// Clear all globals (for reset), preserving builtins
+    /// Clear all globals (for reset), preserving builtins and vibeweaver API
     pub fn clear(&self) -> Result<()> {
         Python::with_gil(|py| {
             let globals = self.globals.bind(py);
@@ -107,6 +142,9 @@ impl Kernel {
                 let builtins = py.import("builtins")?;
                 globals.set_item("__builtins__", builtins)?;
             }
+
+            // Re-inject vibeweaver API
+            Self::inject_vibeweaver_api(py, &globals)?;
 
             Ok(())
         })
