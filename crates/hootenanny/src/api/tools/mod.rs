@@ -5,4 +5,5 @@ pub mod config;
 pub mod garden;
 pub mod graph_context;
 pub mod graph_query;
+pub mod help;
 pub mod jobs;

@@ -305,6 +305,12 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Set monitor enabled/gain (input -> output passthrough)".to_string(),
             input_schema: schema_for::<super::tools::garden::GardenSetMonitorRequest>(),
         },
+        // Help
+        ToolInfo {
+            name: "holler_help".to_string(),
+            description: "Get detailed tool documentation".to_string(),
+            input_schema: schema_for::<super::tools::help::HelpRequest>(),
+        },
         // Model-Native API Tools
         ToolInfo {
             name: "sample".to_string(),
@@ -495,6 +501,12 @@ pub async fn dispatch_tool(server: &EventDualityServer, name: &str, args: Value)
         "garden_set_monitor" => {
             let request: super::tools::garden::GardenSetMonitorRequest = parse_args(args)?;
             tool_to_json(server.garden_set_monitor(request).await)
+        }
+
+        // Help
+        "holler_help" => {
+            let request: super::tools::help::HelpRequest = parse_args(args)?;
+            tool_to_json(super::tools::help::help(request).await)
         }
 
         // Model-Native API Tools
