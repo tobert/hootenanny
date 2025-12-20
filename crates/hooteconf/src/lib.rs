@@ -209,6 +209,10 @@ impl HootConfig {
             "luanette = \"{}\"\n",
             self.bootstrap.connections.luanette
         ));
+        output.push_str(&format!(
+            "vibeweaver = \"{}\"\n",
+            self.bootstrap.connections.vibeweaver
+        ));
 
         output.push_str("\n[bootstrap.media]\n");
         output.push_str("soundfont_dirs = [\n");

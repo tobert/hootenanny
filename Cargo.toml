@@ -12,5 +12,6 @@ members = [
     "crates/audio-graph-mcp",
     "crates/llmchat",
     "crates/luanette",
+    "crates/vibeweaver",
 ]
 resolver = "2"

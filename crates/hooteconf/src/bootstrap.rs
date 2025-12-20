@@ -35,6 +35,10 @@ pub struct ConnectionsConfig {
     /// Luanette ZMQ endpoint
     #[serde(default = "ConnectionsConfig::default_luanette")]
     pub luanette: String,
+
+    /// Vibeweaver ZMQ endpoint (Python kernel for AI music agents)
+    #[serde(default = "ConnectionsConfig::default_vibeweaver")]
+    pub vibeweaver: String,
 }
 
 impl ConnectionsConfig {
@@ -45,6 +49,10 @@ impl ConnectionsConfig {
     fn default_luanette() -> String {
         "tcp://localhost:5570".to_string()
     }
+
+    fn default_vibeweaver() -> String {
+        "tcp://localhost:5575".to_string()
+    }
 }
 
 impl Default for ConnectionsConfig {
@@ -52,6 +60,7 @@ impl Default for ConnectionsConfig {
         Self {
             chaosgarden: Self::default_chaosgarden(),
             luanette: Self::default_luanette(),
+            vibeweaver: Self::default_vibeweaver(),
         }
     }
 }
@@ -191,6 +200,7 @@ mod tests {
         let conn = ConnectionsConfig::default();
         assert_eq!(conn.chaosgarden, "local");
         assert_eq!(conn.luanette, "tcp://localhost:5570");
+        assert_eq!(conn.vibeweaver, "tcp://localhost:5575");
     }
 
     #[test]

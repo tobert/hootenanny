@@ -148,6 +148,9 @@ fn parse_toml(contents: &str, path: &Path) -> Result<HootConfig, ConfigError> {
             if let Some(v) = conn.get("luanette").and_then(|v| v.as_str()) {
                 bootstrap.connections.luanette = v.to_string();
             }
+            if let Some(v) = conn.get("vibeweaver").and_then(|v| v.as_str()) {
+                bootstrap.connections.vibeweaver = v.to_string();
+            }
         }
 
         if let Some(media) = bootstrap_section.get("media").and_then(|v| v.as_table()) {

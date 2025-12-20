@@ -35,6 +35,7 @@ use crate::cas::FileStore;
 use crate::telemetry;
 use crate::zmq::client_tracker::ClientTracker;
 use crate::zmq::LuanetteClient;
+use crate::zmq::VibeweaverClient;
 
 /// ZMQ server for hooteproto messages
 ///
@@ -53,6 +54,8 @@ pub struct HooteprotoServer {
     event_server: Option<Arc<EventDualityServer>>,
     /// Optional luanette client for Lua scripting proxy
     luanette: Option<Arc<LuanetteClient>>,
+    /// Optional vibeweaver client for Python kernel proxy
+    vibeweaver: Option<Arc<VibeweaverClient>>,
     /// Connected client tracker for bidirectional heartbeats
     client_tracker: Arc<ClientTracker>,
 }
@@ -71,6 +74,7 @@ impl HooteprotoServer {
             start_time: Instant::now(),
             event_server: None,
             luanette: None,
+            vibeweaver: None,
             client_tracker: Arc::new(ClientTracker::new()),
         }
     }
@@ -89,6 +93,7 @@ impl HooteprotoServer {
             start_time: Instant::now(),
             event_server: Some(event_server),
             luanette: None,
+            vibeweaver: None,
             client_tracker: Arc::new(ClientTracker::new()),
         }
     }
@@ -96,6 +101,12 @@ impl HooteprotoServer {
     /// Add luanette client for Lua scripting proxy
     pub fn with_luanette(mut self, luanette: Option<Arc<LuanetteClient>>) -> Self {
         self.luanette = luanette;
+        self
+    }
+
+    /// Add vibeweaver client for Python kernel proxy
+    pub fn with_vibeweaver(mut self, vibeweaver: Option<Arc<VibeweaverClient>>) -> Self {
+        self.vibeweaver = vibeweaver;
         self
     }
 
@@ -357,6 +368,19 @@ impl HooteprotoServer {
             }
         }
 
+        // Route weave_* payloads to vibeweaver if connected
+        if self.should_route_to_vibeweaver(&payload) {
+            if let Some(ref vibeweaver) = self.vibeweaver {
+                return self.dispatch_via_vibeweaver(vibeweaver, payload).await;
+            } else {
+                return Payload::Error {
+                    code: "vibeweaver_not_connected".to_string(),
+                    message: "Python kernel requires vibeweaver connection. Configure bootstrap.connections.vibeweaver in config.".to_string(),
+                    details: None,
+                };
+            }
+        }
+
         // If we have an EventDualityServer, route through it for full functionality
         if let Some(ref server) = self.event_server {
             return self.dispatch_via_server(server, payload).await;
@@ -493,6 +517,37 @@ impl HooteprotoServer {
                 warn!("Luanette proxy error: {}", e);
                 Payload::Error {
                     code: "luanette_proxy_error".to_string(),
+                    message: e.to_string(),
+                    details: None,
+                }
+            }
+        }
+    }
+
+    /// Check if a payload should be routed to vibeweaver
+    fn should_route_to_vibeweaver(&self, payload: &Payload) -> bool {
+        // weave_* tools go to vibeweaver for Python kernel execution
+        // These are ToolCall payloads with weave_* tool names
+        if let Payload::ToolCall { name, .. } = payload {
+            return name.starts_with("weave_");
+        }
+        false
+    }
+
+    /// Dispatch a payload to vibeweaver via ZMQ proxy
+    async fn dispatch_via_vibeweaver(
+        &self,
+        vibeweaver: &VibeweaverClient,
+        payload: Payload,
+    ) -> Payload {
+        debug!("Proxying to vibeweaver: {}", payload_type_name(&payload));
+
+        match vibeweaver.request(payload, None).await {
+            Ok(response) => response,
+            Err(e) => {
+                warn!("Vibeweaver proxy error: {}", e);
+                Payload::Error {
+                    code: "vibeweaver_proxy_error".to_string(),
                     message: e.to_string(),
                     details: None,
                 }

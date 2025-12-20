@@ -337,6 +337,27 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Create smooth transition between MIDI sections".to_string(),
             input_schema: schema_for::<crate::api::native::BridgeRequest>(),
         },
+        // Vibeweaver Tools (Python kernel for AI music agents)
+        ToolInfo {
+            name: "weave_eval".to_string(),
+            description: "Execute Python code in vibeweaver kernel with persistent state. Use for reactive music composition with session(), sample(), schedule(), and @on_beat decorators.".to_string(),
+            input_schema: schema_for::<WeaveEvalRequest>(),
+        },
+        ToolInfo {
+            name: "weave_session".to_string(),
+            description: "Get current vibeweaver session state including active rules, markers, and recent history. Use after context compaction to restore coherent state.".to_string(),
+            input_schema: schema_for::<WeaveSessionRequest>(),
+        },
+        ToolInfo {
+            name: "weave_reset".to_string(),
+            description: "Reset vibeweaver kernel state. Optionally clear session data (rules, markers, history).".to_string(),
+            input_schema: schema_for::<WeaveResetRequest>(),
+        },
+        ToolInfo {
+            name: "weave_help".to_string(),
+            description: "Get vibeweaver documentation. Topics: api (Python functions), session (persistence), scheduler (reactive rules), examples (code snippets).".to_string(),
+            input_schema: schema_for::<WeaveHelpRequest>(),
+        },
     ]
 }
 
@@ -529,6 +550,16 @@ pub async fn dispatch_tool(server: &EventDualityServer, name: &str, args: Value)
         "bridge" => {
             let request: crate::api::native::BridgeRequest = parse_args(args)?;
             tool_to_json(server.bridge(request).await)
+        }
+
+        // Vibeweaver tools - route to vibeweaver backend
+        "weave_eval" | "weave_session" | "weave_reset" | "weave_help" => {
+            // TODO: Route to vibeweaver via ZMQ when connected
+            Err(DispatchError {
+                code: "vibeweaver_not_connected".to_string(),
+                message: "Vibeweaver Python kernel not connected. Start vibeweaver and configure hootenanny with --vibeweaver endpoint.".to_string(),
+                details: None,
+            })
         }
 
         _ => Err(DispatchError::not_found(name)),

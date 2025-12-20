@@ -295,3 +295,30 @@ fn json_object_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema 
     }))
     .unwrap()
 }
+
+// --- Vibeweaver Requests ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WeaveEvalRequest {
+    #[schemars(description = "Python code to execute in the vibeweaver kernel")]
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WeaveSessionRequest {
+    #[schemars(description = "Session ID (uses current session if not specified)")]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WeaveResetRequest {
+    #[schemars(description = "If true, also clear session data (rules, markers, history)")]
+    #[serde(default)]
+    pub clear_session: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WeaveHelpRequest {
+    #[schemars(description = "Help topic: 'api', 'session', 'scheduler', 'examples', or omit for overview")]
+    pub topic: Option<String>,
+}

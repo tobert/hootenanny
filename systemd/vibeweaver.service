@@ -1,0 +1,18 @@
+[Unit]
+Description=Vibeweaver Python Kernel for AI Music Agents
+Documentation=https://github.com/halfremembered/hootenanny
+After=hootenanny.service
+Wants=hootenanny.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/src/hootenanny
+ExecStart=%h/src/hootenanny/target/release/vibeweaver --bind tcp://0.0.0.0:5575
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target

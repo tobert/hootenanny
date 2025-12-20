@@ -248,6 +248,25 @@ async fn main() -> Result<()> {
         None
     };
 
+    // --- Vibeweaver Connection (non-blocking) ---
+    let vibeweaver_endpoint = &config.bootstrap.connections.vibeweaver;
+    let vibeweaver_client: Option<Arc<zmq::VibeweaverClient>> = if !vibeweaver_endpoint.is_empty() {
+        info!("🐍 Connecting to vibeweaver at {}...", vibeweaver_endpoint);
+        match zmq::VibeweaverClient::connect(vibeweaver_endpoint, 30000).await {
+            Ok(client) => {
+                info!("   Connected to vibeweaver!");
+                Some(Arc::new(client))
+            }
+            Err(e) => {
+                tracing::warn!("   Failed to connect to vibeweaver: {}", e);
+                tracing::warn!("   Continuing without Python kernel");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let http_port = config.infra.bind.http_port;
     let zmq_router = &config.infra.bind.zmq_router;
     let zmq_pub = &config.infra.bind.zmq_pub;
@@ -326,7 +345,8 @@ async fn main() -> Result<()> {
         artifact_store.clone(),
         event_duality_server.clone(),
     )
-    .with_luanette(luanette_client.clone());
+    .with_luanette(luanette_client.clone())
+    .with_vibeweaver(vibeweaver_client.clone());
 
     tokio::spawn(async move {
         if let Err(e) = zmq_server.run(shutdown_rx).await {
@@ -336,6 +356,9 @@ async fn main() -> Result<()> {
     info!("   ZMQ ROUTER: {}", zmq_router);
     if luanette_client.is_some() {
         info!("   Luanette proxy: enabled");
+    }
+    if vibeweaver_client.is_some() {
+        info!("   Vibeweaver proxy: enabled");
     }
 
     info!("🎵 Hootenanny starting on http://{}", addr);
@@ -364,6 +387,7 @@ async fn main() -> Result<()> {
         job_store: Arc<job_system::JobStore>,
         start_time: Instant,
         luanette: Option<Arc<zmq::LuanetteClient>>,
+        vibeweaver: Option<Arc<zmq::VibeweaverClient>>,
         garden: Option<Arc<zmq::GardenManager>>,
     }
 
@@ -379,6 +403,13 @@ async fn main() -> Result<()> {
             backends.insert(
                 "luanette".to_string(),
                 luanette.health.health_summary().await,
+            );
+        }
+
+        if let Some(ref vibeweaver) = state.vibeweaver {
+            backends.insert(
+                "vibeweaver".to_string(),
+                vibeweaver.health.health_summary().await,
             );
         }
 
@@ -408,6 +439,7 @@ async fn main() -> Result<()> {
         job_store: job_store.clone(),
         start_time: server_start,
         luanette: luanette_client.clone(),
+        vibeweaver: vibeweaver_client.clone(),
         garden: garden_manager.clone(),
     };
 
