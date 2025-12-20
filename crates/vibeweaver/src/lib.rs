@@ -11,6 +11,7 @@ pub mod kernel;
 pub mod scheduler;
 pub mod session;
 pub mod state;
+pub mod tool_bridge;
 pub mod zmq_client;
 pub mod zmq_server;
 

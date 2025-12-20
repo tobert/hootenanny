@@ -3,11 +3,12 @@
 //! Subscribes to backend PUB sockets and forwards Broadcast messages
 //! to the SSE broadcast channel.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use hooteproto::Broadcast;
+use rzmq::{Context, SocketType};
+use rzmq::socket::options::{LINGER, RECONNECT_IVL, SUBSCRIBE};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
-use zeromq::{Socket, SocketRecv, SubSocket};
 
 /// Configuration for a PUB/SUB subscription
 #[derive(Debug, Clone)]
@@ -23,10 +24,21 @@ pub async fn subscribe_to_backend(
     config: SubscriberConfig,
     broadcast_tx: broadcast::Sender<Broadcast>,
 ) -> Result<()> {
-    let mut socket = SubSocket::new();
+    let context = Context::new()
+        .with_context(|| "Failed to create ZMQ context")?;
+    let socket = context.socket(SocketType::Sub)
+        .with_context(|| "Failed to create SUB socket")?;
+
+    // Set socket options
+    if let Err(e) = socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await {
+        warn!("{}: Failed to set LINGER: {}", config.name, e);
+    }
+    if let Err(e) = socket.set_option_raw(RECONNECT_IVL, &1000i32.to_ne_bytes()).await {
+        warn!("{}: Failed to set RECONNECT_IVL: {}", config.name, e);
+    }
 
     // Subscribe to all messages (empty prefix)
-    socket.subscribe("").await
+    socket.set_option_raw(SUBSCRIBE, b"").await
         .context("Failed to set subscription")?;
 
     socket.connect(&config.endpoint).await
@@ -37,7 +49,7 @@ pub async fn subscribe_to_backend(
     loop {
         match socket.recv().await {
             Ok(msg) => {
-                if let Some(bytes) = msg.get(0) {
+                if let Some(bytes) = msg.data() {
                     match std::str::from_utf8(bytes) {
                         Ok(json) => {
                             debug!("Received broadcast from {}: {}", config.name, json);

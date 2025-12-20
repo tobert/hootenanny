@@ -401,9 +401,21 @@ pub fn capnp_envelope_to_payload(
             Ok(Payload::ToolCall { name, args })
         }
 
+        envelope_capnp::payload::Pong(pong_reader) => {
+            let pong = pong_reader?;
+            let worker_id_reader = pong.get_worker_id()?;
+            let low = worker_id_reader.get_low();
+            let high = worker_id_reader.get_high();
+            let mut bytes = [0u8; 16];
+            bytes[0..8].copy_from_slice(&low.to_le_bytes());
+            bytes[8..16].copy_from_slice(&high.to_le_bytes());
+            let worker_id = uuid::Uuid::from_bytes(bytes);
+            let uptime_secs = pong.get_uptime_secs();
+            Ok(Payload::Pong { worker_id, uptime_secs })
+        }
+
         // Variants not yet implemented
         envelope_capnp::payload::Register(_) |
-        envelope_capnp::payload::Pong(_) |
         envelope_capnp::payload::TimelineEvent(_) => {
             Err(capnp::Error::failed("Payload variant not yet implemented for capnp conversion".to_string()))
         }

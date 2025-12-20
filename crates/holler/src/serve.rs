@@ -1,22 +1,23 @@
 //! MCP gateway server implementation
 //!
 //! Uses baton for MCP protocol handling, forwarding tool calls to ZMQ backends.
-//! Implements Phase 6 of HOOT01 protocol: tool refresh on backend recovery.
+//! Uses hooteproto's HootClient for connection management with built-in heartbeat.
+//!
+//! Startup is lazy following zguide patterns:
+//! - ZMQ connect() is non-blocking, peer doesn't need to exist
+//! - Health task monitors peer responsiveness and triggers tool refresh on connect
+//! - Services can start in any order
 
 use anyhow::{Context, Result};
 use axum::{routing::get, Router};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::info;
 
-use crate::backend::{Backend, BackendPool};
+use crate::backend::BackendPool;
 use crate::handler::{new_tool_cache, refresh_tools_into, ZmqHandler};
-use crate::heartbeat::{BackendState, HeartbeatConfig, HeartbeatResult};
 use crate::subscriber::spawn_subscribers;
-
-/// Callback type for backend recovery events
-pub type RecoveryCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 
 /// Server configuration
 ///
@@ -27,6 +28,8 @@ pub struct ServeConfig {
     pub hootenanny: String,
     /// Hootenanny ZMQ PUB endpoint (optional - for broadcasts/SSE)
     pub hootenanny_pub: Option<String>,
+    /// Request timeout in milliseconds (should be > inner service timeouts)
+    pub timeout_ms: u64,
 }
 
 /// Server state for health endpoint
@@ -57,11 +60,16 @@ pub async fn run(config: ServeConfig) -> Result<()> {
     info!("🎺 Holler MCP gateway starting");
     info!("   Port: {}", config.port);
 
-    // Set up lazy connection to hootenanny (non-blocking startup)
-    // The heartbeat task will handle initial connection and retries
-    info!("   Will connect to Hootenanny at {} (lazy)", config.hootenanny);
+    // Set up connection to hootenanny (ZMQ connect is non-blocking)
+    // The health task will monitor peer responsiveness and trigger tool refresh
+    info!(
+        "   Connecting to Hootenanny at {} (ZMQ lazy connect)",
+        config.hootenanny
+    );
     let mut backends = BackendPool::new();
-    backends.setup_hootenanny_lazy(&config.hootenanny, 5000);
+    backends
+        .setup_hootenanny(&config.hootenanny, config.timeout_ms)
+        .await;
 
     let backends = Arc::new(backends);
 
@@ -76,28 +84,30 @@ pub async fn run(config: ServeConfig) -> Result<()> {
         info!("   📋 No tools loaded yet (backend connecting in background)");
     }
 
-    // Create shutdown channel for heartbeat tasks
+    // Create shutdown channel for health tasks
     let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
 
-    // Create recovery callback that triggers tool refresh into shared cache
-    let cache_for_recovery = tool_cache.clone();
-    let backends_for_recovery = Arc::clone(&backends);
-    let recovery_callback: RecoveryCallback = Arc::new(move || {
-        let cache = cache_for_recovery.clone();
-        let backends = Arc::clone(&backends_for_recovery);
+    // Create callback that triggers tool refresh when backend connects
+    let cache_for_callback = tool_cache.clone();
+    let backends_for_callback = Arc::clone(&backends);
+    let on_connected: Box<dyn Fn() + Send + Sync + 'static> = Box::new(move || {
+        let cache = cache_for_callback.clone();
+        let backends = Arc::clone(&backends_for_callback);
         tokio::spawn(async move {
             let count = refresh_tools_into(&cache, &backends).await;
-            info!("🔄 Backend recovered - refreshed {} tools", count);
+            info!("🔄 Backend connected - refreshed {} tools", count);
         });
     });
 
-    // Spawn heartbeat task for hootenanny with recovery callback
-    let heartbeat_config = HeartbeatConfig::default();
-    spawn_heartbeat_tasks(&backends, heartbeat_config, shutdown_tx.subscribe(), Some(recovery_callback));
+    // Spawn health task for hootenanny with connect callback
+    backends.spawn_health_task(shutdown_tx.subscribe(), Some(on_connected));
 
     // Spawn ZMQ SUB subscriber for hootenanny broadcasts
     if let Some(ref hootenanny_pub) = config.hootenanny_pub {
-        info!("   Subscribing to Hootenanny broadcasts at {}", hootenanny_pub);
+        info!(
+            "   Subscribing to Hootenanny broadcasts at {}",
+            hootenanny_pub
+        );
         let (broadcast_tx, _) = tokio::sync::broadcast::channel::<hooteproto::Broadcast>(256);
         spawn_subscribers(
             broadcast_tx,
@@ -138,9 +148,7 @@ pub async fn run(config: ServeConfig) -> Result<()> {
         .route("/health", get(handle_health))
         .with_state(health_state);
 
-    let app = Router::new()
-        .nest("/mcp", mcp_router)
-        .merge(health_router);
+    let app = Router::new().nest("/mcp", mcp_router).merge(health_router);
 
     // Bind and serve
     let addr = format!("0.0.0.0:{}", config.port);
@@ -150,7 +158,10 @@ pub async fn run(config: ServeConfig) -> Result<()> {
 
     info!("🎺 Holler ready!");
     info!("   MCP (Streamable): POST http://{}/mcp", addr);
-    info!("   MCP (SSE): GET http://{}/mcp/sse + POST http://{}/mcp/message", addr, addr);
+    info!(
+        "   MCP (SSE): GET http://{}/mcp/sse + POST http://{}/mcp/message",
+        addr, addr
+    );
     info!("   Health: GET http://{}/health", addr);
 
     axum::serve(listener, app)
@@ -184,113 +195,3 @@ async fn shutdown_signal() {
     }
 }
 
-/// Spawn heartbeat monitoring task for hootenanny
-fn spawn_heartbeat_tasks(
-    backends: &Arc<BackendPool>,
-    config: HeartbeatConfig,
-    shutdown: tokio::sync::broadcast::Receiver<()>,
-    recovery_callback: Option<RecoveryCallback>,
-) {
-    // Spawn heartbeat for hootenanny (the only backend)
-    if let Some(ref backend) = backends.hootenanny {
-        spawn_backend_heartbeat("hootenanny", Arc::clone(backend), config, shutdown, recovery_callback);
-    }
-}
-
-/// Spawn a heartbeat task for a single backend
-///
-/// Implements the Paranoid Pirate pattern from ZMQ Guide Chapter 4:
-/// - Periodic heartbeat probes
-/// - Exponential backoff reconnection on failure
-/// - Socket close/reopen (not just ZMQ auto-reconnect)
-/// - Tool refresh on Dead → Ready transition
-fn spawn_backend_heartbeat(
-    name: &'static str,
-    backend: Arc<Backend>,
-    config: HeartbeatConfig,
-    mut shutdown: tokio::sync::broadcast::Receiver<()>,
-    recovery_callback: Option<RecoveryCallback>,
-) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(config.interval);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-        info!("💓 Heartbeat monitoring started for {}", name);
-
-        loop {
-            tokio::select! {
-                _ = interval.tick() => {
-                    // Capture state before heartbeat attempt
-                    let state_before = backend.health.get_state();
-
-                    // If we're dead/disconnected, try to reconnect first
-                    if state_before == BackendState::Dead || !backend.is_connected().await {
-                        info!("{}: attempting reconnection...", name);
-                        match backend.reconnect().await {
-                            Ok(true) => {
-                                info!("{}: reconnection successful", name);
-                                // Continue to send heartbeat to verify connection
-                            }
-                            Ok(false) => {
-                                debug!("{}: reconnection failed, will retry", name);
-                                continue; // Skip heartbeat, try again next interval
-                            }
-                            Err(e) => {
-                                warn!("{}: reconnection error: {}", name, e);
-                                continue;
-                            }
-                        }
-                    }
-
-                    let result = backend.send_heartbeat(config.timeout).await;
-
-                    match result {
-                        HeartbeatResult::Success => {
-                            backend.health.record_message_received().await;
-                            debug!("{}: heartbeat OK", name);
-
-                            // Detect Dead → Ready transition (Phase 6: tool refresh)
-                            if state_before == BackendState::Dead {
-                                info!("🔄 {}: recovered from DEAD state", name);
-                                if let Some(ref callback) = recovery_callback {
-                                    callback();
-                                }
-                            }
-                        }
-                        HeartbeatResult::Timeout => {
-                            let failures = backend.health.record_failure();
-                            warn!("{}: heartbeat timeout ({}/{})", name, failures, config.max_failures);
-
-                            if failures >= config.max_failures {
-                                let prev = backend.health.set_state(BackendState::Dead);
-                                if prev != BackendState::Dead {
-                                    warn!("{}: marked as DEAD after {} consecutive failures", name, failures);
-                                }
-                            }
-                        }
-                        HeartbeatResult::Error(e) => {
-                            let failures = backend.health.record_failure();
-                            warn!("{}: heartbeat error: {} ({}/{})", name, e, failures, config.max_failures);
-
-                            if failures >= config.max_failures {
-                                let prev = backend.health.set_state(BackendState::Dead);
-                                if prev != BackendState::Dead {
-                                    warn!("{}: marked as DEAD after {} consecutive failures", name, failures);
-                                }
-                            }
-                        }
-                        HeartbeatResult::Disconnected => {
-                            // Socket is gone - mark dead and trigger reconnection on next tick
-                            warn!("{}: socket disconnected, marking as DEAD", name);
-                            backend.health.set_state(BackendState::Dead);
-                        }
-                    }
-                }
-                _ = shutdown.recv() => {
-                    info!("{}: heartbeat task shutting down", name);
-                    break;
-                }
-            }
-        }
-    });
-}

@@ -7,7 +7,7 @@ Wants=hootenanny.service
 [Service]
 Type=simple
 WorkingDirectory=%h/src/hootenanny
-ExecStart=%h/src/hootenanny/target/release/vibeweaver --bind tcp://0.0.0.0:5575
+ExecStart=%h/src/hootenanny/target/release/vibeweaver
 Restart=always
 RestartSec=5
 TimeoutStopSec=30

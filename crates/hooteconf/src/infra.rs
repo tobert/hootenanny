@@ -145,6 +145,12 @@ pub struct GatewayConfig {
     /// Default: tcp://localhost:5581
     #[serde(default = "GatewayConfig::default_hootenanny_pub")]
     pub hootenanny_pub: String,
+
+    /// Request timeout in milliseconds.
+    /// Should be slightly longer than inner service timeouts (30s) to allow for overhead.
+    /// Default: 35000 (35s)
+    #[serde(default = "GatewayConfig::default_timeout_ms")]
+    pub timeout_ms: u64,
 }
 
 impl GatewayConfig {
@@ -159,6 +165,10 @@ impl GatewayConfig {
     fn default_hootenanny_pub() -> String {
         "tcp://localhost:5581".to_string()
     }
+
+    fn default_timeout_ms() -> u64 {
+        35_000
+    }
 }
 
 impl Default for GatewayConfig {
@@ -167,8 +177,154 @@ impl Default for GatewayConfig {
             http_port: Self::default_http_port(),
             hootenanny: Self::default_hootenanny(),
             hootenanny_pub: Self::default_hootenanny_pub(),
+            timeout_ms: Self::default_timeout_ms(),
         }
     }
+}
+
+/// Luanette service configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LuanetteConfig {
+    /// ZMQ ROUTER address to bind (for receiving requests).
+    /// Default: tcp://0.0.0.0:5570
+    #[serde(default = "LuanetteConfig::default_zmq_router")]
+    pub zmq_router: String,
+
+    /// Hootenanny ZMQ ROUTER endpoint to connect to.
+    /// Default: tcp://localhost:5580
+    #[serde(default = "LuanetteConfig::default_hootenanny")]
+    pub hootenanny: String,
+
+    /// Request timeout in milliseconds.
+    /// Default: 30000
+    #[serde(default = "LuanetteConfig::default_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+impl LuanetteConfig {
+    fn default_zmq_router() -> String {
+        "tcp://0.0.0.0:5570".to_string()
+    }
+
+    fn default_hootenanny() -> String {
+        "tcp://localhost:5580".to_string()
+    }
+
+    fn default_timeout_ms() -> u64 {
+        30000
+    }
+}
+
+impl Default for LuanetteConfig {
+    fn default() -> Self {
+        Self {
+            zmq_router: Self::default_zmq_router(),
+            hootenanny: Self::default_hootenanny(),
+            timeout_ms: Self::default_timeout_ms(),
+        }
+    }
+}
+
+/// Vibeweaver service configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VibeweaverConfig {
+    /// ZMQ ROUTER address to bind (for receiving requests).
+    /// Default: tcp://0.0.0.0:5575
+    #[serde(default = "VibeweaverConfig::default_zmq_router")]
+    pub zmq_router: String,
+
+    /// Hootenanny ZMQ ROUTER endpoint to connect to.
+    /// Default: tcp://localhost:5580
+    #[serde(default = "VibeweaverConfig::default_hootenanny")]
+    pub hootenanny: String,
+
+    /// Hootenanny ZMQ PUB endpoint for broadcasts.
+    /// Default: tcp://localhost:5581
+    #[serde(default = "VibeweaverConfig::default_hootenanny_pub")]
+    pub hootenanny_pub: String,
+
+    /// Request timeout in milliseconds.
+    /// Default: 30000
+    #[serde(default = "VibeweaverConfig::default_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+impl VibeweaverConfig {
+    fn default_zmq_router() -> String {
+        "tcp://0.0.0.0:5575".to_string()
+    }
+
+    fn default_hootenanny() -> String {
+        "tcp://localhost:5580".to_string()
+    }
+
+    fn default_hootenanny_pub() -> String {
+        "tcp://localhost:5581".to_string()
+    }
+
+    fn default_timeout_ms() -> u64 {
+        30000
+    }
+}
+
+impl Default for VibeweaverConfig {
+    fn default() -> Self {
+        Self {
+            zmq_router: Self::default_zmq_router(),
+            hootenanny: Self::default_hootenanny(),
+            hootenanny_pub: Self::default_hootenanny_pub(),
+            timeout_ms: Self::default_timeout_ms(),
+        }
+    }
+}
+
+/// Chaosgarden service configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChaosgardenConfig {
+    /// ZMQ ROUTER address to bind (for receiving requests).
+    /// Default: tcp://0.0.0.0:5585
+    #[serde(default = "ChaosgardenConfig::default_zmq_router")]
+    pub zmq_router: String,
+
+    /// IPC socket path for local communication.
+    /// Default: /tmp/chaosgarden.sock
+    #[serde(default = "ChaosgardenConfig::default_ipc_socket")]
+    pub ipc_socket: String,
+}
+
+impl ChaosgardenConfig {
+    fn default_zmq_router() -> String {
+        "tcp://0.0.0.0:5585".to_string()
+    }
+
+    fn default_ipc_socket() -> String {
+        "/tmp/chaosgarden.sock".to_string()
+    }
+}
+
+impl Default for ChaosgardenConfig {
+    fn default() -> Self {
+        Self {
+            zmq_router: Self::default_zmq_router(),
+            ipc_socket: Self::default_ipc_socket(),
+        }
+    }
+}
+
+/// Per-service configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ServicesConfig {
+    /// Luanette Lua interpreter service.
+    #[serde(default)]
+    pub luanette: LuanetteConfig,
+
+    /// Vibeweaver Python/AI agent service.
+    #[serde(default)]
+    pub vibeweaver: VibeweaverConfig,
+
+    /// Chaosgarden audio output daemon.
+    #[serde(default)]
+    pub chaosgarden: ChaosgardenConfig,
 }
 
 /// Infrastructure configuration - cannot change at runtime.
@@ -189,6 +345,10 @@ pub struct InfraConfig {
     /// Gateway (holler) settings.
     #[serde(default)]
     pub gateway: GatewayConfig,
+
+    /// Per-service settings.
+    #[serde(default)]
+    pub services: ServicesConfig,
 }
 
 #[cfg(test)]

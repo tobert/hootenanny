@@ -225,6 +225,7 @@ async fn main() -> Result<()> {
                 port: config.infra.gateway.http_port,
                 hootenanny: config.infra.gateway.hootenanny,
                 hootenanny_pub: Some(config.infra.gateway.hootenanny_pub),
+                timeout_ms: config.infra.gateway.timeout_ms,
             })
             .await?;
         }

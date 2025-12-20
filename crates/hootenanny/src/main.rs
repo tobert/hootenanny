@@ -229,40 +229,22 @@ async fn main() -> Result<()> {
         }
     };
 
-    // --- Luanette Connection (non-blocking) ---
+    // --- Luanette Connection (lazy - ZMQ connects when peer available) ---
     let luanette_endpoint = &config.bootstrap.connections.luanette;
     let luanette_client: Option<Arc<zmq::LuanetteClient>> = if !luanette_endpoint.is_empty() {
         info!("🌙 Connecting to luanette at {}...", luanette_endpoint);
-        match zmq::LuanetteClient::connect(luanette_endpoint, 30000).await {
-            Ok(client) => {
-                info!("   Connected to luanette!");
-                Some(Arc::new(client))
-            }
-            Err(e) => {
-                tracing::warn!("   Failed to connect to luanette: {}", e);
-                tracing::warn!("   Continuing without Lua scripting");
-                None
-            }
-        }
+        let luanette_config = zmq::luanette_config(luanette_endpoint, 30000);
+        Some(zmq::LuanetteClient::new(luanette_config).await)
     } else {
         None
     };
 
-    // --- Vibeweaver Connection (non-blocking) ---
+    // --- Vibeweaver Connection (lazy - ZMQ connects when peer available) ---
     let vibeweaver_endpoint = &config.bootstrap.connections.vibeweaver;
     let vibeweaver_client: Option<Arc<zmq::VibeweaverClient>> = if !vibeweaver_endpoint.is_empty() {
         info!("🐍 Connecting to vibeweaver at {}...", vibeweaver_endpoint);
-        match zmq::VibeweaverClient::connect(vibeweaver_endpoint, 30000).await {
-            Ok(client) => {
-                info!("   Connected to vibeweaver!");
-                Some(Arc::new(client))
-            }
-            Err(e) => {
-                tracing::warn!("   Failed to connect to vibeweaver: {}", e);
-                tracing::warn!("   Continuing without Python kernel");
-                None
-            }
-        }
+        let vibeweaver_config = zmq::vibeweaver_config(vibeweaver_endpoint, 30000);
+        Some(zmq::VibeweaverClient::new(vibeweaver_config).await)
     } else {
         None
     };

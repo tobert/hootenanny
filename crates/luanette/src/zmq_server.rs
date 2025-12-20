@@ -5,32 +5,40 @@
 //! - Hootenanny (proxying tools)
 //! - holler CLI (direct access)
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use bytes::Bytes;
 use hooteproto::{
     capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope,
     Command, ContentType, HootFrame, Payload, PROTOCOL_VERSION,
 };
+use rzmq::{Context, Msg, MsgFlags, Socket, SocketType};
+use rzmq::socket::options::LINGER;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
-use zeromq::{RouterSocket, Socket, SocketRecv, SocketSend, ZmqMessage};
 
 use crate::dispatch::Dispatcher;
 
-/// Frames to ZmqMessage helper
-fn frames_to_zmq_message(frames: &[Bytes]) -> ZmqMessage {
-    if frames.is_empty() {
-        return ZmqMessage::from(Vec::<u8>::new());
-    }
+/// Frames to Vec<Msg> helper for rzmq multipart
+fn frames_to_msgs(frames: &[Bytes]) -> Vec<Msg> {
+    frames.iter().map(|f| Msg::from_vec(f.to_vec())).collect()
+}
 
-    let mut msg = ZmqMessage::from(frames[0].to_vec());
-    for frame in frames.iter().skip(1) {
-        msg.push_back(frame.to_vec().into());
+/// Send multipart using individual send() calls with MORE flags.
+/// rzmq's ROUTER socket has a bug in send_multipart that drops frames.
+async fn send_multipart_individually(socket: &Socket, msgs: Vec<Msg>) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let last_idx = msgs.len().saturating_sub(1);
+    for (i, mut msg) in msgs.into_iter().enumerate() {
+        if i < last_idx {
+            msg.set_flags(MsgFlags::MORE);
+        }
+        socket.send(msg).await
+            .with_context(|| format!("Failed to send frame {} of multipart", i))?;
     }
-    msg
+    Ok(())
 }
 
 /// ZMQ server configuration
@@ -67,7 +75,17 @@ impl Server {
     /// Run the server until shutdown signal
     #[instrument(skip(self, shutdown_rx), fields(bind = %self.config.bind_address))]
     pub async fn run(self, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
-        let mut socket = RouterSocket::new();
+        let context = Context::new()
+            .with_context(|| "Failed to create ZMQ context")?;
+        let socket = context
+            .socket(SocketType::Router)
+            .with_context(|| "Failed to create ROUTER socket")?;
+
+        // Set LINGER to 0 for immediate close
+        if let Err(e) = socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await {
+            warn!("Failed to set LINGER: {}", e);
+        }
+
         socket
             .bind(&self.config.bind_address)
             .await
@@ -77,10 +95,10 @@ impl Server {
 
         loop {
             tokio::select! {
-                result = socket.recv() => {
+                result = socket.recv_multipart() => {
                     match result {
-                        Ok(msg) => {
-                            if let Err(e) = self.handle_message(&mut socket, msg).await {
+                        Ok(msgs) => {
+                            if let Err(e) = self.handle_message(&socket, msgs).await {
                                 error!("Error handling message: {}", e);
                             }
                         }
@@ -100,9 +118,12 @@ impl Server {
     }
 
     /// Handle a single incoming message
-    async fn handle_message(&self, socket: &mut RouterSocket, msg: ZmqMessage) -> Result<()> {
+    async fn handle_message(&self, socket: &Socket, msgs: Vec<Msg>) -> Result<()> {
         // Convert ZMQ message to frames
-        let frames: Vec<Bytes> = msg.iter().map(|f| Bytes::copy_from_slice(f)).collect();
+        let frames: Vec<Bytes> = msgs
+            .iter()
+            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+            .collect();
 
         // Only accept HOOT01 frames
         if !frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
@@ -120,11 +141,11 @@ impl Server {
 
         match frame.command {
             Command::Heartbeat => {
-                // Respond with heartbeat
+                // Respond with heartbeat - use individual send() as rzmq ROUTER send_multipart has a bug
                 let response = HootFrame::heartbeat("luanette");
                 let reply_frames = response.to_frames_with_identity(&identity);
-                let reply = frames_to_zmq_message(&reply_frames);
-                socket.send(reply).await?;
+                let reply = frames_to_msgs(&reply_frames);
+                send_multipart_individually(socket, reply).await?;
                 debug!("Heartbeat response sent");
             }
 
@@ -168,8 +189,9 @@ impl Server {
                 };
 
                 let reply_frames = response_frame.to_frames_with_identity(&identity);
-                let reply = frames_to_zmq_message(&reply_frames);
-                socket.send(reply).await?;
+                let reply = frames_to_msgs(&reply_frames);
+                // Use individual send() - rzmq ROUTER send_multipart has a bug
+                send_multipart_individually(socket, reply).await?;
             }
 
             other => {

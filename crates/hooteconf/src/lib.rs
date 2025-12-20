@@ -66,7 +66,10 @@ pub mod infra;
 pub mod loader;
 
 pub use bootstrap::{BootstrapConfig, ConnectionsConfig, DefaultsConfig, MediaConfig, ModelsConfig};
-pub use infra::{BindConfig, GatewayConfig, InfraConfig, PathsConfig, TelemetryConfig};
+pub use infra::{
+    BindConfig, ChaosgardenConfig, GatewayConfig, InfraConfig, LuanetteConfig, PathsConfig,
+    ServicesConfig, TelemetryConfig, VibeweaverConfig,
+};
 pub use loader::{ConfigSources, discover_config_files_with_override};
 
 use serde::{Deserialize, Serialize};
@@ -238,6 +241,48 @@ impl HootConfig {
         output.push_str(&format!(
             "max_concurrent_jobs = {}\n",
             self.bootstrap.defaults.max_concurrent_jobs
+        ));
+
+        output.push_str("\n[services.luanette]\n");
+        output.push_str(&format!(
+            "zmq_router = \"{}\"\n",
+            self.infra.services.luanette.zmq_router
+        ));
+        output.push_str(&format!(
+            "hootenanny = \"{}\"\n",
+            self.infra.services.luanette.hootenanny
+        ));
+        output.push_str(&format!(
+            "timeout_ms = {}\n",
+            self.infra.services.luanette.timeout_ms
+        ));
+
+        output.push_str("\n[services.vibeweaver]\n");
+        output.push_str(&format!(
+            "zmq_router = \"{}\"\n",
+            self.infra.services.vibeweaver.zmq_router
+        ));
+        output.push_str(&format!(
+            "hootenanny = \"{}\"\n",
+            self.infra.services.vibeweaver.hootenanny
+        ));
+        output.push_str(&format!(
+            "hootenanny_pub = \"{}\"\n",
+            self.infra.services.vibeweaver.hootenanny_pub
+        ));
+        output.push_str(&format!(
+            "timeout_ms = {}\n",
+            self.infra.services.vibeweaver.timeout_ms
+        ));
+
+        output.push_str("\n[services.chaosgarden]\n");
+        output.push_str(&format!(
+            "zmq_router = \"{}\"\n",
+            self.infra.services.chaosgarden.zmq_router
+        ));
+        output.push_str(&format!(
+            "ipc_socket = \"{}\"\n",
+            self.infra.services.chaosgarden.ipc_socket
         ));
 
         output

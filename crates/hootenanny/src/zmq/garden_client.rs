@@ -3,7 +3,7 @@
 //! Connects to chaosgarden using the Jupyter-inspired 5-socket protocol over HOOT01 frames.
 //! Uses JSON serialization for garden message envelopes.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use bytes::Bytes;
 use chaosgarden::ipc::{
     ControlReply, ControlRequest, GardenEndpoints, IOPubEvent, Message, QueryReply,
@@ -11,6 +11,8 @@ use chaosgarden::ipc::{
 };
 use futures::stream::Stream;
 use hooteproto::{Command, ContentType, HootFrame, PROTOCOL_VERSION};
+use rzmq::{Context, Msg, Socket, SocketType};
+use rzmq::socket::options::{LINGER, RECONNECT_IVL, ROUTING_ID, SUBSCRIBE};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -18,16 +20,17 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
-use zeromq::{DealerSocket, ReqSocket, Socket, SocketRecv, SocketSend, SubSocket, ZmqMessage};
 
 /// Client for connecting to chaosgarden's ZMQ endpoints
 pub struct GardenClient {
     session: Uuid,
-    control: Arc<RwLock<DealerSocket>>,
-    shell: Arc<RwLock<DealerSocket>>,
-    iopub: Arc<RwLock<SubSocket>>,
-    heartbeat: Arc<RwLock<ReqSocket>>,
-    query: Arc<RwLock<ReqSocket>>,
+    #[allow(dead_code)]
+    context: Context,
+    control: Arc<RwLock<Socket>>,
+    shell: Arc<RwLock<Socket>>,
+    iopub: Arc<RwLock<Socket>>,
+    heartbeat: Arc<RwLock<Socket>>,
+    query: Arc<RwLock<Socket>>,
     timeout: Duration,
 }
 
@@ -38,26 +41,56 @@ impl GardenClient {
 
         debug!("Creating sockets for chaosgarden session {}", session);
 
+        let context = Context::new()
+            .with_context(|| "Failed to create ZMQ context")?;
+
+        // Helper to set common socket options
+        async fn set_socket_opts(socket: &Socket, name: &str) {
+            if let Err(e) = socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await {
+                warn!("{}: Failed to set LINGER: {}", name, e);
+            }
+            if let Err(e) = socket.set_option_raw(RECONNECT_IVL, &1000i32.to_ne_bytes()).await {
+                warn!("{}: Failed to set RECONNECT_IVL: {}", name, e);
+            }
+        }
+
         // Create and connect all sockets
-        let mut control = DealerSocket::new();
+        let control = context.socket(SocketType::Dealer)
+            .with_context(|| "Failed to create control socket")?;
+        set_socket_opts(&control, "control").await;
+        if let Err(e) = control.set_option_raw(ROUTING_ID, b"garden-control").await {
+            warn!("control: Failed to set ROUTING_ID: {}", e);
+        }
         control.connect(&endpoints.control).await.with_context(|| {
             format!("Failed to connect control socket to {}", endpoints.control)
         })?;
 
-        let mut shell = DealerSocket::new();
+        let shell = context.socket(SocketType::Dealer)
+            .with_context(|| "Failed to create shell socket")?;
+        set_socket_opts(&shell, "shell").await;
+        if let Err(e) = shell.set_option_raw(ROUTING_ID, b"garden-shell").await {
+            warn!("shell: Failed to set ROUTING_ID: {}", e);
+        }
         shell
             .connect(&endpoints.shell)
             .await
             .with_context(|| format!("Failed to connect shell socket to {}", endpoints.shell))?;
 
-        let mut iopub = SubSocket::new();
-        iopub.subscribe("").await?; // Subscribe to all messages
+        let iopub = context.socket(SocketType::Sub)
+            .with_context(|| "Failed to create iopub socket")?;
+        set_socket_opts(&iopub, "iopub").await;
+        // Subscribe to all messages
+        if let Err(e) = iopub.set_option_raw(SUBSCRIBE, b"").await {
+            warn!("iopub: Failed to subscribe: {}", e);
+        }
         iopub
             .connect(&endpoints.iopub)
             .await
             .with_context(|| format!("Failed to connect iopub socket to {}", endpoints.iopub))?;
 
-        let mut heartbeat = ReqSocket::new();
+        let heartbeat = context.socket(SocketType::Req)
+            .with_context(|| "Failed to create heartbeat socket")?;
+        set_socket_opts(&heartbeat, "heartbeat").await;
         heartbeat
             .connect(&endpoints.heartbeat)
             .await
@@ -68,7 +101,9 @@ impl GardenClient {
                 )
             })?;
 
-        let mut query = ReqSocket::new();
+        let query = context.socket(SocketType::Req)
+            .with_context(|| "Failed to create query socket")?;
+        set_socket_opts(&query, "query").await;
         query
             .connect(&endpoints.query)
             .await
@@ -78,6 +113,7 @@ impl GardenClient {
 
         Ok(Self {
             session,
+            context,
             control: Arc::new(RwLock::new(control)),
             shell: Arc::new(RwLock::new(shell)),
             iopub: Arc::new(RwLock::new(iopub)),
@@ -119,24 +155,27 @@ impl GardenClient {
         };
 
         let frames = frame.to_frames();
-        let zmq_msg = frames_to_zmq_message(&frames);
+        let msgs = frames_to_msgs(&frames);
 
         debug!("Sending shell request ({})", request_id);
 
-        let mut socket = self.shell.write().await;
+        let socket = self.shell.write().await;
 
         // Send
-        tokio::time::timeout(self.timeout, socket.send(zmq_msg))
+        tokio::time::timeout(self.timeout, socket.send_multipart(msgs))
             .await
             .context("Shell request send timeout")??;
 
         // Receive
-        let response = tokio::time::timeout(self.timeout, socket.recv())
+        let response = tokio::time::timeout(self.timeout, socket.recv_multipart())
             .await
             .context("Shell response receive timeout")??;
 
         // Parse response
-        let response_frames: Vec<Bytes> = response.into_vec();
+        let response_frames: Vec<Bytes> = response
+            .into_iter()
+            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+            .collect();
 
         let response_frame =
             HootFrame::from_frames(&response_frames).context("Failed to parse response frame")?;
@@ -171,24 +210,27 @@ impl GardenClient {
         };
 
         let frames = frame.to_frames();
-        let zmq_msg = frames_to_zmq_message(&frames);
+        let msgs = frames_to_msgs(&frames);
 
         debug!("Sending control request ({})", request_id);
 
-        let mut socket = self.control.write().await;
+        let socket = self.control.write().await;
 
         // Send
-        tokio::time::timeout(self.timeout, socket.send(zmq_msg))
+        tokio::time::timeout(self.timeout, socket.send_multipart(msgs))
             .await
             .context("Control request send timeout")??;
 
         // Receive
-        let response = tokio::time::timeout(self.timeout, socket.recv())
+        let response = tokio::time::timeout(self.timeout, socket.recv_multipart())
             .await
             .context("Control response receive timeout")??;
 
         // Parse response
-        let response_frames: Vec<Bytes> = response.into_vec();
+        let response_frames: Vec<Bytes> = response
+            .into_iter()
+            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+            .collect();
 
         let response_frame =
             HootFrame::from_frames(&response_frames).context("Failed to parse response frame")?;
@@ -232,24 +274,27 @@ impl GardenClient {
         };
 
         let frames = frame.to_frames();
-        let zmq_msg = frames_to_zmq_message(&frames);
+        let msgs = frames_to_msgs(&frames);
 
         debug!("Sending query ({})", request_id);
 
-        let mut socket = self.query.write().await;
+        let socket = self.query.write().await;
 
         // Send
-        tokio::time::timeout(self.timeout, socket.send(zmq_msg))
+        tokio::time::timeout(self.timeout, socket.send_multipart(msgs))
             .await
             .context("Query send timeout")??;
 
         // Receive
-        let response = tokio::time::timeout(self.timeout, socket.recv())
+        let response = tokio::time::timeout(self.timeout, socket.recv_multipart())
             .await
             .context("Query response timeout")??;
 
         // Parse response
-        let response_frames: Vec<Bytes> = response.into_vec();
+        let response_frames: Vec<Bytes> = response
+            .into_iter()
+            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+            .collect();
 
         let response_frame =
             HootFrame::from_frames(&response_frames).context("Failed to parse response frame")?;
@@ -271,23 +316,25 @@ impl GardenClient {
     pub async fn ping(&self, timeout: Duration) -> Result<bool> {
         let frame = HootFrame::heartbeat("chaosgarden");
         let frames = frame.to_frames();
-        let msg = frames_to_zmq_message(&frames);
+        let msgs = frames_to_msgs(&frames);
 
-        let mut socket = self.heartbeat.write().await;
+        let socket = self.heartbeat.write().await;
 
         // Send heartbeat
-        tokio::time::timeout(timeout, socket.send(msg))
+        tokio::time::timeout(timeout, socket.send_multipart(msgs))
             .await
             .context("Heartbeat send timeout")??;
 
         // Wait for response
-        let response = tokio::time::timeout(timeout, socket.recv())
+        let response = tokio::time::timeout(timeout, socket.recv_multipart())
             .await
             .context("Heartbeat receive timeout")??;
 
         // Check for HOOT01 heartbeat reply
-        let response_frames: Vec<Bytes> =
-            response.iter().map(|f| Bytes::copy_from_slice(f)).collect();
+        let response_frames: Vec<Bytes> = response
+            .iter()
+            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+            .collect();
 
         if response_frames
             .iter()
@@ -314,13 +361,16 @@ impl GardenClient {
         Box::pin(async_stream::stream! {
             loop {
                 let msg = {
-                    let mut socket = iopub.write().await;
-                    socket.recv().await
+                    let socket = iopub.write().await;
+                    socket.recv_multipart().await
                 };
 
                 match msg {
-                    Ok(zmq_msg) => {
-                        let frames: Vec<Bytes> = zmq_msg.into_vec();
+                    Ok(zmq_msgs) => {
+                        let frames: Vec<Bytes> = zmq_msgs
+                            .into_iter()
+                            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+                            .collect();
 
                         // Skip subscription filter frame if present
                         let frame_result = if frames.len() > 1 && frames[0].is_empty() {
@@ -356,15 +406,7 @@ impl GardenClient {
     }
 }
 
-/// Convert Vec<Bytes> to ZmqMessage
-fn frames_to_zmq_message(frames: &[Bytes]) -> ZmqMessage {
-    if frames.is_empty() {
-        return ZmqMessage::from(Vec::<u8>::new());
-    }
-
-    let mut msg = ZmqMessage::from(frames[0].to_vec());
-    for frame in frames.iter().skip(1) {
-        msg.push_back(frame.to_vec().into());
-    }
-    msg
+/// Convert Vec<Bytes> to Vec<Msg> for rzmq multipart
+fn frames_to_msgs(frames: &[Bytes]) -> Vec<Msg> {
+    frames.iter().map(|f| Msg::from_vec(f.to_vec())).collect()
 }

@@ -31,12 +31,12 @@ cas = { path = "../cas" }
 chaosgarden = { path = "../chaosgarden" }
 audio-graph-mcp = { path = "../audio-graph-mcp" }
 hooteconf = { path = "../hooteconf" }
-hooteproto = { path = "../hooteproto" }
+hooteproto = { path = "../hooteproto", features = ["client"] }
 capnp = "0.20"
 
 # ZMQ for internal IPC
 bytes = "1.9"
-zeromq = "0.4"
+rzmq = { version = "0.5", features = ["ipc"] }
 trustfall = "0.8"
 bincode = "1.3"
 clap = { version = "4.5.51", features = ["derive"] }

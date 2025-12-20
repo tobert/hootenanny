@@ -1,10 +1,11 @@
 //! Integration tests for ZMQ SUB subscriber
 
 use hooteproto::Broadcast;
+use rzmq::{Context, Msg, SocketType};
+use rzmq::socket::options::{LINGER, SUBSCRIBE};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tokio::sync::broadcast;
-use zeromq::{PubSocket, Socket, SocketSend};
 
 static PUB_PORT: AtomicU16 = AtomicU16::new(26580);
 
@@ -21,7 +22,9 @@ async fn test_subscriber_receives_broadcast() {
     let (tx, mut rx) = broadcast::channel::<Broadcast>(16);
 
     // Start a mock PUB socket
-    let mut pub_socket = PubSocket::new();
+    let pub_context = Context::new().unwrap();
+    let pub_socket = pub_context.socket(SocketType::Pub).unwrap();
+    pub_socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
     pub_socket.bind(&endpoint).await.unwrap();
 
     // Give socket time to bind
@@ -31,15 +34,15 @@ async fn test_subscriber_receives_broadcast() {
     let endpoint_clone = endpoint.clone();
     let tx_clone = tx.clone();
     tokio::spawn(async move {
-        use zeromq::{Socket, SocketRecv, SubSocket};
-
-        let mut sub_socket = SubSocket::new();
-        sub_socket.subscribe("").await.unwrap();
+        let sub_context = Context::new().unwrap();
+        let sub_socket = sub_context.socket(SocketType::Sub).unwrap();
+        sub_socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
+        sub_socket.set_option_raw(SUBSCRIBE, b"").await.unwrap();
         sub_socket.connect(&endpoint_clone).await.unwrap();
 
         // Receive one message and forward it
         if let Ok(msg) = sub_socket.recv().await {
-            if let Some(bytes) = msg.get(0) {
+            if let Some(bytes) = msg.data() {
                 if let Ok(json) = std::str::from_utf8(bytes) {
                     if let Ok(broadcast) = serde_json::from_str::<Broadcast>(json) {
                         let _ = tx_clone.send(broadcast);
@@ -53,15 +56,14 @@ async fn test_subscriber_receives_broadcast() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Publish a broadcast
-    let broadcast = Broadcast::JobStateChanged {
+    let broadcast_msg = Broadcast::JobStateChanged {
         job_id: "test-job-123".to_string(),
         state: "completed".to_string(),
         result: Some(serde_json::json!({"output": "success"})),
     };
 
-    let json = serde_json::to_string(&broadcast).unwrap();
-    let msg = zeromq::ZmqMessage::from(json.into_bytes());
-    pub_socket.send(msg).await.unwrap();
+    let json = serde_json::to_string(&broadcast_msg).unwrap();
+    pub_socket.send(Msg::from_vec(json.into_bytes())).await.unwrap();
 
     // Receive from broadcast channel
     let received = tokio::time::timeout(Duration::from_secs(2), rx.recv())
@@ -84,7 +86,9 @@ async fn test_subscriber_handles_multiple_broadcasts() {
 
     let (tx, mut rx) = broadcast::channel::<Broadcast>(16);
 
-    let mut pub_socket = PubSocket::new();
+    let pub_context = Context::new().unwrap();
+    let pub_socket = pub_context.socket(SocketType::Pub).unwrap();
+    pub_socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
     pub_socket.bind(&endpoint).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -93,16 +97,16 @@ async fn test_subscriber_handles_multiple_broadcasts() {
     let endpoint_clone = endpoint.clone();
     let tx_clone = tx.clone();
     tokio::spawn(async move {
-        use zeromq::{Socket, SocketRecv, SubSocket};
-
-        let mut sub_socket = SubSocket::new();
-        sub_socket.subscribe("").await.unwrap();
+        let sub_context = Context::new().unwrap();
+        let sub_socket = sub_context.socket(SocketType::Sub).unwrap();
+        sub_socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
+        sub_socket.set_option_raw(SUBSCRIBE, b"").await.unwrap();
         sub_socket.connect(&endpoint_clone).await.unwrap();
 
         // Receive multiple messages
         for _ in 0..3 {
             if let Ok(msg) = sub_socket.recv().await {
-                if let Some(bytes) = msg.get(0) {
+                if let Some(bytes) = msg.data() {
                     if let Ok(json) = std::str::from_utf8(bytes) {
                         if let Ok(broadcast) = serde_json::from_str::<Broadcast>(json) {
                             let _ = tx_clone.send(broadcast);
@@ -117,13 +121,13 @@ async fn test_subscriber_handles_multiple_broadcasts() {
 
     // Publish 3 broadcasts
     for i in 0..3 {
-        let broadcast = Broadcast::BeatTick {
+        let broadcast_msg = Broadcast::BeatTick {
             beat: i,
             position_beats: i as f64,
             tempo_bpm: 120.0,
         };
-        let json = serde_json::to_string(&broadcast).unwrap();
-        pub_socket.send(zeromq::ZmqMessage::from(json.into_bytes())).await.unwrap();
+        let json = serde_json::to_string(&broadcast_msg).unwrap();
+        pub_socket.send(Msg::from_vec(json.into_bytes())).await.unwrap();
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
@@ -149,7 +153,9 @@ async fn test_subscriber_parses_artifact_created() {
 
     let (tx, mut rx) = broadcast::channel::<Broadcast>(16);
 
-    let mut pub_socket = PubSocket::new();
+    let pub_context = Context::new().unwrap();
+    let pub_socket = pub_context.socket(SocketType::Pub).unwrap();
+    pub_socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
     pub_socket.bind(&endpoint).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -157,14 +163,14 @@ async fn test_subscriber_parses_artifact_created() {
     let endpoint_clone = endpoint.clone();
     let tx_clone = tx.clone();
     tokio::spawn(async move {
-        use zeromq::{Socket, SocketRecv, SubSocket};
-
-        let mut sub_socket = SubSocket::new();
-        sub_socket.subscribe("").await.unwrap();
+        let sub_context = Context::new().unwrap();
+        let sub_socket = sub_context.socket(SocketType::Sub).unwrap();
+        sub_socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
+        sub_socket.set_option_raw(SUBSCRIBE, b"").await.unwrap();
         sub_socket.connect(&endpoint_clone).await.unwrap();
 
         if let Ok(msg) = sub_socket.recv().await {
-            if let Some(bytes) = msg.get(0) {
+            if let Some(bytes) = msg.data() {
                 if let Ok(json) = std::str::from_utf8(bytes) {
                     if let Ok(broadcast) = serde_json::from_str::<Broadcast>(json) {
                         let _ = tx_clone.send(broadcast);
@@ -176,15 +182,15 @@ async fn test_subscriber_parses_artifact_created() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let broadcast = Broadcast::ArtifactCreated {
+    let broadcast_msg = Broadcast::ArtifactCreated {
         artifact_id: "art_abc123".to_string(),
         content_hash: "sha256_def456".to_string(),
         tags: vec!["type:midi".to_string(), "vibe:jazzy".to_string()],
         creator: Some("claude".to_string()),
     };
 
-    let json = serde_json::to_string(&broadcast).unwrap();
-    pub_socket.send(zeromq::ZmqMessage::from(json.into_bytes())).await.unwrap();
+    let json = serde_json::to_string(&broadcast_msg).unwrap();
+    pub_socket.send(Msg::from_vec(json.into_bytes())).await.unwrap();
 
     let received = tokio::time::timeout(Duration::from_secs(2), rx.recv())
         .await

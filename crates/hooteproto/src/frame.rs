@@ -299,6 +299,10 @@ impl HootFrame {
     }
 
     /// Serialize with identity prefix (for ROUTER socket replies)
+    ///
+    /// Format: [identity...][HOOT01 frames...]
+    /// Note: The ROUTER socket's send strategy will add the empty delimiter automatically
+    /// based on the peer type (DEALER, REQ, etc.)
     pub fn to_frames_with_identity(&self, identity: &[Bytes]) -> Vec<Bytes> {
         let mut frames = identity.to_vec();
         frames.extend(self.to_frames());

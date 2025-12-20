@@ -10,6 +10,7 @@ fn main() {
         .file("schemas/envelope.capnp")
         .file("schemas/garden.capnp")
         .file("schemas/broadcast.capnp")
+        .file("schemas/vibeweaver.capnp")
         .run()
         .expect("capnp compile failed");
 }

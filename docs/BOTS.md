@@ -63,6 +63,7 @@ All tools use consistent prefixes for discoverability:
 | `job_*` | Job management | `job_status`, `job_poll`, `job_list` |
 | `graph_*` | Audio routing & queries | `graph_bind`, `graph_connect`, `graph_query` |
 | `agent_chat_*` | LLM sub-agents | `agent_chat_new`, `agent_chat_send` |
+| `weave_*` | Python kernel (vibeweaver) | `weave_eval`, `weave_session`, `weave_reset` |
 
 ## 🔮 Trustfall: The Unified Query Layer
 
@@ -141,6 +142,18 @@ Local clones of authoritative ZeroMQ documentation (for protocol work):
 
 Our protocol (`HOOT01`) is inspired by MDP but simplified for our use case. See
 `docs/agents/plans/zmq-mesh-architecture.md` for the full design.
+
+### Lazy Pirate Pattern
+
+All ZMQ DEALER clients must follow the **Lazy Pirate** pattern from zguide Chapter 4
+(`~/src/zguide/site/content/docs/chapter4.md`):
+
+- **connect() is non-blocking** - ZMQ handles reconnection automatically, peers don't need to exist
+- **Retry failed requests** - Timeout and retry up to `max_retries` times before failing
+- **Track health via responses** - "Connected" means peer is responding, not that socket is connected
+- **Never destroy sockets** - Let ZMQ handle reconnection; destroying sockets loses queued messages
+
+Services can start in any order. `hooteproto::HootClient` implements this pattern.
 
 ### Async Pattern
 

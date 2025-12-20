@@ -1,9 +1,30 @@
 //! ZMQ client for hootenanny communication
+//!
+//! Uses hooteproto::HootClient for connection management with HOOT01 protocol.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bytes::Bytes;
+use rzmq::{Context, Socket, SocketType};
+use rzmq::socket::options::{LINGER, RECONNECT_IVL, SUBSCRIBE};
 use serde::{Deserialize, Serialize};
-use zeromq::{DealerSocket, Socket, SocketRecv, SocketSend, SubSocket, ZmqMessage};
+use std::sync::Arc;
+use tracing::warn;
+
+pub use hooteproto::{ClientConfig, HootClient, Payload};
+
+/// Type alias for vibeweaver's hootenanny client
+pub type ZmqClient = HootClient;
+
+/// Create a client config for hootenanny connection
+pub fn hootenanny_config(endpoint: &str, timeout_ms: u64) -> ClientConfig {
+    ClientConfig::new("hootenanny", endpoint).with_timeout(timeout_ms)
+}
+
+/// Connect to hootenanny (lazy - always succeeds, ZMQ connects when peer available)
+pub async fn connect(endpoint: &str, timeout_ms: u64) -> Arc<ZmqClient> {
+    let config = hootenanny_config(endpoint, timeout_ms);
+    HootClient::new(config).await
+}
 
 /// Parsed broadcast message
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,111 +58,59 @@ pub enum Broadcast {
     },
 }
 
-/// ZMQ client for request/reply to hootenanny
-pub struct ZmqClient {
-    dealer: DealerSocket,
-    identity: String,
-}
-
-impl ZmqClient {
-    /// Connect DEALER socket to hootenanny router
-    pub async fn connect(endpoint: &str, identity: &str) -> Result<Self> {
-        let mut dealer = DealerSocket::new();
-        dealer
-            .connect(endpoint)
-            .await
-            .with_context(|| format!("Failed to connect DEALER to {}", endpoint))?;
-
-        Ok(Self {
-            dealer,
-            identity: identity.to_string(),
-        })
-    }
-
-    /// Send tool call request, await response
-    pub async fn call_tool(
-        &mut self,
-        name: &str,
-        args: serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        // Build request
-        let request = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "tools/call",
-            "params": {
-                "name": name,
-                "arguments": args
-            },
-            "id": uuid::Uuid::new_v4().to_string()
-        });
-
-        let request_bytes = serde_json::to_vec(&request)?;
-
-        // Send
-        let msg = ZmqMessage::from(request_bytes);
-        self.dealer.send(msg).await?;
-
-        // Receive response
-        let response_msg = self.dealer.recv().await?;
-        let response_bytes = response_msg.into_vec();
-
-        // Combine frames if multiple
-        let data: Vec<u8> = response_bytes
-            .into_iter()
-            .flat_map(|b| b.to_vec())
-            .collect();
-
-        let response: serde_json::Value = serde_json::from_slice(&data)?;
-
-        // Extract result
-        if let Some(result) = response.get("result") {
-            Ok(result.clone())
-        } else if let Some(error) = response.get("error") {
-            anyhow::bail!("Tool call error: {}", error)
-        } else {
-            Ok(response)
-        }
-    }
-
-    /// Identity for this client
-    pub fn identity(&self) -> &str {
-        &self.identity
-    }
-}
-
 /// Broadcast receiver (separate from client for ownership)
 pub struct BroadcastReceiver {
-    sub: SubSocket,
+    #[allow(dead_code)]
+    context: Context,
+    sub: Socket,
 }
 
 impl BroadcastReceiver {
     /// Connect SUB socket and subscribe to all relevant topics
     pub async fn connect(endpoint: &str) -> Result<Self> {
-        let mut sub = SubSocket::new();
-        sub.connect(endpoint)
-            .await
-            .with_context(|| format!("Failed to connect SUB to {}", endpoint))?;
+        let context = Context::new()
+            .map_err(|e| anyhow::anyhow!("Failed to create ZMQ context: {}", e))?;
+        let sub = context.socket(SocketType::Sub)
+            .map_err(|e| anyhow::anyhow!("Failed to create SUB socket: {}", e))?;
+
+        // Set socket options
+        if let Err(e) = sub.set_option_raw(LINGER, &0i32.to_ne_bytes()).await {
+            warn!("Failed to set LINGER: {}", e);
+        }
+        if let Err(e) = sub.set_option_raw(RECONNECT_IVL, &1000i32.to_ne_bytes()).await {
+            warn!("Failed to set RECONNECT_IVL: {}", e);
+        }
 
         // Subscribe to relevant topics
-        sub.subscribe("job.").await?;
-        sub.subscribe("artifact.").await?;
-        sub.subscribe("transport.").await?;
-        sub.subscribe("beat.").await?;
-        sub.subscribe("marker.").await?;
+        for topic in &["job.", "artifact.", "transport.", "beat.", "marker."] {
+            if let Err(e) = sub.set_option_raw(SUBSCRIBE, topic.as_bytes()).await {
+                warn!("Failed to subscribe to {}: {}", topic, e);
+            }
+        }
 
-        Ok(Self { sub })
+        sub.connect(endpoint)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to connect SUB to {}: {}", endpoint, e))?;
+
+        Ok(Self { context, sub })
     }
 
     /// Subscribe to specific topic prefix
-    pub async fn subscribe(&mut self, topic: &str) -> Result<()> {
-        self.sub.subscribe(topic).await?;
+    pub async fn subscribe(&self, topic: &str) -> Result<()> {
+        self.sub.set_option_raw(SUBSCRIBE, topic.as_bytes()).await
+            .map_err(|e| anyhow::anyhow!("Failed to subscribe to {}: {}", topic, e))?;
         Ok(())
     }
 
     /// Receive next broadcast (blocking)
-    pub async fn recv(&mut self) -> Result<Broadcast> {
-        let msg = self.sub.recv().await?;
-        let frames: Vec<Bytes> = msg.into_vec();
+    pub async fn recv(&self) -> Result<Broadcast> {
+        let msgs = self.sub.recv_multipart().await
+            .map_err(|e| anyhow::anyhow!("Failed to receive: {}", e))?;
+
+        let frames: Vec<Bytes> = msgs
+            .into_iter()
+            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+            .collect();
 
         if frames.is_empty() {
             anyhow::bail!("Empty broadcast message");

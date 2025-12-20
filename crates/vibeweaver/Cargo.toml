@@ -16,7 +16,10 @@ path = "src/main.rs"
 
 [dependencies]
 # Hootenanny Protocol
-hooteproto = { path = "../hooteproto" }
+hooteproto = { path = "../hooteproto", features = ["client"] }
+
+# Configuration
+hooteconf = { path = "../hooteconf" }
 
 # Python Embedding
 # Note: extension-module is for building Python extensions (shared libs), not for embedding Python
@@ -29,7 +32,7 @@ async-trait = "0.1"
 futures = "0.3"
 
 # ZMQ
-zeromq = "0.4"
+rzmq = { version = "0.5", features = ["ipc"] }
 bytes = "1"
 capnp = "0.20"
 

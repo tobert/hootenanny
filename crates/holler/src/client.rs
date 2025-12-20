@@ -1,33 +1,53 @@
 //! ZMQ DEALER client for communicating with Hootenanny backends
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use hooteproto::{Envelope, Payload};
+use rzmq::{Context, Msg, Socket, SocketType};
+use rzmq::socket::options::{LINGER, RECONNECT_IVL, ROUTING_ID};
 use std::time::Duration;
-use zeromq::{DealerSocket, Socket, SocketRecv, SocketSend, ZmqMessage};
+use tracing::warn;
 
 /// A simple ZMQ DEALER client for request/reply communication
 pub struct Client {
-    socket: DealerSocket,
+    #[allow(dead_code)]
+    context: Context,
+    socket: Socket,
     timeout: Duration,
 }
 
 impl Client {
     /// Connect to a ZMQ ROUTER endpoint
     pub async fn connect(endpoint: &str, timeout_ms: u64) -> Result<Self> {
-        let mut socket = DealerSocket::new();
+        let context = Context::new()
+            .with_context(|| "Failed to create ZMQ context")?;
+        let socket = context.socket(SocketType::Dealer)
+            .with_context(|| "Failed to create DEALER socket")?;
+
+        // Set socket options
+        if let Err(e) = socket.set_option_raw(ROUTING_ID, b"holler-client").await {
+            warn!("Failed to set ROUTING_ID: {}", e);
+        }
+        if let Err(e) = socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await {
+            warn!("Failed to set LINGER: {}", e);
+        }
+        if let Err(e) = socket.set_option_raw(RECONNECT_IVL, &1000i32.to_ne_bytes()).await {
+            warn!("Failed to set RECONNECT_IVL: {}", e);
+        }
+
         socket
             .connect(endpoint)
             .await
             .with_context(|| format!("Failed to connect to {}", endpoint))?;
 
         Ok(Self {
+            context,
             socket,
             timeout: Duration::from_millis(timeout_ms),
         })
     }
 
     /// Send a Payload and receive the response
-    pub async fn request(&mut self, payload: Payload) -> Result<Envelope> {
+    pub async fn request(&self, payload: Payload) -> Result<Envelope> {
         use bytes::Bytes;
         use hooteproto::{payload_to_capnp_envelope, capnp_envelope_to_payload, Command, ContentType, HootFrame};
         use uuid::Uuid;
@@ -52,33 +72,25 @@ impl Client {
             body: Bytes::from(body_bytes),
         };
 
-        // Serialize HootFrame to ZMQ message
+        // Serialize HootFrame to rzmq multipart
         let frames = frame.to_frames();
-        let mut msg = ZmqMessage::from(Vec::<u8>::new());
-        for (i, frame) in frames.iter().enumerate() {
-            if i == 0 {
-                msg = ZmqMessage::from(frame.to_vec());
-            } else {
-                msg.push_back(frame.to_vec().into());
-            }
-        }
+        let msgs: Vec<Msg> = frames.iter().map(|f| Msg::from_vec(f.to_vec())).collect();
 
-        tokio::time::timeout(self.timeout, self.socket.send(msg))
+        tokio::time::timeout(self.timeout, self.socket.send_multipart(msgs))
             .await
             .context("Send timeout")?
             .context("Failed to send message")?;
 
         // Receive the response
-        let response = tokio::time::timeout(self.timeout, self.socket.recv())
+        let response = tokio::time::timeout(self.timeout, self.socket.recv_multipart())
             .await
             .context("Receive timeout")?
             .context("Failed to receive response")?;
 
         // Parse HootFrame from response
         let response_frames: Vec<Bytes> = response
-            .into_vec()
             .into_iter()
-            .map(|bytes| Bytes::from(bytes))
+            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
             .collect();
 
         let response_frame = HootFrame::from_frames(&response_frames)

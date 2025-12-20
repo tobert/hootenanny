@@ -3,11 +3,12 @@
 //! Broadcasts Broadcast messages to subscribed clients (holler SUB sockets).
 //! Messages are serialized using Cap'n Proto for cross-language compatibility.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use hooteproto::{broadcast_capnp, Broadcast};
+use rzmq::{Context, Msg, SocketType};
+use rzmq::socket::options::LINGER;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
-use zeromq::{PubSocket, Socket, SocketSend, ZmqMessage};
 
 /// Handle for sending broadcasts
 #[derive(Clone)]
@@ -112,7 +113,17 @@ impl PublisherServer {
 
     /// Run the publisher until the channel closes
     pub async fn run(mut self) -> Result<()> {
-        let mut socket = PubSocket::new();
+        let context = Context::new()
+            .with_context(|| "Failed to create ZMQ context")?;
+        let socket = context
+            .socket(SocketType::Pub)
+            .with_context(|| "Failed to create PUB socket")?;
+
+        // Set LINGER to 0 for immediate close
+        if let Err(e) = socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await {
+            warn!("Failed to set LINGER: {}", e);
+        }
+
         socket
             .bind(&self.bind_address)
             .await
@@ -137,7 +148,7 @@ impl PublisherServer {
                 "Publishing broadcast: {:?}",
                 broadcast_variant_name(&broadcast)
             );
-            let msg = ZmqMessage::from(bytes);
+            let msg = Msg::from_vec(bytes);
             if let Err(e) = socket.send(msg).await {
                 warn!("Failed to publish broadcast: {}", e);
             }

@@ -2,6 +2,10 @@
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use serde_json::json;
+use tracing::debug;
+
+use crate::tool_bridge;
 
 /// Read-only beat state
 #[pyclass]
@@ -177,8 +181,10 @@ pub fn session(
 
 /// Set session tempo
 #[pyfunction]
-pub fn tempo(_bpm: f64) -> PyResult<()> {
-    // TODO: Update session tempo
+pub fn tempo(bpm: f64) -> PyResult<()> {
+    debug!("Setting tempo to {} BPM", bpm);
+    tool_bridge::call_tool("garden_set_tempo", json!({ "bpm": bpm }))
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(())
 }
 
@@ -251,25 +257,33 @@ pub fn marker(name: String, beat: f64, metadata: Option<Bound<'_, PyDict>>) -> P
 
 #[pyfunction]
 pub fn play() -> PyResult<()> {
-    // TODO: garden_play via hootenanny
+    debug!("play()");
+    tool_bridge::call_tool("garden_play", json!({}))
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(())
 }
 
 #[pyfunction]
 pub fn pause() -> PyResult<()> {
-    // TODO: garden_pause via hootenanny
+    debug!("pause()");
+    tool_bridge::call_tool("garden_pause", json!({}))
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(())
 }
 
 #[pyfunction]
 pub fn stop() -> PyResult<()> {
-    // TODO: garden_stop via hootenanny
+    debug!("stop()");
+    tool_bridge::call_tool("garden_stop", json!({}))
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(())
 }
 
 #[pyfunction]
-pub fn seek(_beat: f64) -> PyResult<()> {
-    // TODO: garden_seek via hootenanny
+pub fn seek(beat: f64) -> PyResult<()> {
+    debug!("seek({})", beat);
+    tool_bridge::call_tool("garden_seek", json!({ "beat": beat }))
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(())
 }
 

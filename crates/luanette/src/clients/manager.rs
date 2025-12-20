@@ -1,18 +1,12 @@
 //! ZMQ client for upstream hootenanny server.
 //!
 //! Connects directly to hootenanny via ZMQ DEALER socket using HOOT01 + Cap'n Proto.
+//! Uses the shared HootClient from hooteproto for connection management.
 
 use anyhow::{Context, Result};
-use bytes::Bytes;
-use hooteproto::{
-    capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope,
-    Command, ContentType, HootFrame, Payload, ToolInfo,
-};
-use std::time::Duration;
-use tokio::sync::RwLock;
-use tracing::{debug, info};
-use uuid::Uuid;
-use zeromq::{DealerSocket, Socket, SocketRecv, SocketSend, ZmqMessage};
+use hooteproto::{ClientConfig, HootClient, Payload, ToolInfo};
+use std::sync::Arc;
+use tracing::info;
 
 /// Configuration for the upstream hootenanny connection.
 #[derive(Debug, Clone)]
@@ -25,103 +19,61 @@ pub struct UpstreamConfig {
     pub timeout_ms: u64,
 }
 
-/// ZMQ client for hootenanny.
-struct HootClient {
-    socket: RwLock<DealerSocket>,
-    timeout: Duration,
+/// Manages the connection to upstream hootenanny.
+pub struct ClientManager {
+    client: Option<Arc<HootClient>>,
+    namespace: String,
     tools: Vec<ToolInfo>,
 }
 
-impl HootClient {
-    async fn connect(endpoint: &str, timeout_ms: u64) -> Result<Self> {
-        debug!("Creating DEALER socket for hootenanny");
-        let mut socket = DealerSocket::new();
-
-        // Wrap in timeout because zeromq-rs connect() can block indefinitely
-        tokio::time::timeout(Duration::from_secs(5), socket.connect(endpoint))
-            .await
-            .with_context(|| format!("Timeout connecting to hootenanny at {}", endpoint))?
-            .with_context(|| format!("Failed to connect to hootenanny at {}", endpoint))?;
-
-        info!("Connected to hootenanny at {}", endpoint);
-
-        Ok(Self {
-            socket: RwLock::new(socket),
-            timeout: Duration::from_millis(timeout_ms),
+impl ClientManager {
+    /// Create a new empty client manager.
+    pub fn new() -> Self {
+        Self {
+            client: None,
+            namespace: String::new(),
             tools: Vec::new(),
-        })
+        }
     }
 
-    async fn request(&self, payload: Payload) -> Result<Payload> {
-        // Generate request ID
-        let request_id = Uuid::new_v4();
+    /// Connect to upstream hootenanny via ZMQ.
+    ///
+    /// Uses lazy connection pattern - ZMQ connect is non-blocking and peer doesn't
+    /// need to exist. Tool discovery is attempted but failure is non-fatal.
+    #[tracing::instrument(skip(self), fields(namespace = %config.namespace, endpoint = %config.endpoint))]
+    pub async fn add_upstream(&mut self, config: UpstreamConfig) -> Result<()> {
+        info!("Connecting to upstream hootenanny (lazy)");
 
-        // Convert payload to Cap'n Proto envelope
-        let message = payload_to_capnp_envelope(request_id, &payload)
-            .context("Failed to convert payload to capnp")?;
+        let client_config = ClientConfig::new("hootenanny", &config.endpoint)
+            .with_timeout(config.timeout_ms);
 
-        // Serialize to bytes
-        let body_bytes = capnp::serialize::write_message_to_words(&message);
+        // ZMQ connect is non-blocking - always succeeds
+        let client = HootClient::new(client_config).await;
 
-        // Create HootFrame
-        let frame = HootFrame {
-            command: Command::Request,
-            content_type: ContentType::CapnProto,
-            request_id,
-            service: "hootenanny".to_string(),
-            traceparent: None,
-            body: Bytes::from(body_bytes),
-        };
-
-        // Serialize HootFrame to ZMQ message
-        let frames = frame.to_frames();
-        let zmq_msg = frames_to_zmq_message(&frames);
-
-        debug!("Sending capnp request to hootenanny ({} bytes)", frame.body.len());
-
-        let mut socket = self.socket.write().await;
-
-        // Send
-        tokio::time::timeout(self.timeout, socket.send(zmq_msg))
-            .await
-            .context("Send timeout")?
-            .context("Failed to send")?;
-
-        // Receive
-        let response = tokio::time::timeout(self.timeout, socket.recv())
-            .await
-            .context("Receive timeout")?
-            .context("Failed to receive")?;
-
-        // Parse HootFrame from response
-        let response_frames: Vec<Bytes> = response
-            .into_vec()
-            .into_iter()
-            .map(|bytes| Bytes::from(bytes))
-            .collect();
-
-        let response_frame = HootFrame::from_frames(&response_frames)
-            .context("Failed to parse response HootFrame")?;
-
-        // Parse Cap'n Proto response
-        let reader = response_frame.read_capnp()
-            .context("Failed to read capnp from response")?;
-
-        let envelope_reader = reader.get_root::<envelope_capnp::envelope::Reader>()
-            .context("Failed to get envelope root")?;
-
-        let response_payload = capnp_envelope_to_payload(envelope_reader)
-            .context("Failed to convert capnp to payload")?;
-
-        Ok(response_payload)
-    }
-
-    async fn discover_tools(&mut self) -> Result<()> {
-        match self.request(Payload::ListTools).await? {
-            Payload::ToolList { tools } => {
+        // Try to discover tools, but don't fail if backend isn't ready yet
+        match self.discover_tools_from(&client).await {
+            Ok(tools) => {
                 info!("Discovered {} tools from hootenanny", tools.len());
                 self.tools = tools;
-                Ok(())
+            }
+            Err(e) => {
+                info!("Tool discovery deferred (backend not ready): {}", e);
+                self.tools = Vec::new();
+            }
+        }
+
+        self.namespace = config.namespace;
+        self.client = Some(client);
+
+        Ok(())
+    }
+
+    /// Discover tools from a HootClient
+    async fn discover_tools_from(&self, client: &HootClient) -> Result<Vec<ToolInfo>> {
+        match client.request(Payload::ListTools).await? {
+            Payload::ToolList { tools } => {
+                info!("Discovered {} tools from hootenanny", tools.len());
+                Ok(tools)
             }
             Payload::Error { code, message, .. } => {
                 anyhow::bail!("ListTools failed: {} - {}", code, message)
@@ -131,49 +83,6 @@ impl HootClient {
             }
         }
     }
-}
-
-/// Frames to ZmqMessage helper
-fn frames_to_zmq_message(frames: &[Bytes]) -> ZmqMessage {
-    if frames.is_empty() {
-        return ZmqMessage::from(Vec::<u8>::new());
-    }
-
-    let mut msg = ZmqMessage::from(frames[0].to_vec());
-    for frame in frames.iter().skip(1) {
-        msg.push_back(frame.to_vec().into());
-    }
-    msg
-}
-
-/// Manages the connection to upstream hootenanny.
-pub struct ClientManager {
-    client: Option<HootClient>,
-    namespace: String,
-}
-
-impl ClientManager {
-    /// Create a new empty client manager.
-    pub fn new() -> Self {
-        Self {
-            client: None,
-            namespace: String::new(),
-        }
-    }
-
-    /// Connect to upstream hootenanny via ZMQ.
-    #[tracing::instrument(skip(self), fields(namespace = %config.namespace, endpoint = %config.endpoint))]
-    pub async fn add_upstream(&mut self, config: UpstreamConfig) -> Result<()> {
-        info!("Connecting to upstream hootenanny");
-
-        let mut client = HootClient::connect(&config.endpoint, config.timeout_ms).await?;
-        client.discover_tools().await?;
-
-        self.namespace = config.namespace;
-        self.client = Some(client);
-
-        Ok(())
-    }
 
     /// Remove the upstream connection.
     pub async fn remove_upstream(&mut self, _namespace: &str) -> bool {
@@ -182,20 +91,16 @@ impl ClientManager {
 
     /// Get all available tools.
     pub async fn all_tools(&self) -> Vec<(String, ToolInfo)> {
-        match &self.client {
-            Some(client) => {
-                client.tools.iter()
-                    .map(|t| (format!("{}.{}", self.namespace, t.name), t.clone()))
-                    .collect()
-            }
-            None => Vec::new(),
-        }
+        self.tools
+            .iter()
+            .map(|t| (format!("{}.{}", self.namespace, t.name), t.clone()))
+            .collect()
     }
 
     /// Get tools for a specific namespace.
     pub async fn tools_for_namespace(&self, namespace: &str) -> Option<Vec<ToolInfo>> {
         if namespace == self.namespace {
-            self.client.as_ref().map(|c| c.tools.clone())
+            Some(self.tools.clone())
         } else {
             None
         }
@@ -213,13 +118,13 @@ impl ClientManager {
     }
 
     /// Call a tool with explicit traceparent.
-    #[tracing::instrument(skip(self, arguments, _traceparent), fields(tool = %tool_name))]
+    #[tracing::instrument(skip(self, arguments, traceparent), fields(tool = %tool_name))]
     pub async fn call_tool_with_traceparent(
         &self,
         namespace: &str,
         tool_name: &str,
         arguments: serde_json::Value,
-        _traceparent: Option<&str>,
+        traceparent: Option<&str>,
     ) -> Result<serde_json::Value> {
         if namespace != self.namespace {
             anyhow::bail!("Unknown namespace: {}", namespace);
@@ -228,16 +133,16 @@ impl ClientManager {
         let client = self.client.as_ref()
             .ok_or_else(|| anyhow::anyhow!("Not connected to hootenanny"))?;
 
-        // Use generic ToolCall - hootenanny routes by name
         let payload = Payload::ToolCall {
             name: tool_name.to_string(),
             args: arguments,
         };
 
-        // Send request
-        let response = client.request(payload).await?;
+        // Send request with optional traceparent
+        let response = client.request_with_trace(payload, traceparent.map(String::from))
+            .await
+            .context("Failed to call tool")?;
 
-        // Handle response
         match response {
             Payload::Success { result } => Ok(result),
             Payload::Error { code, message, details } => {
@@ -279,11 +184,11 @@ impl ClientManager {
             anyhow::bail!("Unknown namespace: {}", namespace);
         }
 
-        if let Some(ref mut client) = self.client {
-            client.discover_tools().await
-        } else {
-            anyhow::bail!("Not connected to hootenanny")
-        }
+        let client = self.client.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected to hootenanny"))?;
+
+        self.tools = self.discover_tools_from(client).await?;
+        Ok(())
     }
 }
 

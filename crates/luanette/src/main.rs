@@ -1,7 +1,6 @@
 mod clients;
 mod dispatch;
 mod error;
-// mod handler; // Removed: HTTP handler factored out
 mod job_system;
 mod otel_bridge;
 mod runtime;
@@ -15,8 +14,10 @@ use anyhow::{Context, Result};
 use cas::{CasConfig, FileStore};
 use clap::{Parser, Subcommand};
 use dispatch::Dispatcher;
+use hooteconf::HootConfig;
 use job_system::JobStore;
 use runtime::{LuaRuntime, SandboxConfig};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use zmq_server::{Server, ServerConfig};
@@ -29,15 +30,26 @@ fn parse_param(s: &str) -> Result<(String, String), String> {
 }
 
 /// Luanette - Lua Scripting Server for Hootenanny
+///
+/// Configuration is loaded from (in order, later wins):
+/// 1. Compiled defaults
+/// 2. /etc/hootenanny/config.toml
+/// 3. ~/.config/hootenanny/config.toml
+/// 4. ./hootenanny.toml (or --config path)
+/// 5. Environment variables (HOOTENANNY_*)
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// OTLP gRPC endpoint for OpenTelemetry
-    #[arg(long, default_value = "127.0.0.1:35991", global = true)]
-    otlp_endpoint: String,
+    /// Path to config file (overrides ./hootenanny.toml)
+    #[arg(short, long, global = true)]
+    config: Option<PathBuf>,
+
+    /// Show loaded configuration and exit
+    #[arg(long)]
+    show_config: bool,
 
     /// Script execution timeout in seconds
     #[arg(long, default_value = "30", global = true)]
@@ -46,29 +58,17 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Run as ZMQ server
+    /// Run as ZMQ server (default)
     Zmq {
-        /// ZMQ bind address
-        #[arg(short, long, default_value = "tcp://0.0.0.0:5570")]
-        bind: String,
-
         /// Worker name for identification
         #[arg(long, default_value = "luanette")]
         name: String,
-
-        /// Hootenanny ZMQ endpoint for tool calls
-        #[arg(long, default_value = "tcp://localhost:5580")]
-        hootenanny: String,
     },
 
     /// Run a Lua script directly (for testing)
     Run {
         /// Path to Lua script file
         script: String,
-
-        /// Hootenanny ZMQ endpoint for tool calls
-        #[arg(long, default_value = "tcp://localhost:5580")]
-        hootenanny: String,
 
         /// Script parameters as key=value pairs
         #[arg(short, long, value_parser = parse_param)]
@@ -86,23 +86,45 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Load configuration from files + env
+    let (config, sources) = HootConfig::load_with_sources_from(cli.config.as_deref())
+        .context("Failed to load configuration")?;
+
+    // Show config and exit if requested
+    if cli.show_config {
+        println!("# Configuration sources:");
+        for path in &sources.files {
+            println!("#   - {}", path.display());
+        }
+        if !sources.env_overrides.is_empty() {
+            println!("# Environment overrides:");
+            for var in &sources.env_overrides {
+                println!("#   - {}", var);
+            }
+        }
+        println!();
+        println!("{}", config.to_toml());
+        return Ok(());
+    }
+
     // Initialize OpenTelemetry with OTLP exporter
-    telemetry::init(&cli.otlp_endpoint)
+    telemetry::init(&config.infra.telemetry.otlp_endpoint)
         .context("Failed to initialize OpenTelemetry")?;
 
     // Default to ZMQ mode if no subcommand specified
     let command = cli.command.unwrap_or(Commands::Zmq {
-        bind: "tcp://0.0.0.0:5570".to_string(),
         name: "luanette".to_string(),
-        hootenanny: "tcp://localhost:5580".to_string(),
     });
 
+    // Get luanette-specific config
+    let luanette_config = &config.infra.services.luanette;
+
     match command {
-        Commands::Zmq { bind, name, hootenanny } => {
-            run_zmq_server(&bind, &name, cli.timeout, &hootenanny).await?;
+        Commands::Zmq { name } => {
+            run_zmq_server(&name, cli.timeout, luanette_config).await?;
         }
-        Commands::Run { script, hootenanny, param } => {
-            run_script(&script, cli.timeout, &hootenanny, param).await?;
+        Commands::Run { script, param } => {
+            run_script(&script, cli.timeout, luanette_config, param).await?;
         }
         Commands::Eval { code } => {
             eval_code(&code, cli.timeout).await?;
@@ -115,22 +137,26 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_zmq_server(bind: &str, name: &str, timeout_secs: u64, hootenanny_endpoint: &str) -> Result<()> {
+async fn run_zmq_server(
+    name: &str,
+    timeout_secs: u64,
+    luanette_config: &hooteconf::LuanetteConfig,
+) -> Result<()> {
     tracing::info!("🌙 Luanette ZMQ server starting");
-    tracing::info!("   Bind: {}", bind);
+    tracing::info!("   Bind: {}", luanette_config.zmq_router);
     tracing::info!("   Name: {}", name);
     tracing::info!("   Timeout: {}s", timeout_secs);
-    tracing::info!("   Hootenanny: {}", hootenanny_endpoint);
+    tracing::info!("   Hootenanny: {}", luanette_config.hootenanny);
 
     // Create client manager and connect to hootenanny directly via ZMQ
     let mut client_manager = ClientManager::new();
 
-    tracing::info!("Connecting to hootenanny at {}", hootenanny_endpoint);
+    tracing::info!("Connecting to hootenanny at {}", luanette_config.hootenanny);
     client_manager
         .add_upstream(UpstreamConfig {
             namespace: "hootenanny".to_string(),
-            endpoint: hootenanny_endpoint.to_string(),
-            timeout_ms: timeout_secs * 1000,
+            endpoint: luanette_config.hootenanny.clone(),
+            timeout_ms: luanette_config.timeout_ms,
         })
         .await
         .context("Failed to connect to hootenanny")?;
@@ -157,7 +183,7 @@ async fn run_zmq_server(bind: &str, name: &str, timeout_secs: u64, hootenanny_en
 
     // Create server config
     let config = ServerConfig {
-        bind_address: bind.to_string(),
+        bind_address: luanette_config.zmq_router.clone(),
         _worker_name: name.to_string(),
     };
 
@@ -197,7 +223,12 @@ async fn run_zmq_server(bind: &str, name: &str, timeout_secs: u64, hootenanny_en
 }
 
 /// Run a Lua script file directly (for testing)
-async fn run_script(path: &str, timeout_secs: u64, hootenanny_endpoint: &str, params: Vec<(String, String)>) -> Result<()> {
+async fn run_script(
+    path: &str,
+    timeout_secs: u64,
+    luanette_config: &hooteconf::LuanetteConfig,
+    params: Vec<(String, String)>,
+) -> Result<()> {
     use std::fs;
 
     println!("🌙 Running script: {}", path);
@@ -210,13 +241,13 @@ async fn run_script(path: &str, timeout_secs: u64, hootenanny_endpoint: &str, pa
     client_manager
         .add_upstream(UpstreamConfig {
             namespace: "hootenanny".to_string(),
-            endpoint: hootenanny_endpoint.to_string(),
-            timeout_ms: timeout_secs * 1000,
+            endpoint: luanette_config.hootenanny.clone(),
+            timeout_ms: luanette_config.timeout_ms,
         })
         .await
         .context("Failed to connect to hootenanny")?;
 
-    println!("   Connected to hootenanny at {}", hootenanny_endpoint);
+    println!("   Connected to hootenanny at {}", luanette_config.hootenanny);
 
     let client_manager = Arc::new(client_manager);
 

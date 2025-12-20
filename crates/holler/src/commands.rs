@@ -7,7 +7,7 @@ use crate::client::Client;
 
 /// Test connectivity with a Ping/Pong exchange
 pub async fn ping(endpoint: &str, timeout_ms: u64) -> Result<()> {
-    let mut client = Client::connect(endpoint, timeout_ms).await?;
+    let client = Client::connect(endpoint, timeout_ms).await?;
 
     let start = std::time::Instant::now();
     let response = client.request(Payload::Ping).await?;
@@ -35,7 +35,7 @@ pub async fn send(endpoint: &str, json: &str, timeout_ms: u64) -> Result<()> {
     let payload: Payload = serde_json::from_str(json)
         .context("Failed to parse JSON as Payload")?;
 
-    let mut client = Client::connect(endpoint, timeout_ms).await?;
+    let client = Client::connect(endpoint, timeout_ms).await?;
     let response = client.request(payload).await?;
 
     let output = serde_json::to_string_pretty(&response.payload)?;
@@ -61,7 +61,7 @@ pub async fn lua_eval(
         params,
     };
 
-    let mut client = Client::connect(endpoint, timeout_ms).await?;
+    let client = Client::connect(endpoint, timeout_ms).await?;
     let response = client.request(payload).await?;
 
     match response.payload {
@@ -89,7 +89,7 @@ pub async fn job_status(endpoint: &str, job_id: &str, timeout_ms: u64) -> Result
         job_id: job_id.to_string(),
     };
 
-    let mut client = Client::connect(endpoint, timeout_ms).await?;
+    let client = Client::connect(endpoint, timeout_ms).await?;
     let response = client.request(payload).await?;
 
     match response.payload {
@@ -113,7 +113,7 @@ pub async fn job_list(endpoint: &str, status: Option<&str>, timeout_ms: u64) -> 
         status: status.map(|s| s.to_string()),
     };
 
-    let mut client = Client::connect(endpoint, timeout_ms).await?;
+    let client = Client::connect(endpoint, timeout_ms).await?;
     let response = client.request(payload).await?;
 
     match response.payload {
@@ -150,7 +150,7 @@ pub async fn job_poll(
         mode,
     };
 
-    let mut client = Client::connect(endpoint, timeout_ms + 5000).await?;
+    let client = Client::connect(endpoint, timeout_ms + 5000).await?;
     let response = client.request(payload).await?;
 
     match response.payload {

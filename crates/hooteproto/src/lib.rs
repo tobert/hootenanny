@@ -95,6 +95,12 @@ pub mod broadcast_capnp {
     include!(concat!(env!("OUT_DIR"), "/broadcast_capnp.rs"));
 }
 
+#[allow(clippy::all)]
+#[allow(dead_code)]
+pub mod vibeweaver_capnp {
+    include!(concat!(env!("OUT_DIR"), "/vibeweaver_capnp.rs"));
+}
+
 pub mod conversion;
 pub mod domain;
 pub mod envelope;
@@ -105,6 +111,12 @@ pub mod request;
 pub mod responses;
 pub mod schema_helpers;
 pub mod timing;
+
+#[cfg(feature = "client")]
+pub mod client;
+
+#[cfg(feature = "client")]
+pub use client::{ClientConfig, ConnectionState, HealthTracker, HootClient, spawn_health_task};
 
 pub use conversion::{
     capnp_envelope_to_payload, envelope_to_payload, payload_to_capnp_envelope,

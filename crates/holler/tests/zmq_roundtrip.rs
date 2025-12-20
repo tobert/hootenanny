@@ -1,11 +1,13 @@
 //! ZMQ roundtrip tests for hooteproto using localhost TCP
 
+use bytes::Bytes;
 use hooteproto::{Envelope, Payload};
+use rzmq::{Context, Msg, SocketType};
+use rzmq::socket::options::LINGER;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tokio::time::timeout;
 use uuid::Uuid;
-use zeromq::{DealerSocket, RouterSocket, Socket, SocketRecv, SocketSend};
 
 static PORT_COUNTER: AtomicU16 = AtomicU16::new(15570);
 
@@ -16,15 +18,17 @@ fn next_endpoint() -> String {
 
 /// Simple mock backend that responds to Ping with Pong
 async fn mock_router(endpoint: &str) -> anyhow::Result<()> {
-    let mut socket = RouterSocket::new();
+    let context = Context::new()?;
+    let socket = context.socket(SocketType::Router)?;
+    socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
     socket.bind(endpoint).await?;
 
     // Handle one request
-    let msg = socket.recv().await?;
+    let msgs = socket.recv_multipart().await?;
 
     // ROUTER sockets prepend identity frame
-    let identity = msg.get(0).unwrap().to_vec();
-    let payload_bytes = msg.get(1).unwrap();
+    let identity = msgs[0].data().map(|d| d.to_vec()).unwrap_or_default();
+    let payload_bytes = msgs[1].data().unwrap_or_default();
     let payload_str = std::str::from_utf8(payload_bytes)?;
     let envelope: Envelope = serde_json::from_str(payload_str)?;
 
@@ -62,9 +66,11 @@ async fn mock_router(endpoint: &str) -> anyhow::Result<()> {
     let response_json = serde_json::to_string(&response)?;
 
     // Send response with identity frame
-    let mut reply = zeromq::ZmqMessage::from(identity);
-    reply.push_back(response_json.into_bytes().into());
-    socket.send(reply).await?;
+    let reply = vec![
+        Msg::from_vec(identity),
+        Msg::from_vec(response_json.into_bytes()),
+    ];
+    socket.send_multipart(reply).await?;
 
     Ok(())
 }
@@ -83,13 +89,15 @@ async fn test_ping_pong() {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     // Connect dealer and send ping
-    let mut dealer = DealerSocket::new();
+    let context = Context::new().unwrap();
+    let dealer = context.socket(SocketType::Dealer).unwrap();
+    dealer.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
     dealer.connect(&endpoint).await.unwrap();
 
     let envelope = Envelope::new(Payload::Ping);
     let json = serde_json::to_string(&envelope).unwrap();
     dealer
-        .send(json.into_bytes().into())
+        .send(Msg::from_vec(json.into_bytes()))
         .await
         .unwrap();
 
@@ -99,7 +107,8 @@ async fn test_ping_pong() {
         .unwrap()
         .unwrap();
 
-    let response_str = std::str::from_utf8(response.get(0).unwrap()).unwrap();
+    let response_bytes = response.data().unwrap_or_default();
+    let response_str = std::str::from_utf8(response_bytes).unwrap();
     let response_envelope: Envelope = serde_json::from_str(response_str).unwrap();
 
     match response_envelope.payload {
@@ -123,7 +132,9 @@ async fn test_lua_eval() {
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    let mut dealer = DealerSocket::new();
+    let context = Context::new().unwrap();
+    let dealer = context.socket(SocketType::Dealer).unwrap();
+    dealer.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
     dealer.connect(&endpoint).await.unwrap();
 
     let envelope = Envelope::new(Payload::LuaEval {
@@ -131,14 +142,15 @@ async fn test_lua_eval() {
         params: None,
     });
     let json = serde_json::to_string(&envelope).unwrap();
-    dealer.send(json.into_bytes().into()).await.unwrap();
+    dealer.send(Msg::from_vec(json.into_bytes())).await.unwrap();
 
     let response = timeout(Duration::from_secs(1), dealer.recv())
         .await
         .unwrap()
         .unwrap();
 
-    let response_str = std::str::from_utf8(response.get(0).unwrap()).unwrap();
+    let response_bytes = response.data().unwrap_or_default();
+    let response_str = std::str::from_utf8(response_bytes).unwrap();
     let response_envelope: Envelope = serde_json::from_str(response_str).unwrap();
 
     match response_envelope.payload {
@@ -162,21 +174,24 @@ async fn test_job_status() {
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    let mut dealer = DealerSocket::new();
+    let context = Context::new().unwrap();
+    let dealer = context.socket(SocketType::Dealer).unwrap();
+    dealer.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
     dealer.connect(&endpoint).await.unwrap();
 
     let envelope = Envelope::new(Payload::JobStatus {
         job_id: "test-job-123".to_string(),
     });
     let json = serde_json::to_string(&envelope).unwrap();
-    dealer.send(json.into_bytes().into()).await.unwrap();
+    dealer.send(Msg::from_vec(json.into_bytes())).await.unwrap();
 
     let response = timeout(Duration::from_secs(1), dealer.recv())
         .await
         .unwrap()
         .unwrap();
 
-    let response_str = std::str::from_utf8(response.get(0).unwrap()).unwrap();
+    let response_bytes = response.data().unwrap_or_default();
+    let response_str = std::str::from_utf8(response_bytes).unwrap();
     let response_envelope: Envelope = serde_json::from_str(response_str).unwrap();
 
     match response_envelope.payload {

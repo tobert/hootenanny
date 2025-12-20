@@ -14,7 +14,7 @@ mod publisher;
 mod vibeweaver_client;
 
 pub use hooteproto_server::HooteprotoServer;
-pub use luanette_client::LuanetteClient;
+pub use luanette_client::{luanette_config, LuanetteClient};
 pub use manager::GardenManager;
 pub use publisher::{BroadcastPublisher, PublisherServer};
-pub use vibeweaver_client::VibeweaverClient;
+pub use vibeweaver_client::{vibeweaver_config, VibeweaverClient};

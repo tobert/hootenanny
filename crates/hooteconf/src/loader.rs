@@ -258,13 +258,74 @@ pub fn merge_configs(base: HootConfig, overlay: HootConfig) -> HootConfig {
                 } else {
                     base.infra.gateway.hootenanny_pub
                 },
+                timeout_ms: if overlay.infra.gateway.timeout_ms != GatewayConfig::default().timeout_ms {
+                    overlay.infra.gateway.timeout_ms
+                } else {
+                    base.infra.gateway.timeout_ms
+                },
+            },
+            services: crate::infra::ServicesConfig {
+                luanette: crate::infra::LuanetteConfig {
+                    zmq_router: if overlay.infra.services.luanette.zmq_router != LuanetteConfig::default().zmq_router {
+                        overlay.infra.services.luanette.zmq_router
+                    } else {
+                        base.infra.services.luanette.zmq_router
+                    },
+                    hootenanny: if overlay.infra.services.luanette.hootenanny != LuanetteConfig::default().hootenanny {
+                        overlay.infra.services.luanette.hootenanny
+                    } else {
+                        base.infra.services.luanette.hootenanny
+                    },
+                    timeout_ms: if overlay.infra.services.luanette.timeout_ms != LuanetteConfig::default().timeout_ms {
+                        overlay.infra.services.luanette.timeout_ms
+                    } else {
+                        base.infra.services.luanette.timeout_ms
+                    },
+                },
+                vibeweaver: crate::infra::VibeweaverConfig {
+                    zmq_router: if overlay.infra.services.vibeweaver.zmq_router != VibeweaverConfig::default().zmq_router {
+                        overlay.infra.services.vibeweaver.zmq_router
+                    } else {
+                        base.infra.services.vibeweaver.zmq_router
+                    },
+                    hootenanny: if overlay.infra.services.vibeweaver.hootenanny != VibeweaverConfig::default().hootenanny {
+                        overlay.infra.services.vibeweaver.hootenanny
+                    } else {
+                        base.infra.services.vibeweaver.hootenanny
+                    },
+                    hootenanny_pub: if overlay.infra.services.vibeweaver.hootenanny_pub != VibeweaverConfig::default().hootenanny_pub {
+                        overlay.infra.services.vibeweaver.hootenanny_pub
+                    } else {
+                        base.infra.services.vibeweaver.hootenanny_pub
+                    },
+                    timeout_ms: if overlay.infra.services.vibeweaver.timeout_ms != VibeweaverConfig::default().timeout_ms {
+                        overlay.infra.services.vibeweaver.timeout_ms
+                    } else {
+                        base.infra.services.vibeweaver.timeout_ms
+                    },
+                },
+                chaosgarden: crate::infra::ChaosgardenConfig {
+                    zmq_router: if overlay.infra.services.chaosgarden.zmq_router != ChaosgardenConfig::default().zmq_router {
+                        overlay.infra.services.chaosgarden.zmq_router
+                    } else {
+                        base.infra.services.chaosgarden.zmq_router
+                    },
+                    ipc_socket: if overlay.infra.services.chaosgarden.ipc_socket != ChaosgardenConfig::default().ipc_socket {
+                        overlay.infra.services.chaosgarden.ipc_socket
+                    } else {
+                        base.infra.services.chaosgarden.ipc_socket
+                    },
+                },
             },
         },
         bootstrap: overlay.bootstrap, // Bootstrap fully replaces for now
     }
 }
 
-use crate::infra::{BindConfig, GatewayConfig, TelemetryConfig};
+use crate::infra::{
+    BindConfig, ChaosgardenConfig, GatewayConfig, LuanetteConfig, TelemetryConfig,
+    VibeweaverConfig,
+};
 
 /// Apply environment variable overrides to config.
 pub fn apply_env_overrides(config: &mut HootConfig, sources: &mut ConfigSources) {

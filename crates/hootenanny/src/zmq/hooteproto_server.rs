@@ -15,19 +15,21 @@
 //! - Sends heartbeats to clients (holler → hootenanny and hootenanny → holler)
 //! - Cleans up stale clients automatically
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use bytes::Bytes;
 use cas::ContentStore;
 use hooteproto::{
     capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope, Command, ContentType,
     HootFrame, Payload, ToolInfo, PROTOCOL_VERSION,
 };
+use rzmq::{Context, Msg, MsgFlags, Socket, SocketType};
+use rzmq::socket::options::LINGER;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
-use zeromq::{RouterSocket, Socket, SocketRecv, SocketSend, ZmqMessage};
 
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{self, ArtifactStore as _};
@@ -116,8 +118,21 @@ impl HooteprotoServer {
     }
 
     /// Run the server until shutdown signal
+    ///
+    /// Uses concurrent request handling to avoid deadlocks when proxied services
+    /// (like vibeweaver) call back to hootenanny during request processing.
     pub async fn run(self, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
-        let mut socket = RouterSocket::new();
+        let context = Context::new()
+            .with_context(|| "Failed to create ZMQ context")?;
+        let socket = context
+            .socket(SocketType::Router)
+            .with_context(|| "Failed to create ROUTER socket")?;
+
+        // Set LINGER to 0 for immediate close
+        if let Err(e) = socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await {
+            warn!("Failed to set LINGER: {}", e);
+        }
+
         socket
             .bind(&self.bind_address)
             .await
@@ -125,13 +140,88 @@ impl HooteprotoServer {
 
         info!("Hootenanny ZMQ server listening on {}", self.bind_address);
 
+        // Channel for sending responses back to the main loop for transmission
+        let (response_tx, mut response_rx) = mpsc::channel::<Vec<Msg>>(256);
+
+        // Wrap self in Arc for sharing across spawned tasks
+        let server = Arc::new(self);
+
         loop {
             tokio::select! {
-                result = socket.recv() => {
+                // Receive incoming messages
+                result = socket.recv_multipart() => {
                     match result {
-                        Ok(msg) => {
-                            if let Err(e) = self.handle_message(&mut socket, msg).await {
-                                error!("Error handling message: {}", e);
+                        Ok(msgs) => {
+                            let frames: Vec<Bytes> = msgs
+                                .iter()
+                                .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+                                .collect();
+
+                            // Check for HOOT01 protocol
+                            if !frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
+                                warn!("Received non-HOOT01 message, rejecting");
+                                continue;
+                            }
+
+                            // Parse frame to check command type
+                            match HootFrame::from_frames_with_identity(&frames) {
+                                Ok((identity, frame)) => {
+                                    debug!(
+                                        "HOOT01 {:?} from service={} request_id={}",
+                                        frame.command, frame.service, frame.request_id
+                                    );
+
+                                    match frame.command {
+                                        Command::Heartbeat => {
+                                            // Handle heartbeats synchronously (fast path)
+                                            if let Some(client_id) = identity.first() {
+                                                server.client_tracker.record_activity(client_id).await;
+                                            }
+                                            let response = HootFrame::heartbeat("hootenanny");
+                                            let reply_frames = response.to_frames_with_identity(&identity);
+                                            let reply = frames_to_msgs(&reply_frames);
+                                            // Use individual send() - rzmq ROUTER send_multipart has a bug
+                                            if let Err(e) = send_multipart_individually(&socket, reply).await {
+                                                error!("Failed to send heartbeat response: {}", e);
+                                            }
+                                        }
+                                        Command::Request => {
+                                            // Spawn async task for request handling (allows concurrency)
+                                            let server_clone = Arc::clone(&server);
+                                            let tx = response_tx.clone();
+                                            tokio::spawn(async move {
+                                                let reply = server_clone.handle_request(identity, frame).await;
+                                                if let Err(e) = tx.send(reply).await {
+                                                    error!("Failed to queue response: {}", e);
+                                                }
+                                            });
+                                        }
+                                        Command::Ready => {
+                                            // Register client for bidirectional heartbeating
+                                            let service = frame.service.clone();
+                                            if let Some(client_id) = identity.first() {
+                                                server.client_tracker
+                                                    .register(client_id.clone(), service.clone())
+                                                    .await;
+                                            }
+                                            info!("Client registered: service={}", service);
+                                        }
+                                        Command::Disconnect => {
+                                            // Remove client from tracker
+                                            if let Some(client_id) = identity.first() {
+                                                server.client_tracker.remove(client_id).await;
+                                            }
+                                            info!("Client disconnected: service={}", frame.service);
+                                        }
+                                        Command::Reply => {
+                                            // Unexpected - we're the server, we shouldn't receive replies
+                                            warn!("Unexpected Reply command received at server");
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to parse HOOT01 frame: {}", e);
+                                }
                             }
                         }
                         Err(e) => {
@@ -139,6 +229,16 @@ impl HooteprotoServer {
                         }
                     }
                 }
+
+                // Send queued responses
+                Some(reply) = response_rx.recv() => {
+                    // Use individual send() - rzmq ROUTER send_multipart has a bug
+                    if let Err(e) = send_multipart_individually(&socket, reply).await {
+                        error!("Failed to send response: {}", e);
+                    }
+                }
+
+                // Handle shutdown
                 _ = shutdown_rx.recv() => {
                     info!("Shutdown signal received");
                     break;
@@ -149,179 +249,88 @@ impl HooteprotoServer {
         Ok(())
     }
 
-    async fn handle_message(&self, socket: &mut RouterSocket, msg: ZmqMessage) -> Result<()> {
-        // Convert ZmqMessage frames to Bytes for parsing
-        let frames: Vec<Bytes> = msg.iter().map(|f| Bytes::copy_from_slice(f)).collect();
-
-        // Only accept HOOT01 frame protocol (scan for protocol marker)
-        if frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
-            return self.handle_hoot_frame(socket, &frames).await;
-        }
-
-        // Reject non-HOOT01 frames
-        warn!("Received non-HOOT01 message, rejecting");
-        Err(anyhow::anyhow!("Only HOOT01 protocol is supported"))
-    }
-
-    /// Handle HOOT01 frame protocol message
-    async fn handle_hoot_frame(&self, socket: &mut RouterSocket, frames: &[Bytes]) -> Result<()> {
-        let (identity, frame) = HootFrame::from_frames_with_identity(frames)
-            .with_context(|| "Failed to parse HOOT01 frame")?;
-
-        debug!(
-            "HOOT01 {:?} from service={} request_id={}",
-            frame.command, frame.service, frame.request_id
+    /// Handle a request and return the ZMQ message to send as response
+    async fn handle_request(&self, identity: Vec<Bytes>, frame: HootFrame) -> Vec<Msg> {
+        // Create span with traceparent
+        let span = tracing::info_span!(
+            "hoot_request",
+            otel.name = "hoot_request",
+            request_id = %frame.request_id,
+            service = %frame.service,
         );
 
-        match frame.command {
-            Command::Heartbeat => {
-                // Record activity from this client (use first identity frame as key)
-                if let Some(client_id) = identity.first() {
-                    self.client_tracker.record_activity(client_id).await;
-                }
-
-                // Respond immediately with heartbeat
-                let response = HootFrame::heartbeat("hootenanny");
-                let reply_frames = response.to_frames_with_identity(&identity);
-                let reply = frames_to_zmq_message(&reply_frames);
-                socket.send(reply).await?;
-                debug!("Heartbeat response sent");
-            }
-
-            Command::Request => {
-                // Create span with traceparent
-                let span = tracing::info_span!(
-                    "hoot_request",
-                    otel.name = "hoot_request",
-                    request_id = %frame.request_id,
-                    service = %frame.service,
-                );
-
-                if let Some(ref tp) = frame.traceparent {
-                    if let Some(parent_ctx) = telemetry::parse_traceparent(Some(tp.as_str())) {
-                        span.set_parent(parent_ctx);
-                    }
-                }
-
-                // Dispatch based on content type
-                let response = match frame.content_type {
-                    ContentType::CapnProto => {
-                        // First, parse the entire capnp message to Payload
-                        // (must complete before await to avoid holding reader across await point)
-                        let payload_result: Result<Payload, capnp::Error> = match frame.read_capnp()
-                        {
-                            Ok(reader) => {
-                                match reader.get_root::<envelope_capnp::envelope::Reader>() {
-                                    Ok(envelope_reader) => {
-                                        capnp_envelope_to_payload(envelope_reader)
-                                    }
-                                    Err(e) => Err(e),
-                                }
-                            }
-                            Err(e) => {
-                                Err(capnp::Error::failed(format!("Failed to read capnp: {}", e)))
-                            }
-                        };
-
-                        // Reader is dropped here, now we can safely await
-                        match payload_result {
-                            Ok(payload) => {
-                                // Dispatch the request
-                                let result = self.dispatch(payload).instrument(span).await;
-
-                                // Convert response back to capnp
-                                match payload_to_capnp_envelope(frame.request_id, &result) {
-                                    Ok(response_msg) => {
-                                        // Serialize to bytes
-                                        let bytes =
-                                            capnp::serialize::write_message_to_words(&response_msg);
-                                        HootFrame {
-                                            command: Command::Reply,
-                                            content_type: ContentType::CapnProto,
-                                            request_id: frame.request_id,
-                                            service: "hootenanny".to_string(),
-                                            traceparent: None,
-                                            body: bytes.into(),
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to convert response to capnp: {}", e);
-                                        let error_payload = Payload::Error {
-                                            code: "capnp_serialize_error".to_string(),
-                                            message: e.to_string(),
-                                            details: None,
-                                        };
-                                        let error_msg = payload_to_capnp_envelope(
-                                            frame.request_id,
-                                            &error_payload,
-                                        )
-                                        .expect("Failed to serialize error");
-                                        HootFrame::reply_capnp(frame.request_id, &error_msg)
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                error!("Failed to parse capnp envelope: {}", e);
-                                let error_payload = Payload::Error {
-                                    code: "capnp_parse_error".to_string(),
-                                    message: e.to_string(),
-                                    details: None,
-                                };
-                                let error_msg =
-                                    payload_to_capnp_envelope(frame.request_id, &error_payload)
-                                        .expect("Failed to serialize error");
-                                HootFrame::reply_capnp(frame.request_id, &error_msg)
-                            }
-                        }
-                    }
-                    ContentType::RawBinary | ContentType::Empty | ContentType::Json => {
-                        // Not supported - return error
-                        let error_payload = Payload::Error {
-                            code: "unsupported_content_type".to_string(),
-                            message: format!(
-                                "Content type {:?} not supported. Use CapnProto.",
-                                frame.content_type
-                            ),
-                            details: None,
-                        };
-                        let error_msg = payload_to_capnp_envelope(frame.request_id, &error_payload)
-                            .expect("Failed to serialize error");
-                        HootFrame::reply_capnp(frame.request_id, &error_msg)
-                    }
-                };
-
-                let reply_frames = response.to_frames_with_identity(&identity);
-                let reply = frames_to_zmq_message(&reply_frames);
-                socket.send(reply).await?;
-            }
-
-            Command::Ready => {
-                // Register client for bidirectional heartbeating (use first identity frame)
-                let service = frame.service.clone();
-                if let Some(client_id) = identity.first() {
-                    self.client_tracker
-                        .register(client_id.clone(), service.clone())
-                        .await;
-                }
-
-                info!("Client registered: service={}", service);
-            }
-
-            Command::Disconnect => {
-                // Remove client from tracker
-                if let Some(client_id) = identity.first() {
-                    self.client_tracker.remove(client_id).await;
-                }
-                info!("Client disconnected: service={}", frame.service);
-            }
-
-            Command::Reply => {
-                // Unexpected - we're the server, we shouldn't receive replies
-                warn!("Unexpected Reply command received at server");
+        if let Some(ref tp) = frame.traceparent {
+            if let Some(parent_ctx) = telemetry::parse_traceparent(Some(tp.as_str())) {
+                span.set_parent(parent_ctx);
             }
         }
 
-        Ok(())
+        let response_payload = self.dispatch_request(&frame).instrument(span).await;
+
+        // Build response frame
+        let response_msg = match payload_to_capnp_envelope(frame.request_id, &response_payload) {
+            Ok(msg) => msg,
+            Err(e) => {
+                error!("Failed to encode response: {}", e);
+                let err_payload = Payload::Error {
+                    code: "encode_error".to_string(),
+                    message: e.to_string(),
+                    details: None,
+                };
+                payload_to_capnp_envelope(frame.request_id, &err_payload)
+                    .expect("Error payload encoding should not fail")
+            }
+        };
+
+        let bytes = capnp::serialize::write_message_to_words(&response_msg);
+        let response_frame = HootFrame {
+            command: Command::Reply,
+            content_type: ContentType::CapnProto,
+            request_id: frame.request_id,
+            service: "hootenanny".to_string(),
+            traceparent: None,
+            body: bytes.into(),
+        };
+
+        let reply_frames = response_frame.to_frames_with_identity(&identity);
+        frames_to_msgs(&reply_frames)
+    }
+
+    /// Dispatch a request and return the response payload
+    async fn dispatch_request(&self, frame: &HootFrame) -> Payload {
+        match frame.content_type {
+            ContentType::CapnProto => {
+                let payload_result: Result<Payload, String> = match frame.read_capnp() {
+                    Ok(reader) => match reader.get_root::<envelope_capnp::envelope::Reader>() {
+                        Ok(envelope_reader) => {
+                            capnp_envelope_to_payload(envelope_reader).map_err(|e| e.to_string())
+                        }
+                        Err(e) => Err(e.to_string()),
+                    },
+                    Err(e) => Err(e.to_string()),
+                };
+
+                match payload_result {
+                    Ok(payload) => self.dispatch(payload).await,
+                    Err(e) => {
+                        error!("Failed to parse capnp envelope: {}", e);
+                        Payload::Error {
+                            code: "capnp_parse_error".to_string(),
+                            message: e,
+                            details: None,
+                        }
+                    }
+                }
+            }
+            other => {
+                error!("Unsupported content type: {:?}", other);
+                Payload::Error {
+                    code: "unsupported_content_type".to_string(),
+                    message: format!("{:?}", other),
+                    details: None,
+                }
+            }
+        }
     }
 
     async fn dispatch(&self, payload: Payload) -> Payload {
@@ -511,7 +520,7 @@ impl HooteprotoServer {
     async fn dispatch_via_luanette(&self, luanette: &LuanetteClient, payload: Payload) -> Payload {
         debug!("Proxying to luanette: {}", payload_type_name(&payload));
 
-        match luanette.request(payload, None).await {
+        match luanette.request(payload).await {
             Ok(response) => response,
             Err(e) => {
                 warn!("Luanette proxy error: {}", e);
@@ -542,7 +551,7 @@ impl HooteprotoServer {
     ) -> Payload {
         debug!("Proxying to vibeweaver: {}", payload_type_name(&payload));
 
-        match vibeweaver.request(payload, None).await {
+        match vibeweaver.request(payload).await {
             Ok(response) => response,
             Err(e) => {
                 warn!("Vibeweaver proxy error: {}", e);
@@ -880,16 +889,24 @@ fn payload_to_tool_args(payload: Payload) -> anyhow::Result<(String, serde_json:
     Ok((tool_name, serde_json::Value::Object(args)))
 }
 
-/// Convert a Vec<Bytes> to a ZmqMessage
-fn frames_to_zmq_message(frames: &[Bytes]) -> ZmqMessage {
-    // ZmqMessage doesn't implement Default, so we build from first frame
-    if frames.is_empty() {
-        return ZmqMessage::from(Vec::<u8>::new());
-    }
+/// Convert a Vec<Bytes> to Vec<Msg> for rzmq multipart
+fn frames_to_msgs(frames: &[Bytes]) -> Vec<Msg> {
+    frames.iter().map(|f| Msg::from_vec(f.to_vec())).collect()
+}
 
-    let mut msg = ZmqMessage::from(frames[0].to_vec());
-    for frame in frames.iter().skip(1) {
-        msg.push_back(frame.to_vec().into());
+/// Send a multipart message using individual send() calls with MORE flags.
+///
+/// rzmq's ROUTER socket has a bug in send_multipart that drops frames.
+/// This workaround sends each frame individually with the MORE flag set
+/// for all but the last frame.
+async fn send_multipart_individually(socket: &Socket, msgs: Vec<Msg>) -> Result<()> {
+    let last_idx = msgs.len().saturating_sub(1);
+    for (i, mut msg) in msgs.into_iter().enumerate() {
+        if i < last_idx {
+            msg.set_flags(MsgFlags::MORE);
+        }
+        socket.send(msg).await
+            .with_context(|| format!("Failed to send frame {} of multipart", i))?;
     }
-    msg
+    Ok(())
 }
