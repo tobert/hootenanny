@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::backend::BackendPool;
+use crate::dispatch;
 
 /// Shared tool cache for dynamic refresh across handler instances.
 ///
@@ -132,10 +133,15 @@ impl Handler for ZmqHandler {
             }
         };
 
-        // Use generic ToolCall - hootenanny routes by name to dispatch.rs
-        let payload = Payload::ToolCall {
-            name: name.to_string(),
-            args: arguments,
+        // Convert JSON args to typed Payload (JSON boundary is here in holler)
+        let payload = match dispatch::json_to_payload(name, arguments) {
+            Ok(p) => p,
+            Err(e) => {
+                return Err(ErrorData::invalid_params(format!(
+                    "Failed to parse arguments for {}: {}",
+                    name, e
+                )));
+            }
         };
 
         // TODO: Extract traceparent from context if available
