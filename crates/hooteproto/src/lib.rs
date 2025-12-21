@@ -524,6 +524,53 @@ pub enum Payload {
         start: Option<f64>,
         end: Option<f64>,
     },
+    GardenAttachAudio {
+        device_name: Option<String>,
+        sample_rate: Option<u32>,
+        latency_frames: Option<u32>,
+    },
+    GardenDetachAudio,
+    GardenAudioStatus,
+    GardenAttachInput {
+        device_name: Option<String>,
+        sample_rate: Option<u32>,
+    },
+    GardenDetachInput,
+    GardenInputStatus,
+    GardenSetMonitor {
+        enabled: Option<bool>,
+        gain: Option<f32>,
+    },
+
+    // === Tool Help (scatter-gather from all backends) ===
+    GetToolHelp {
+        /// Tool name or category (None = all tools)
+        topic: Option<String>,
+    },
+    ToolHelpList {
+        /// Help entries from this backend
+        entries: Vec<ToolHelp>,
+    },
+
+    // === Model-Native API (schedule/analyze with typed Encoding) ===
+    Schedule {
+        /// Content to schedule for playback
+        encoding: Encoding,
+        /// Position on timeline (in beats)
+        at: f64,
+        /// Duration in beats (auto-detected if omitted)
+        duration: Option<f64>,
+        /// Playback gain (0.0-1.0)
+        gain: Option<f64>,
+        /// Playback rate (1.0 = normal speed)
+        rate: Option<f64>,
+    },
+    Analyze {
+        /// Content to analyze
+        encoding: Encoding,
+        /// Analysis tasks to run
+        tasks: Vec<AnalysisTask>,
+    },
 
     // === Misc Tools ===
     // Aligned with hootenanny api::schema types
@@ -745,6 +792,74 @@ pub enum SampleFormat {
     F32,
     I16,
     I24,
+}
+
+// =============================================================================
+// Rich Tool Help (beyond MCP's basic description)
+// =============================================================================
+
+/// Rich help information for a tool, accessible via ZMQ.
+///
+/// Goes beyond MCP's basic tool description to include:
+/// - Detailed usage instructions
+/// - Examples
+/// - Related tools
+/// - Metadata for categorization
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolHelp {
+    /// Tool name
+    pub name: String,
+    /// Brief one-line description (same as MCP)
+    pub summary: String,
+    /// Detailed usage instructions (markdown)
+    pub instructions: String,
+    /// Usage examples (markdown code blocks)
+    pub examples: String,
+    /// Related tools to explore
+    pub related_tools: Vec<String>,
+    /// Category for grouping (e.g., "audio", "graph", "generation")
+    pub category: String,
+    /// Timing hint: sync, async_short, async_medium, async_long
+    pub timing: String,
+}
+
+// =============================================================================
+// Content Encoding (for schedule/analyze)
+// =============================================================================
+
+/// Content reference encoding - how to locate content for playback or analysis.
+///
+/// This is a typed alternative to JSON-based encoding, enabling:
+/// - Type-safe ZMQ transport without JSON
+/// - Cap'n Proto serialization
+/// - Validation at protocol boundaries
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Encoding {
+    /// MIDI content via artifact ID
+    Midi { artifact_id: String },
+    /// Audio content via artifact ID
+    Audio { artifact_id: String },
+    /// ABC notation as raw string
+    Abc { notation: String },
+    /// Raw content via CAS hash with format hint
+    Hash { content_hash: String, format: String },
+}
+
+/// Analysis task for the analyze tool.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisTask {
+    /// Classify content type/characteristics
+    Classify,
+    /// Detect beats and downbeats
+    Beats,
+    /// Generate embeddings for similarity search
+    Embeddings,
+    /// Detect genre
+    Genre,
+    /// Detect mood/energy
+    Mood,
 }
 
 /// Broadcast messages via PUB/SUB

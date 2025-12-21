@@ -1523,6 +1523,90 @@ fn payload_to_capnp_payload(
             regions.set_end(end.unwrap_or(0.0));
         }
 
+        // Garden audio/input tools - serialize as ToolCall until schema is extended
+        Payload::GardenAttachAudio { device_name, sample_rate, latency_frames } => {
+            let mut tool_call = builder.reborrow().init_tool_call();
+            tool_call.set_name("garden_attach_audio");
+            tool_call.set_args(serde_json::to_string(&serde_json::json!({
+                "device_name": device_name,
+                "sample_rate": sample_rate,
+                "latency_frames": latency_frames,
+            })).unwrap_or_else(|_| "{}".to_string()));
+        }
+        Payload::GardenDetachAudio => {
+            let mut tool_call = builder.reborrow().init_tool_call();
+            tool_call.set_name("garden_detach_audio");
+            tool_call.set_args("{}");
+        }
+        Payload::GardenAudioStatus => {
+            let mut tool_call = builder.reborrow().init_tool_call();
+            tool_call.set_name("garden_audio_status");
+            tool_call.set_args("{}");
+        }
+        Payload::GardenAttachInput { device_name, sample_rate } => {
+            let mut tool_call = builder.reborrow().init_tool_call();
+            tool_call.set_name("garden_attach_input");
+            tool_call.set_args(serde_json::to_string(&serde_json::json!({
+                "device_name": device_name,
+                "sample_rate": sample_rate,
+            })).unwrap_or_else(|_| "{}".to_string()));
+        }
+        Payload::GardenDetachInput => {
+            let mut tool_call = builder.reborrow().init_tool_call();
+            tool_call.set_name("garden_detach_input");
+            tool_call.set_args("{}");
+        }
+        Payload::GardenInputStatus => {
+            let mut tool_call = builder.reborrow().init_tool_call();
+            tool_call.set_name("garden_input_status");
+            tool_call.set_args("{}");
+        }
+        Payload::GardenSetMonitor { enabled, gain } => {
+            let mut tool_call = builder.reborrow().init_tool_call();
+            tool_call.set_name("garden_set_monitor");
+            tool_call.set_args(serde_json::to_string(&serde_json::json!({
+                "enabled": enabled,
+                "gain": gain,
+            })).unwrap_or_else(|_| "{}".to_string()));
+        }
+
+        // === Tool Help (serialize as ToolCall until schema extended) ===
+        Payload::GetToolHelp { topic } => {
+            let mut tool_call = builder.reborrow().init_tool_call();
+            tool_call.set_name("get_tool_help");
+            tool_call.set_args(serde_json::to_string(&serde_json::json!({
+                "topic": topic,
+            })).unwrap_or_else(|_| "{}".to_string()));
+        }
+        Payload::ToolHelpList { entries } => {
+            let mut tool_call = builder.reborrow().init_tool_call();
+            tool_call.set_name("tool_help_list");
+            tool_call.set_args(serde_json::to_string(&serde_json::json!({
+                "entries": entries,
+            })).unwrap_or_else(|_| "{}".to_string()));
+        }
+
+        // === Model-Native API (serialize as ToolCall until schema extended) ===
+        Payload::Schedule { encoding, at, duration, gain, rate } => {
+            let mut tool_call = builder.reborrow().init_tool_call();
+            tool_call.set_name("schedule");
+            tool_call.set_args(serde_json::to_string(&serde_json::json!({
+                "encoding": encoding,
+                "at": at,
+                "duration": duration,
+                "gain": gain,
+                "rate": rate,
+            })).unwrap_or_else(|_| "{}".to_string()));
+        }
+        Payload::Analyze { encoding, tasks } => {
+            let mut tool_call = builder.reborrow().init_tool_call();
+            tool_call.set_name("analyze");
+            tool_call.set_args(serde_json::to_string(&serde_json::json!({
+                "encoding": encoding,
+                "tasks": tasks,
+            })).unwrap_or_else(|_| "{}".to_string()));
+        }
+
         // === Transport Commands (Direct envelope) ===
         Payload::TransportPlay => {
             builder.reborrow().set_transport_play(());

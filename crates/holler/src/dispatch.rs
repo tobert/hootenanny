@@ -105,6 +105,65 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 variables: p.variables,
             })
         }
+        "garden_emergency_pause" => Ok(Payload::GardenEmergencyPause),
+        "garden_create_region" => {
+            let p: GardenCreateRegionArgs = serde_json::from_value(args)
+                .context("Invalid garden_create_region arguments")?;
+            Ok(Payload::GardenCreateRegion {
+                position: p.position,
+                duration: p.duration,
+                behavior_type: p.behavior_type,
+                content_id: p.content_id,
+            })
+        }
+        "garden_delete_region" => {
+            let p: GardenDeleteRegionArgs = serde_json::from_value(args)
+                .context("Invalid garden_delete_region arguments")?;
+            Ok(Payload::GardenDeleteRegion {
+                region_id: p.region_id,
+            })
+        }
+        "garden_move_region" => {
+            let p: GardenMoveRegionArgs = serde_json::from_value(args)
+                .context("Invalid garden_move_region arguments")?;
+            Ok(Payload::GardenMoveRegion {
+                region_id: p.region_id,
+                new_position: p.new_position,
+            })
+        }
+        "garden_get_regions" => {
+            let p: GardenGetRegionsArgs = serde_json::from_value(args).unwrap_or_default();
+            Ok(Payload::GardenGetRegions {
+                start: p.start,
+                end: p.end,
+            })
+        }
+        "garden_attach_audio" => {
+            let p: GardenAttachAudioArgs = serde_json::from_value(args).unwrap_or_default();
+            Ok(Payload::GardenAttachAudio {
+                device_name: p.device_name,
+                sample_rate: p.sample_rate,
+                latency_frames: p.latency_frames,
+            })
+        }
+        "garden_detach_audio" => Ok(Payload::GardenDetachAudio),
+        "garden_audio_status" => Ok(Payload::GardenAudioStatus),
+        "garden_attach_input" => {
+            let p: GardenAttachInputArgs = serde_json::from_value(args).unwrap_or_default();
+            Ok(Payload::GardenAttachInput {
+                device_name: p.device_name,
+                sample_rate: p.sample_rate,
+            })
+        }
+        "garden_detach_input" => Ok(Payload::GardenDetachInput),
+        "garden_input_status" => Ok(Payload::GardenInputStatus),
+        "garden_set_monitor" => {
+            let p: GardenSetMonitorArgs = serde_json::from_value(args).unwrap_or_default();
+            Ok(Payload::GardenSetMonitor {
+                enabled: p.enabled,
+                gain: p.gain,
+            })
+        }
 
         // === Job Tools ===
         "job_status" => {
@@ -352,6 +411,33 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
         // === Tool Discovery ===
         "list_tools" => Ok(Payload::ListTools),
 
+        // === Tool Help ===
+        "holler_help" | "get_tool_help" => {
+            let p: GetToolHelpArgs = serde_json::from_value(args).unwrap_or_default();
+            Ok(Payload::GetToolHelp { topic: p.topic })
+        }
+
+        // === Model-Native API ===
+        "schedule" => {
+            let p: ScheduleArgs = serde_json::from_value(args)
+                .context("Invalid schedule arguments")?;
+            Ok(Payload::Schedule {
+                encoding: p.encoding,
+                at: p.at,
+                duration: p.duration,
+                gain: p.gain,
+                rate: p.rate,
+            })
+        }
+        "analyze" => {
+            let p: AnalyzeArgs = serde_json::from_value(args)
+                .context("Invalid analyze arguments")?;
+            Ok(Payload::Analyze {
+                encoding: p.encoding,
+                tasks: p.tasks,
+            })
+        }
+
         // === Fallback: Unknown tool ===
         // TODO: Remove this fallback once all tools are typed
         _ => Ok(Payload::ToolCall {
@@ -427,6 +513,50 @@ struct GardenSetTempoArgs {
 struct GardenQueryArgs {
     query: String,
     variables: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GardenCreateRegionArgs {
+    position: f64,
+    duration: f64,
+    behavior_type: String,
+    content_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GardenDeleteRegionArgs {
+    region_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GardenMoveRegionArgs {
+    region_id: String,
+    new_position: f64,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GardenGetRegionsArgs {
+    start: Option<f64>,
+    end: Option<f64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GardenAttachAudioArgs {
+    device_name: Option<String>,
+    sample_rate: Option<u32>,
+    latency_frames: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GardenAttachInputArgs {
+    device_name: Option<String>,
+    sample_rate: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GardenSetMonitorArgs {
+    enabled: Option<bool>,
+    gain: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -631,4 +761,24 @@ struct SoundfontInspectArgs {
 struct ConfigGetArgs {
     section: Option<String>,
     key: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GetToolHelpArgs {
+    topic: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScheduleArgs {
+    encoding: hooteproto::Encoding,
+    at: f64,
+    duration: Option<f64>,
+    gain: Option<f64>,
+    rate: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnalyzeArgs {
+    encoding: hooteproto::Encoding,
+    tasks: Vec<hooteproto::AnalysisTask>,
 }
