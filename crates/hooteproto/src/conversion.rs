@@ -131,6 +131,208 @@ pub fn payload_to_request(payload: &Payload) -> Result<Option<ToolRequest>, Tool
         Payload::Ping => Ok(Some(ToolRequest::Ping)),
         Payload::ListTools => Ok(Some(ToolRequest::ListTools)),
 
+        // === CAS (Sync) ===
+        Payload::CasStore { data, mime_type } => Ok(Some(ToolRequest::CasStore(CasStoreRequest {
+            data: data.clone(),
+            mime_type: mime_type.clone(),
+        }))),
+        Payload::CasInspect { hash } => Ok(Some(ToolRequest::CasInspect(CasInspectRequest {
+            hash: hash.clone(),
+        }))),
+        Payload::CasGet { hash } => Ok(Some(ToolRequest::CasGet(CasGetRequest {
+            hash: hash.clone(),
+        }))),
+        Payload::CasUploadFile { file_path, mime_type } => {
+            Ok(Some(ToolRequest::CasUploadFile(CasUploadFileRequest {
+                file_path: file_path.clone(),
+                mime_type: mime_type.clone(),
+            })))
+        }
+
+        // === Artifacts (Sync) ===
+        Payload::ArtifactUpload {
+            file_path,
+            mime_type,
+            variation_set_id,
+            parent_id,
+            tags,
+            creator,
+        } => Ok(Some(ToolRequest::ArtifactUpload(ArtifactUploadRequest {
+            file_path: file_path.clone(),
+            mime_type: mime_type.clone(),
+            variation_set_id: variation_set_id.clone(),
+            parent_id: parent_id.clone(),
+            tags: tags.clone(),
+            creator: creator.clone(),
+        }))),
+        Payload::ArtifactGet { id } => Ok(Some(ToolRequest::ArtifactGet(ArtifactGetRequest {
+            id: id.clone(),
+        }))),
+        Payload::ArtifactList { tag, creator } => {
+            Ok(Some(ToolRequest::ArtifactList(ArtifactListRequest {
+                tag: tag.clone(),
+                creator: creator.clone(),
+                limit: None,
+            })))
+        }
+
+        // === Jobs (Sync) ===
+        Payload::JobPoll {
+            job_ids,
+            timeout_ms,
+            mode,
+        } => Ok(Some(ToolRequest::JobPoll(JobPollRequest {
+            job_ids: job_ids.clone(),
+            timeout_ms: *timeout_ms,
+            mode: Some(match mode {
+                PollMode::Any => "any".to_string(),
+                PollMode::All => "all".to_string(),
+            }),
+        }))),
+        Payload::JobCancel { job_id } => Ok(Some(ToolRequest::JobCancel(JobCancelRequest {
+            job_id: job_id.clone(),
+        }))),
+        Payload::JobSleep { milliseconds } => Ok(Some(ToolRequest::JobSleep(JobSleepRequest {
+            milliseconds: *milliseconds,
+        }))),
+
+        // === ABC (remaining) ===
+        Payload::AbcToMidi {
+            abc,
+            tempo_override,
+            transpose,
+            velocity,
+            channel,
+            variation_set_id,
+            parent_id,
+            tags,
+            creator,
+        } => Ok(Some(ToolRequest::AbcToMidi(AbcToMidiRequest {
+            abc: abc.clone(),
+            tempo_override: *tempo_override,
+            transpose: *transpose,
+            velocity: *velocity,
+            channel: *channel,
+            variation_set_id: variation_set_id.clone(),
+            parent_id: parent_id.clone(),
+            tags: tags.clone(),
+            creator: creator.clone(),
+        }))),
+
+        // === Orpheus (AsyncLong) ===
+        Payload::OrpheusGenerate {
+            model,
+            temperature,
+            top_p,
+            max_tokens,
+            num_variations,
+            variation_set_id,
+            parent_id,
+            tags,
+            creator,
+        } => Ok(Some(ToolRequest::OrpheusGenerate(OrpheusGenerateRequest {
+            model: model.clone(),
+            temperature: *temperature,
+            top_p: *top_p,
+            max_tokens: *max_tokens,
+            num_variations: *num_variations,
+            variation_set_id: variation_set_id.clone(),
+            parent_id: parent_id.clone(),
+            tags: tags.clone(),
+            creator: creator.clone(),
+        }))),
+        Payload::OrpheusContinue {
+            input_hash,
+            model,
+            temperature,
+            top_p,
+            max_tokens,
+            num_variations,
+            variation_set_id,
+            parent_id,
+            tags,
+            creator,
+        } => Ok(Some(ToolRequest::OrpheusContinue(OrpheusContinueRequest {
+            input_hash: input_hash.clone(),
+            model: model.clone(),
+            temperature: *temperature,
+            top_p: *top_p,
+            max_tokens: *max_tokens,
+            num_variations: *num_variations,
+            variation_set_id: variation_set_id.clone(),
+            parent_id: parent_id.clone(),
+            tags: tags.clone(),
+            creator: creator.clone(),
+        }))),
+        Payload::OrpheusBridge {
+            section_a_hash,
+            section_b_hash,
+            model,
+            temperature,
+            top_p,
+            max_tokens,
+            variation_set_id,
+            parent_id,
+            tags,
+            creator,
+        } => Ok(Some(ToolRequest::OrpheusBridge(OrpheusBridgeRequest {
+            section_a_hash: section_a_hash.clone(),
+            section_b_hash: section_b_hash.clone(),
+            model: model.clone(),
+            temperature: *temperature,
+            top_p: *top_p,
+            max_tokens: *max_tokens,
+            variation_set_id: variation_set_id.clone(),
+            parent_id: parent_id.clone(),
+            tags: tags.clone(),
+            creator: creator.clone(),
+        }))),
+        Payload::OrpheusLoops {
+            temperature,
+            top_p,
+            max_tokens,
+            num_variations,
+            seed_hash,
+            variation_set_id,
+            parent_id,
+            tags,
+            creator,
+        } => Ok(Some(ToolRequest::OrpheusLoops(OrpheusLoopsRequest {
+            temperature: *temperature,
+            top_p: *top_p,
+            max_tokens: *max_tokens,
+            num_variations: *num_variations,
+            seed_hash: seed_hash.clone(),
+            variation_set_id: variation_set_id.clone(),
+            parent_id: parent_id.clone(),
+            tags: tags.clone(),
+            creator: creator.clone(),
+        }))),
+        Payload::OrpheusClassify { midi_hash } => {
+            Ok(Some(ToolRequest::OrpheusClassify(OrpheusClassifyRequest {
+                midi_hash: midi_hash.clone(),
+            })))
+        }
+
+        // === MIDI/Audio Conversion (AsyncMedium) ===
+        Payload::ConvertMidiToWav {
+            input_hash,
+            soundfont_hash,
+            sample_rate,
+            variation_set_id,
+            parent_id,
+            tags,
+            creator,
+        } => Ok(Some(ToolRequest::MidiToWav(MidiToWavRequest {
+            input_hash: input_hash.clone(),
+            soundfont_hash: soundfont_hash.clone(),
+            sample_rate: *sample_rate,
+            variation_set_id: variation_set_id.clone(),
+            parent_id: parent_id.clone(),
+            tags: tags.clone(),
+            creator: creator.clone(),
+        }))),
+
         // === Tools not yet converted - use legacy path ===
         _ => Ok(None),
     }
@@ -1794,7 +1996,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unsupported_returns_none() {
+    fn test_orpheus_generate_converts() {
         let payload = Payload::OrpheusGenerate {
             max_tokens: Some(1024),
             num_variations: Some(1),
@@ -1805,6 +2007,18 @@ mod tests {
             creator: None,
             parent_id: None,
             variation_set_id: None,
+        };
+
+        let request = payload_to_request(&payload).unwrap();
+        assert!(matches!(request, Some(ToolRequest::OrpheusGenerate(_))));
+    }
+
+    #[test]
+    fn test_unsupported_returns_none() {
+        // ToolCall is the legacy path - should return None for typed dispatch
+        let payload = Payload::ToolCall {
+            name: "unknown_tool".to_string(),
+            args: serde_json::json!({}),
         };
 
         let request = payload_to_request(&payload).unwrap();
