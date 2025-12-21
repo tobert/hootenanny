@@ -162,6 +162,7 @@ impl HooteprotoServer {
                                     match frame.command {
                                         Command::Heartbeat => {
                                             // Handle heartbeats synchronously (fast path)
+                                            debug!("💓 Heartbeat received from {}", frame.service);
                                             if let Some(client_id) = identity.first() {
                                                 server.client_tracker.record_activity(client_id).await;
                                             }
@@ -172,6 +173,7 @@ impl HooteprotoServer {
                                             if let Err(e) = send_multipart_individually(&socket, reply).await {
                                                 error!("Failed to send heartbeat response: {}", e);
                                             }
+                                            debug!("💓 Heartbeat response sent to {}", frame.service);
                                         }
                                         Command::Request => {
                                             // Spawn async task for request handling (allows concurrency)
@@ -855,12 +857,26 @@ fn frames_to_msgs(frames: &[Bytes]) -> Vec<Msg> {
 /// for all but the last frame.
 async fn send_multipart_individually(socket: &Socket, msgs: Vec<Msg>) -> Result<()> {
     let last_idx = msgs.len().saturating_sub(1);
+    let total_frames = msgs.len();
     for (i, mut msg) in msgs.into_iter().enumerate() {
         if i < last_idx {
             msg.set_flags(MsgFlags::MORE);
         }
-        socket.send(msg).await
-            .with_context(|| format!("Failed to send frame {} of multipart", i))?;
+        if let Err(e) = socket.send(msg).await {
+            // Log the actual error from rzmq for debugging
+            tracing::debug!(
+                frame = i,
+                total = total_frames,
+                error = %e,
+                "ROUTER send failed"
+            );
+            return Err(anyhow::anyhow!(
+                "Failed to send frame {} of {} multipart: {}",
+                i,
+                total_frames,
+                e
+            ));
+        }
     }
     Ok(())
 }

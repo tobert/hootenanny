@@ -352,8 +352,19 @@ impl HootClient {
                 .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
                 .collect();
 
-            let response_frame = HootFrame::from_frames(&response_frames)
-                .context("Failed to parse response frame")?;
+            let response_frame = match HootFrame::from_frames(&response_frames) {
+                Ok(f) => f,
+                Err(e) => {
+                    // Log frame details on parse failure for debugging
+                    debug!(
+                        "{}: Parse failed - {} frames received, first bytes: {:?}",
+                        self.config.name,
+                        response_frames.len(),
+                        response_frames.first().map(|f| &f[..f.len().min(20)])
+                    );
+                    return Err(anyhow::anyhow!("Failed to parse response frame: {}", e));
+                }
+            };
 
             // Check correlation
             if response_frame.request_id != request_id {
@@ -403,6 +414,11 @@ impl HootClient {
             .iter()
             .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
             .collect();
+
+        debug!(
+            "{}: Heartbeat received {} frames, checking for HOOT01",
+            self.config.name, frames.len()
+        );
 
         if frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
             match HootFrame::from_frames(&frames) {
@@ -454,6 +470,11 @@ impl HootClient {
 ///
 /// This doesn't manage socket reconnection (ZMQ does that automatically).
 /// It only tracks whether the peer is actively responding.
+///
+/// Following zguide Chapter 4 (Paranoid Pirate pattern):
+/// - Send heartbeats immediately (ZMQ handles connection timing)
+/// - Only count failures AFTER we've ever successfully connected
+/// - During initial Unknown phase, silently wait for connection
 pub fn spawn_health_task(
     client: Arc<HootClient>,
     heartbeat_interval: Duration,
@@ -462,13 +483,10 @@ pub fn spawn_health_task(
     on_connected: Option<Box<dyn Fn() + Send + Sync + 'static>>,
 ) {
     tokio::spawn(async move {
-        // Wait for initial connection to be established before starting heartbeats
-        // ZMQ connect is non-blocking, but TCP handshake takes time
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
         let mut ticker = tokio::time::interval(heartbeat_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut was_connected = false;
+        let mut ever_connected = false;
 
         info!(
             "{}: Heartbeat task started (interval: {:?})",
@@ -482,29 +500,44 @@ pub fn spawn_health_task(
                         Ok(()) => {
                             let is_connected = client.health.is_connected();
                             if is_connected && !was_connected {
-                                info!("{}: Peer is now responding", client.config.name);
+                                if !ever_connected {
+                                    info!("{}: Initial connection established", client.config.name);
+                                } else {
+                                    info!("{}: Peer reconnected", client.config.name);
+                                }
                                 if let Some(ref callback) = on_connected {
                                     callback();
                                 }
+                                ever_connected = true;
                             }
                             was_connected = is_connected;
                         }
                         Err(e) => {
-                            let failures = client.health.record_failure();
-                            if failures == 1 || failures % 5 == 0 {
-                                warn!(
-                                    "{}: Heartbeat failed: {} ({}/{})",
-                                    client.config.name, e, failures, max_failures
+                            // Only count failures if we've ever been connected
+                            // During initial connection phase, just wait silently
+                            if ever_connected {
+                                let failures = client.health.record_failure();
+                                if failures == 1 || failures % 5 == 0 {
+                                    warn!(
+                                        "{}: Heartbeat failed: {} ({}/{})",
+                                        client.config.name, e, failures, max_failures
+                                    );
+                                }
+
+                                if failures >= max_failures {
+                                    if client.health.get_state() != ConnectionState::Dead {
+                                        client.health.set_state(ConnectionState::Dead);
+                                        warn!("{}: Peer marked DEAD (not responding)", client.config.name);
+                                    }
+                                }
+                                was_connected = false;
+                            } else {
+                                // Waiting for initial connection - this is normal during startup
+                                debug!(
+                                    "{}: Waiting for peer (heartbeat: {})",
+                                    client.config.name, e
                                 );
                             }
-
-                            if failures >= max_failures {
-                                if client.health.get_state() != ConnectionState::Dead {
-                                    client.health.set_state(ConnectionState::Dead);
-                                    warn!("{}: Peer marked DEAD (not responding)", client.config.name);
-                                }
-                            }
-                            was_connected = false;
                         }
                     }
                 }
