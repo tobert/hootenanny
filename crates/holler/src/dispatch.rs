@@ -258,6 +258,64 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 tag_value: p.tag_value,
             })
         }
+        "graph_bind" => {
+            let p: GraphBindArgs = serde_json::from_value(args)
+                .context("Invalid graph_bind arguments")?;
+            Ok(Payload::GraphBind {
+                id: p.id,
+                name: p.name,
+                hints: p
+                    .hints
+                    .into_iter()
+                    .map(|h| hooteproto::GraphHint {
+                        kind: h.kind,
+                        value: h.value,
+                        confidence: h.confidence,
+                    })
+                    .collect(),
+            })
+        }
+        "graph_tag" => {
+            let p: GraphTagArgs = serde_json::from_value(args)
+                .context("Invalid graph_tag arguments")?;
+            Ok(Payload::GraphTag {
+                identity_id: p.identity_id,
+                namespace: p.namespace,
+                value: p.value,
+            })
+        }
+        "graph_connect" => {
+            let p: GraphConnectArgs = serde_json::from_value(args)
+                .context("Invalid graph_connect arguments")?;
+            Ok(Payload::GraphConnect {
+                from_identity: p.from_identity,
+                from_port: p.from_port,
+                to_identity: p.to_identity,
+                to_port: p.to_port,
+                transport: p.transport,
+            })
+        }
+        "graph_context" => {
+            let p: GraphContextArgs = serde_json::from_value(args).unwrap_or_default();
+            Ok(Payload::GraphContext {
+                tag: p.tag,
+                vibe_search: p.vibe_search,
+                creator: p.creator,
+                limit: p.limit,
+                include_metadata: p.include_metadata,
+                include_annotations: p.include_annotations,
+            })
+        }
+        "add_annotation" => {
+            let p: AddAnnotationArgs = serde_json::from_value(args)
+                .context("Invalid add_annotation arguments")?;
+            Ok(Payload::AddAnnotation {
+                artifact_id: p.artifact_id,
+                message: p.message,
+                vibe: p.vibe,
+                source: p.source,
+            })
+        }
 
         // === MIDI/Audio Tools ===
         "project" | "convert_midi_to_wav" => {
@@ -490,6 +548,66 @@ struct GraphFindArgs {
     name: Option<String>,
     tag_namespace: Option<String>,
     tag_value: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphBindArgs {
+    id: String,
+    name: String,
+    #[serde(default)]
+    hints: Vec<GraphHintArgs>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphHintArgs {
+    kind: String,
+    value: String,
+    #[serde(default = "default_confidence")]
+    confidence: f64,
+}
+
+fn default_confidence() -> f64 {
+    1.0
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphTagArgs {
+    identity_id: String,
+    namespace: String,
+    value: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphConnectArgs {
+    from_identity: String,
+    from_port: String,
+    to_identity: String,
+    to_port: String,
+    transport: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GraphContextArgs {
+    tag: Option<String>,
+    vibe_search: Option<String>,
+    creator: Option<String>,
+    limit: Option<usize>,
+    #[serde(default)]
+    include_metadata: bool,
+    #[serde(default = "default_true")]
+    include_annotations: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+struct AddAnnotationArgs {
+    artifact_id: String,
+    message: String,
+    vibe: Option<String>,
+    source: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -333,6 +333,82 @@ pub fn payload_to_request(payload: &Payload) -> Result<Option<ToolRequest>, Tool
             creator: creator.clone(),
         }))),
 
+        // === Graph Tools (Sync) ===
+        Payload::GraphBind { id, name, hints } => {
+            Ok(Some(ToolRequest::GraphBind(GraphBindRequest {
+                id: id.clone(),
+                name: name.clone(),
+                hints: hints
+                    .iter()
+                    .map(|h| crate::request::GraphHint {
+                        kind: h.kind.clone(),
+                        value: h.value.clone(),
+                        confidence: h.confidence,
+                    })
+                    .collect(),
+            })))
+        }
+        Payload::GraphTag {
+            identity_id,
+            namespace,
+            value,
+        } => Ok(Some(ToolRequest::GraphTag(GraphTagRequest {
+            identity_id: identity_id.clone(),
+            namespace: namespace.clone(),
+            value: value.clone(),
+        }))),
+        Payload::GraphConnect {
+            from_identity,
+            from_port,
+            to_identity,
+            to_port,
+            transport,
+        } => Ok(Some(ToolRequest::GraphConnect(GraphConnectRequest {
+            from_identity: from_identity.clone(),
+            from_port: from_port.clone(),
+            to_identity: to_identity.clone(),
+            to_port: to_port.clone(),
+            transport: transport.clone(),
+        }))),
+        Payload::GraphFind {
+            name,
+            tag_namespace,
+            tag_value,
+        } => Ok(Some(ToolRequest::GraphFind(GraphFindRequest {
+            name: name.clone(),
+            tag_namespace: tag_namespace.clone(),
+            tag_value: tag_value.clone(),
+        }))),
+        Payload::GraphContext {
+            tag,
+            vibe_search,
+            creator,
+            limit,
+            include_metadata,
+            include_annotations,
+        } => Ok(Some(ToolRequest::GraphContext(GraphContextRequest {
+            tag: tag.clone(),
+            vibe_search: vibe_search.clone(),
+            creator: creator.clone(),
+            limit: *limit,
+            include_metadata: *include_metadata,
+            include_annotations: *include_annotations,
+            within_minutes: None,
+        }))),
+
+        // === Annotation Tools (AsyncShort) ===
+        Payload::AddAnnotation {
+            artifact_id,
+            message,
+            vibe,
+            source,
+        } => Ok(Some(ToolRequest::AddAnnotation(AddAnnotationRequest {
+            artifact_id: artifact_id.clone(),
+            message: message.clone(),
+            vibe: vibe.clone(),
+            source: source.clone(),
+        }))),
+
         // === Tools not yet converted - use legacy path ===
         _ => Ok(None),
     }
