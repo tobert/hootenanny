@@ -44,45 +44,6 @@ pub async fn send(endpoint: &str, json: &str, timeout_ms: u64) -> Result<()> {
     Ok(())
 }
 
-/// Evaluate Lua code and print the result
-pub async fn lua_eval(
-    endpoint: &str,
-    code: &str,
-    params: Option<&str>,
-    timeout_ms: u64,
-) -> Result<()> {
-    let params = match params {
-        Some(p) => Some(serde_json::from_str(p).context("Failed to parse params as JSON")?),
-        None => None,
-    };
-
-    let payload = Payload::LuaEval {
-        code: code.to_string(),
-        params,
-    };
-
-    let client = Client::connect(endpoint, timeout_ms).await?;
-    let response = client.request(payload).await?;
-
-    match response.payload {
-        Payload::Success { result } => {
-            let output = serde_json::to_string_pretty(&result)?;
-            println!("{}", output);
-            Ok(())
-        }
-        Payload::Error { code, message, details } => {
-            eprintln!("Error {}: {}", code, message);
-            if let Some(d) = details {
-                eprintln!("Details: {}", serde_json::to_string_pretty(&d)?);
-            }
-            std::process::exit(1);
-        }
-        other => {
-            bail!("Unexpected response: {:?}", other);
-        }
-    }
-}
-
 /// Get status of a specific job
 pub async fn job_status(endpoint: &str, job_id: &str, timeout_ms: u64) -> Result<()> {
     let payload = Payload::JobStatus {

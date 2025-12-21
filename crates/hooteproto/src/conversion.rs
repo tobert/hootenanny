@@ -1311,9 +1311,9 @@ fn capnp_optional_string(text: capnp::text::Reader) -> Option<String> {
 /// Helper: Convert WorkerType to capnp enum
 fn worker_type_to_capnp(wt: &WorkerType) -> common_capnp::WorkerType {
     match wt {
-        WorkerType::Luanette => common_capnp::WorkerType::Luanette,
         WorkerType::Hootenanny => common_capnp::WorkerType::Hootenanny,
         WorkerType::Chaosgarden => common_capnp::WorkerType::Chaosgarden,
+        WorkerType::Vibeweaver => common_capnp::WorkerType::Vibeweaver,
     }
 }
 

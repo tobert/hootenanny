@@ -182,49 +182,6 @@ impl Default for GatewayConfig {
     }
 }
 
-/// Luanette service configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LuanetteConfig {
-    /// ZMQ ROUTER address to bind (for receiving requests).
-    /// Default: tcp://0.0.0.0:5570
-    #[serde(default = "LuanetteConfig::default_zmq_router")]
-    pub zmq_router: String,
-
-    /// Hootenanny ZMQ ROUTER endpoint to connect to.
-    /// Default: tcp://localhost:5580
-    #[serde(default = "LuanetteConfig::default_hootenanny")]
-    pub hootenanny: String,
-
-    /// Request timeout in milliseconds.
-    /// Default: 30000
-    #[serde(default = "LuanetteConfig::default_timeout_ms")]
-    pub timeout_ms: u64,
-}
-
-impl LuanetteConfig {
-    fn default_zmq_router() -> String {
-        "tcp://0.0.0.0:5570".to_string()
-    }
-
-    fn default_hootenanny() -> String {
-        "tcp://localhost:5580".to_string()
-    }
-
-    fn default_timeout_ms() -> u64 {
-        30000
-    }
-}
-
-impl Default for LuanetteConfig {
-    fn default() -> Self {
-        Self {
-            zmq_router: Self::default_zmq_router(),
-            hootenanny: Self::default_hootenanny(),
-            timeout_ms: Self::default_timeout_ms(),
-        }
-    }
-}
-
 /// Vibeweaver service configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VibeweaverConfig {
@@ -314,10 +271,6 @@ impl Default for ChaosgardenConfig {
 /// Per-service configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ServicesConfig {
-    /// Luanette Lua interpreter service.
-    #[serde(default)]
-    pub luanette: LuanetteConfig,
-
     /// Vibeweaver Python/AI agent service.
     #[serde(default)]
     pub vibeweaver: VibeweaverConfig,

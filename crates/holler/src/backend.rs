@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 /// Pool of backend connections
 ///
-/// Simplified to only connect to hootenanny, which proxies to luanette and chaosgarden.
+/// Simplified to only connect to hootenanny, which proxies to vibeweaver and chaosgarden.
 pub struct BackendPool {
     pub hootenanny: Option<Arc<HootClient>>,
 }

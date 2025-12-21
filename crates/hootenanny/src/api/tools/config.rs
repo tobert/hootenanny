@@ -81,7 +81,7 @@ impl EventDualityServer {
                         "models": config.bootstrap.models,
                         "connections": {
                             "chaosgarden": config.bootstrap.connections.chaosgarden,
-                            "luanette": config.bootstrap.connections.luanette,
+                            "vibeweaver": config.bootstrap.connections.vibeweaver,
                         },
                         "media": {
                             "soundfont_dirs": config.bootstrap.media.soundfont_dirs,
@@ -117,7 +117,7 @@ impl EventDualityServer {
                     .unwrap_or(Value::Null),
                 "connections" => serde_json::json!({
                     "chaosgarden": config.bootstrap.connections.chaosgarden,
-                    "luanette": config.bootstrap.connections.luanette,
+                    "vibeweaver": config.bootstrap.connections.vibeweaver,
                 }),
                 "media" => serde_json::json!({
                     "soundfont_dirs": config.bootstrap.media.soundfont_dirs,
@@ -150,7 +150,7 @@ impl EventDualityServer {
                     ("telemetry", "log_level") => serde_json::json!(config.infra.telemetry.log_level),
                     // connections
                     ("connections", "chaosgarden") => serde_json::json!(config.bootstrap.connections.chaosgarden),
-                    ("connections", "luanette") => serde_json::json!(config.bootstrap.connections.luanette),
+                    ("connections", "vibeweaver") => serde_json::json!(config.bootstrap.connections.vibeweaver),
                     // defaults
                     ("defaults", "lua_timeout") => serde_json::json!(config.bootstrap.defaults.lua_timeout),
                     ("defaults", "session_expiration") => serde_json::json!(config.bootstrap.defaults.session_expiration),

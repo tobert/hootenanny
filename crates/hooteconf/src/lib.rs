@@ -67,7 +67,7 @@ pub mod loader;
 
 pub use bootstrap::{BootstrapConfig, ConnectionsConfig, DefaultsConfig, MediaConfig, ModelsConfig};
 pub use infra::{
-    BindConfig, ChaosgardenConfig, GatewayConfig, InfraConfig, LuanetteConfig, PathsConfig,
+    BindConfig, ChaosgardenConfig, GatewayConfig, InfraConfig, PathsConfig,
     ServicesConfig, TelemetryConfig, VibeweaverConfig,
 };
 pub use loader::{ConfigSources, discover_config_files_with_override};
@@ -209,10 +209,6 @@ impl HootConfig {
             self.bootstrap.connections.chaosgarden
         ));
         output.push_str(&format!(
-            "luanette = \"{}\"\n",
-            self.bootstrap.connections.luanette
-        ));
-        output.push_str(&format!(
             "vibeweaver = \"{}\"\n",
             self.bootstrap.connections.vibeweaver
         ));
@@ -241,20 +237,6 @@ impl HootConfig {
         output.push_str(&format!(
             "max_concurrent_jobs = {}\n",
             self.bootstrap.defaults.max_concurrent_jobs
-        ));
-
-        output.push_str("\n[services.luanette]\n");
-        output.push_str(&format!(
-            "zmq_router = \"{}\"\n",
-            self.infra.services.luanette.zmq_router
-        ));
-        output.push_str(&format!(
-            "hootenanny = \"{}\"\n",
-            self.infra.services.luanette.hootenanny
-        ));
-        output.push_str(&format!(
-            "timeout_ms = {}\n",
-            self.infra.services.luanette.timeout_ms
         ));
 
         output.push_str("\n[services.vibeweaver]\n");

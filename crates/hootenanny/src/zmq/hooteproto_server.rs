@@ -36,7 +36,6 @@ use crate::artifact_store::{self, ArtifactStore as _};
 use crate::cas::FileStore;
 use crate::telemetry;
 use crate::zmq::client_tracker::ClientTracker;
-use crate::zmq::LuanetteClient;
 use crate::zmq::VibeweaverClient;
 
 /// ZMQ server for hooteproto messages
@@ -45,7 +44,6 @@ use crate::zmq::VibeweaverClient;
 /// 1. Standalone - with direct CAS/artifact access (legacy, for basic operations)
 /// 2. Full - with EventDualityServer for full tool dispatch
 ///
-/// Optionally proxies lua_* payloads to luanette if configured.
 /// Tracks connected clients for bidirectional heartbeating.
 pub struct HooteprotoServer {
     bind_address: String,
@@ -54,8 +52,6 @@ pub struct HooteprotoServer {
     start_time: Instant,
     /// Optional EventDualityServer for full tool dispatch
     event_server: Option<Arc<EventDualityServer>>,
-    /// Optional luanette client for Lua scripting proxy
-    luanette: Option<Arc<LuanetteClient>>,
     /// Optional vibeweaver client for Python kernel proxy
     vibeweaver: Option<Arc<VibeweaverClient>>,
     /// Connected client tracker for bidirectional heartbeats
@@ -75,7 +71,6 @@ impl HooteprotoServer {
             artifacts,
             start_time: Instant::now(),
             event_server: None,
-            luanette: None,
             vibeweaver: None,
             client_tracker: Arc::new(ClientTracker::new()),
         }
@@ -94,16 +89,9 @@ impl HooteprotoServer {
             artifacts,
             start_time: Instant::now(),
             event_server: Some(event_server),
-            luanette: None,
             vibeweaver: None,
             client_tracker: Arc::new(ClientTracker::new()),
         }
-    }
-
-    /// Add luanette client for Lua scripting proxy
-    pub fn with_luanette(mut self, luanette: Option<Arc<LuanetteClient>>) -> Self {
-        self.luanette = luanette;
-        self
     }
 
     /// Add vibeweaver client for Python kernel proxy
@@ -364,19 +352,6 @@ impl HooteprotoServer {
             _ => {}
         }
 
-        // Route lua_*, job_*, script_* payloads to luanette if connected
-        if self.should_route_to_luanette(&payload) {
-            if let Some(ref luanette) = self.luanette {
-                return self.dispatch_via_luanette(luanette, payload).await;
-            } else {
-                return Payload::Error {
-                    code: "luanette_not_connected".to_string(),
-                    message: "Lua scripting requires luanette connection. Start hootenanny with --luanette tcp://localhost:5570".to_string(),
-                    details: None,
-                };
-            }
-        }
-
         // Route weave_* payloads to vibeweaver if connected
         if self.should_route_to_vibeweaver(&payload) {
             if let Some(ref vibeweaver) = self.vibeweaver {
@@ -498,38 +473,6 @@ impl HooteprotoServer {
                 message,
                 details,
             },
-        }
-    }
-
-    /// Check if a payload should be routed to luanette
-    fn should_route_to_luanette(&self, payload: &Payload) -> bool {
-        // Only Lua scripting tools go to luanette
-        // Job tools (JobStatus, JobPoll, JobCancel, JobList) are handled locally
-        // because the job store lives in hootenanny
-        matches!(
-            payload,
-            Payload::LuaEval { .. }
-                | Payload::LuaDescribe { .. }
-                | Payload::ScriptStore { .. }
-                | Payload::ScriptSearch { .. }
-                | Payload::JobExecute { .. }
-        )
-    }
-
-    /// Dispatch a payload to luanette via ZMQ proxy
-    async fn dispatch_via_luanette(&self, luanette: &LuanetteClient, payload: Payload) -> Payload {
-        debug!("Proxying to luanette: {}", payload_type_name(&payload));
-
-        match luanette.request(payload).await {
-            Ok(response) => response,
-            Err(e) => {
-                warn!("Luanette proxy error: {}", e);
-                Payload::Error {
-                    code: "luanette_proxy_error".to_string(),
-                    message: e.to_string(),
-                    details: None,
-                }
-            }
         }
     }
 

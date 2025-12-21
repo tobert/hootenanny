@@ -21,7 +21,7 @@ use crate::subscriber::spawn_subscribers;
 
 /// Server configuration
 ///
-/// Holler now connects only to hootenanny, which proxies to luanette and chaosgarden.
+/// Holler connects only to hootenanny, which proxies to vibeweaver and chaosgarden.
 pub struct ServeConfig {
     pub port: u16,
     /// Hootenanny ZMQ ROUTER endpoint (required - handles all tools)
@@ -111,9 +111,8 @@ pub async fn run(config: ServeConfig) -> Result<()> {
         let (broadcast_tx, _) = tokio::sync::broadcast::channel::<hooteproto::Broadcast>(256);
         spawn_subscribers(
             broadcast_tx,
-            None, // luanette_pub - removed
             Some(hootenanny_pub.clone()),
-            None, // chaosgarden_pub - removed
+            None, // chaosgarden_pub - direct connection removed
         );
     }
 

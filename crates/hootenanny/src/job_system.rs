@@ -3,7 +3,7 @@
 //! Provides background job execution for long-running operations like model inference.
 //! Tools return job IDs immediately, allowing agents to check status and retrieve results later.
 //!
-//! Uses canonical job types from hooteproto for interoperability with luanette.
+//! Uses canonical job types from hooteproto for interoperability.
 
 use anyhow::Result;
 use hooteproto::{JobId, JobInfo, JobStatus, JobStoreStats};

@@ -145,9 +145,6 @@ fn parse_toml(contents: &str, path: &Path) -> Result<HootConfig, ConfigError> {
             if let Some(v) = conn.get("chaosgarden").and_then(|v| v.as_str()) {
                 bootstrap.connections.chaosgarden = v.to_string();
             }
-            if let Some(v) = conn.get("luanette").and_then(|v| v.as_str()) {
-                bootstrap.connections.luanette = v.to_string();
-            }
             if let Some(v) = conn.get("vibeweaver").and_then(|v| v.as_str()) {
                 bootstrap.connections.vibeweaver = v.to_string();
             }
@@ -265,23 +262,6 @@ pub fn merge_configs(base: HootConfig, overlay: HootConfig) -> HootConfig {
                 },
             },
             services: crate::infra::ServicesConfig {
-                luanette: crate::infra::LuanetteConfig {
-                    zmq_router: if overlay.infra.services.luanette.zmq_router != LuanetteConfig::default().zmq_router {
-                        overlay.infra.services.luanette.zmq_router
-                    } else {
-                        base.infra.services.luanette.zmq_router
-                    },
-                    hootenanny: if overlay.infra.services.luanette.hootenanny != LuanetteConfig::default().hootenanny {
-                        overlay.infra.services.luanette.hootenanny
-                    } else {
-                        base.infra.services.luanette.hootenanny
-                    },
-                    timeout_ms: if overlay.infra.services.luanette.timeout_ms != LuanetteConfig::default().timeout_ms {
-                        overlay.infra.services.luanette.timeout_ms
-                    } else {
-                        base.infra.services.luanette.timeout_ms
-                    },
-                },
                 vibeweaver: crate::infra::VibeweaverConfig {
                     zmq_router: if overlay.infra.services.vibeweaver.zmq_router != VibeweaverConfig::default().zmq_router {
                         overlay.infra.services.vibeweaver.zmq_router
@@ -323,7 +303,7 @@ pub fn merge_configs(base: HootConfig, overlay: HootConfig) -> HootConfig {
 }
 
 use crate::infra::{
-    BindConfig, ChaosgardenConfig, GatewayConfig, LuanetteConfig, TelemetryConfig,
+    BindConfig, ChaosgardenConfig, GatewayConfig, TelemetryConfig,
     VibeweaverConfig,
 };
 

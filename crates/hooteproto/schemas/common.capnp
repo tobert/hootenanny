@@ -26,9 +26,9 @@ enum JobStatus {
 }
 
 enum WorkerType {
-  luanette @0;
-  hootenanny @1;
-  chaosgarden @2;
+  hootenanny @0;
+  chaosgarden @1;
+  vibeweaver @2;
 }
 
 enum PollMode {

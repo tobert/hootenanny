@@ -83,23 +83,9 @@ pub async fn subscribe_to_backend(
 /// Spawn subscriber tasks for all configured backends
 pub fn spawn_subscribers(
     broadcast_tx: broadcast::Sender<Broadcast>,
-    luanette_pub: Option<String>,
     hootenanny_pub: Option<String>,
     chaosgarden_pub: Option<String>,
 ) {
-    if let Some(endpoint) = luanette_pub {
-        let tx = broadcast_tx.clone();
-        tokio::spawn(async move {
-            let config = SubscriberConfig {
-                name: "luanette".to_string(),
-                endpoint,
-            };
-            if let Err(e) = subscribe_to_backend(config, tx).await {
-                error!("Luanette subscriber failed: {}", e);
-            }
-        });
-    }
-
     if let Some(endpoint) = hootenanny_pub {
         let tx = broadcast_tx.clone();
         tokio::spawn(async move {

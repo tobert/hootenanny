@@ -180,7 +180,7 @@ impl Handler for ZmqHandler {
 async fn collect_tools_async(backends: &BackendPool) -> Vec<Tool> {
     let mut all_tools = Vec::new();
 
-    // Query hootenanny for all tools (it proxies to luanette and chaosgarden)
+    // Query hootenanny for all tools (it proxies to vibeweaver and chaosgarden)
     if let Some(ref backend) = backends.hootenanny {
         match backend.request(Payload::ListTools).await {
             Ok(Payload::ToolList { tools }) => {

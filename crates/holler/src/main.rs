@@ -4,7 +4,7 @@
 //! - `holler serve` - Run the MCP gateway (HTTP → ZMQ bridge)
 //! - `holler ping <endpoint>` - Test connectivity to a backend
 //! - `holler send <endpoint> <json>` - Send raw hooteproto message
-//! - `holler lua <endpoint> <code>` - Evaluate Lua code
+//! - `holler job <endpoint> <action>` - Query job status
 //!
 //! Configuration is loaded from (in order, later wins):
 //! 1. Compiled defaults
@@ -60,23 +60,6 @@ enum Commands {
 
         /// JSON payload (Payload type, not Envelope)
         json: String,
-
-        /// Timeout in milliseconds
-        #[arg(short, long, default_value = "30000")]
-        timeout: u64,
-    },
-
-    /// Evaluate Lua code on a Luanette backend
-    Lua {
-        /// ZMQ endpoint
-        endpoint: String,
-
-        /// Lua code to evaluate
-        code: String,
-
-        /// Optional JSON params to pass to the script
-        #[arg(short, long)]
-        params: Option<String>,
 
         /// Timeout in milliseconds
         #[arg(short, long, default_value = "30000")]
@@ -164,14 +147,6 @@ async fn main() -> Result<()> {
             timeout,
         } => {
             commands::send(&endpoint, &json, timeout).await?;
-        }
-        Commands::Lua {
-            endpoint,
-            code,
-            params,
-            timeout,
-        } => {
-            commands::lua_eval(&endpoint, &code, params.as_deref(), timeout).await?;
         }
         Commands::Job { endpoint, action } => match action {
             JobAction::Status { job_id, timeout } => {

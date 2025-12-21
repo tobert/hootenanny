@@ -229,16 +229,6 @@ async fn main() -> Result<()> {
         }
     };
 
-    // --- Luanette Connection (lazy - ZMQ connects when peer available) ---
-    let luanette_endpoint = &config.bootstrap.connections.luanette;
-    let luanette_client: Option<Arc<zmq::LuanetteClient>> = if !luanette_endpoint.is_empty() {
-        info!("🌙 Connecting to luanette at {}...", luanette_endpoint);
-        let luanette_config = zmq::luanette_config(luanette_endpoint, 30000);
-        Some(zmq::LuanetteClient::new(luanette_config).await)
-    } else {
-        None
-    };
-
     // --- Vibeweaver Connection (lazy - ZMQ connects when peer available) ---
     let vibeweaver_endpoint = &config.bootstrap.connections.vibeweaver;
     let vibeweaver_client: Option<Arc<zmq::VibeweaverClient>> = if !vibeweaver_endpoint.is_empty() {
@@ -327,7 +317,6 @@ async fn main() -> Result<()> {
         artifact_store.clone(),
         event_duality_server.clone(),
     )
-    .with_luanette(luanette_client.clone())
     .with_vibeweaver(vibeweaver_client.clone());
 
     tokio::spawn(async move {
@@ -336,9 +325,6 @@ async fn main() -> Result<()> {
         }
     });
     info!("   ZMQ ROUTER: {}", zmq_router);
-    if luanette_client.is_some() {
-        info!("   Luanette proxy: enabled");
-    }
     if vibeweaver_client.is_some() {
         info!("   Vibeweaver proxy: enabled");
     }
@@ -368,7 +354,6 @@ async fn main() -> Result<()> {
     struct HealthState {
         job_store: Arc<job_system::JobStore>,
         start_time: Instant,
-        luanette: Option<Arc<zmq::LuanetteClient>>,
         vibeweaver: Option<Arc<zmq::VibeweaverClient>>,
         garden: Option<Arc<zmq::GardenManager>>,
     }
@@ -380,13 +365,6 @@ async fn main() -> Result<()> {
         let uptime = state.start_time.elapsed();
 
         let mut backends = serde_json::Map::new();
-
-        if let Some(ref luanette) = state.luanette {
-            backends.insert(
-                "luanette".to_string(),
-                luanette.health.health_summary().await,
-            );
-        }
 
         if let Some(ref vibeweaver) = state.vibeweaver {
             backends.insert(
@@ -420,7 +398,6 @@ async fn main() -> Result<()> {
     let health_state = HealthState {
         job_store: job_store.clone(),
         start_time: server_start,
-        luanette: luanette_client.clone(),
         vibeweaver: vibeweaver_client.clone(),
         garden: garden_manager.clone(),
     };

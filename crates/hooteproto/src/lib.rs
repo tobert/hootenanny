@@ -250,7 +250,7 @@ pub enum Payload {
         args: serde_json::Value,
     },
 
-    // === Lua Tools (Holler → Luanette) ===
+    // === Lua Tools (legacy, now handled by hootenanny) ===
     LuaEval {
         code: String,
         params: Option<serde_json::Value>,
@@ -269,7 +269,7 @@ pub enum Payload {
         vibe: Option<String>,
     },
 
-    // === Job System (any → Luanette) ===
+    // === Job System ===
     JobExecute {
         script_hash: String,
         params: serde_json::Value,
@@ -302,7 +302,7 @@ pub enum Payload {
         partial: String,
     },
 
-    // === Chaosgarden Events (Chaosgarden → Luanette) ===
+    // === Chaosgarden Events ===
     TimelineEvent {
         event_type: TimelineEventType,
         position_beats: f64,
@@ -722,9 +722,9 @@ pub struct WorkerRegistration {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerType {
-    Luanette,
     Hootenanny,
     Chaosgarden,
+    Vibeweaver,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1050,9 +1050,9 @@ mod tests {
     fn worker_registration_roundtrip() {
         let reg = WorkerRegistration {
             worker_id: Uuid::new_v4(),
-            worker_type: WorkerType::Luanette,
-            worker_name: "lua-orchestrator".to_string(),
-            capabilities: vec!["lua".to_string(), "orpheus".to_string()],
+            worker_type: WorkerType::Vibeweaver,
+            worker_name: "python-kernel".to_string(),
+            capabilities: vec!["python".to_string(), "weave".to_string()],
             hostname: "localhost".to_string(),
             version: "0.1.0".to_string(),
         };
