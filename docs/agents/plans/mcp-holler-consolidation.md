@@ -187,6 +187,22 @@ Ok(Response::new(Body::from(bytes)))
 
 - [ ] `Payload::ToolCall` removed from hooteproto
 - [ ] No `serde_json::Value` in Payload except `GardenQuery::variables`
-- [ ] holler has `dispatch.rs` with `json_to_payload()`
-- [ ] hootenanny dispatch matches on typed Payloads only
-- [ ] All existing tests pass
+- [x] holler has `dispatch.rs` with `json_to_payload()` (38 tools converted)
+- [x] hootenanny dispatch matches on typed Payloads via TypedDispatcher
+- [x] All existing tests pass (102 hootenanny + 43 hooteproto)
+
+## Progress Log
+
+### 2025-12-21
+
+**Phase 2 Complete:** holler/src/dispatch.rs created with json_to_payload()
+- 38 tools have typed dispatch
+- Core tools covered: ABC, Orpheus, CAS, artifacts, jobs, graphs
+- Falls back to Payload::ToolCall for: weave_*, garden audio/input, schedule, analyze
+
+**Phase 3 Complete:** hooteproto/src/conversion.rs extended
+- ~30 typed Payload→ToolRequest conversions
+- TypedDispatcher in hootenanny handles typed requests
+- JSON fallback remains for unconverted tools
+
+**Remaining:** Phase 4 - remove ToolCall and serde_json from hooteproto
