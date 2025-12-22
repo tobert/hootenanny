@@ -139,6 +139,9 @@ impl HooteprotoServer {
         // Wrap self in Arc for sharing across spawned tasks
         let server = Arc::new(self);
 
+        // Periodic cleanup of stale clients (every 30 seconds)
+        let mut cleanup_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+
         loop {
             tokio::select! {
                 // Receive incoming messages
@@ -231,6 +234,14 @@ impl HooteprotoServer {
                     // Use individual send() - rzmq ROUTER send_multipart has a bug
                     if let Err(e) = send_multipart_individually(&socket, reply).await {
                         error!("Failed to send response: {}", e);
+                    }
+                }
+
+                // Periodic cleanup of stale clients
+                _ = cleanup_interval.tick() => {
+                    let removed = server.client_tracker.cleanup_stale().await;
+                    if !removed.is_empty() {
+                        info!("🧹 Cleaned up {} stale clients: {:?}", removed.len(), removed);
                     }
                 }
 
@@ -457,7 +468,10 @@ impl HooteprotoServer {
             }
         }
 
-        // Fall back to legacy JSON dispatch
+        // TODO: Tech debt - remove this fallback once all tools use typed dispatch.
+        // Currently orpheus_*, musicgen_*, beatthis_*, and other tools still use
+        // the legacy Payload variants which fall through here. Migrate them to
+        // Payload::ToolCall and typed dispatch via TypedDispatcher.
         let (tool_name, args) = match payload_to_tool_args(payload) {
             Ok(v) => v,
             Err(e) => {
