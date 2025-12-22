@@ -3420,8 +3420,7 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 [[package]]
 name = "rzmq"
 version = "0.5.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4744ba4d4f55bf8996298d590ccd6a7fc02f9aea80bb24ff3cfbd24351a207d0"
+source = "git+https://github.com/tobert/rzmq?branch=fix-router-pipe-coordinator#3b0a557ee1e7e6128fd24d67c766afc1b1300f6f"
 dependencies = [
  "async-recursion",
  "async-trait",

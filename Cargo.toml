@@ -14,3 +14,7 @@ members = [
     "crates/vibeweaver",
 ]
 resolver = "2"
+
+# Override rzmq with fork containing ROUTER pipe coordinator fix
+[patch.crates-io]
+rzmq = { git = "https://github.com/tobert/rzmq", branch = "fix-router-pipe-coordinator" }

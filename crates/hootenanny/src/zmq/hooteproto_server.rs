@@ -23,7 +23,7 @@ use hooteproto::{
     HootFrame, Payload, ToolInfo, PROTOCOL_VERSION,
 };
 use rzmq::{Context, Msg, MsgFlags, Socket, SocketType};
-use rzmq::socket::options::LINGER;
+use rzmq::socket::options::{LINGER, ROUTER_MANDATORY};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -121,6 +121,11 @@ impl HooteprotoServer {
             warn!("Failed to set LINGER: {}", e);
         }
 
+        // Enable ROUTER_MANDATORY for proper error reporting (don't silently drop messages)
+        if let Err(e) = socket.set_option_raw(ROUTER_MANDATORY, &1i32.to_ne_bytes()).await {
+            warn!("Failed to set ROUTER_MANDATORY: {}", e);
+        }
+
         socket
             .bind(&self.bind_address)
             .await
@@ -140,6 +145,7 @@ impl HooteprotoServer {
                 result = socket.recv_multipart() => {
                     match result {
                         Ok(msgs) => {
+                            debug!("📥 Received multipart: {} frames", msgs.len());
                             let frames: Vec<Bytes> = msgs
                                 .iter()
                                 .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
@@ -147,7 +153,7 @@ impl HooteprotoServer {
 
                             // Check for HOOT01 protocol
                             if !frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
-                                warn!("Received non-HOOT01 message, rejecting");
+                                warn!("Received non-HOOT01 message ({} frames), rejecting", frames.len());
                                 continue;
                             }
 

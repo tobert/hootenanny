@@ -393,18 +393,26 @@ impl HootClient {
         let msgs = frames_to_msgs(&frame.to_frames());
         let timeout = Duration::from_secs(5);
 
+        debug!("{}: Acquiring socket lock for heartbeat...", self.config.name);
         let socket = self.socket.write().await;
+        debug!("{}: Socket lock acquired, sending {} frame heartbeat", self.config.name, msgs.len());
 
         // Send
         match tokio::time::timeout(timeout, socket.send_multipart(msgs)).await {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => {
+                debug!("{}: Heartbeat send completed successfully", self.config.name);
+            }
             Ok(Err(e)) => return Err(anyhow::anyhow!("Heartbeat send failed: {}", e)),
             Err(_) => return Err(anyhow::anyhow!("Heartbeat send timeout")),
         }
 
         // Receive
+        debug!("{}: Waiting for heartbeat response...", self.config.name);
         let response = match tokio::time::timeout(timeout, socket.recv_multipart()).await {
-            Ok(Ok(r)) => r,
+            Ok(Ok(r)) => {
+                debug!("{}: Received heartbeat response: {} frames", self.config.name, r.len());
+                r
+            }
             Ok(Err(e)) => return Err(anyhow::anyhow!("Heartbeat receive failed: {}", e)),
             Err(_) => return Err(anyhow::anyhow!("Heartbeat receive timeout")),
         };

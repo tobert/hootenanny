@@ -74,15 +74,9 @@ pub async fn run(config: ServeConfig) -> Result<()> {
     let backends = Arc::new(backends);
 
     // Create shared tool cache for dynamic refresh
+    // Tools will be loaded when on_connected callback fires after first heartbeat success
     let tool_cache = new_tool_cache();
-
-    // Try initial tool refresh, but don't fail if backend isn't ready yet
-    let initial_tools = refresh_tools_into(&tool_cache, &backends).await;
-    if initial_tools > 0 {
-        info!("   📋 Loaded {} tools from hootenanny", initial_tools);
-    } else {
-        info!("   📋 No tools loaded yet (backend connecting in background)");
-    }
+    info!("   📋 Tool cache initialized (will load on first heartbeat success)");
 
     // Create shutdown channel for health tasks
     let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
