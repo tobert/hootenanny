@@ -4,6 +4,7 @@
 //! They are used by the TypedDispatcher for the new protocol.
 
 use crate::api::service::EventDualityServer;
+use crate::artifact_store::ArtifactStore;
 use hooteproto::{
     responses::{
         AbcParsedResponse, AbcTransposedResponse, AbcValidatedResponse, AbcValidationError,
@@ -773,5 +774,380 @@ impl EventDualityServer {
             key: key.map(String::from),
             value,
         })
+    }
+
+    // =========================================================================
+    // CAS - Typed (Phase 1)
+    // =========================================================================
+
+    /// Inspect CAS content - typed response
+    pub async fn cas_inspect_typed(
+        &self,
+        hash: &str,
+    ) -> Result<hooteproto::responses::CasInspectedResponse, ToolError> {
+        let cas_ref = self
+            .local_models
+            .inspect_cas_content(hash)
+            .await
+            .map_err(|e| ToolError::internal(format!("Failed to inspect CAS: {}", e)))?;
+
+        Ok(hooteproto::responses::CasInspectedResponse {
+            hash: cas_ref.hash.to_string(),
+            exists: true,
+            size: Some(cas_ref.size_bytes as usize),
+            preview: None, // Could add preview logic if needed
+        })
+    }
+
+    // =========================================================================
+    // Artifacts - Typed (Phase 1)
+    // =========================================================================
+
+    /// Get artifact by ID - typed response
+    pub async fn artifact_get_typed(
+        &self,
+        id: &str,
+    ) -> Result<hooteproto::responses::ArtifactInfoResponse, ToolError> {
+        let store = self
+            .artifact_store
+            .read()
+            .map_err(|_| ToolError::internal("Lock poisoned"))?;
+
+        let artifact = store
+            .get(id)
+            .map_err(|e| ToolError::internal(format!("Failed to get artifact: {}", e)))?
+            .ok_or_else(|| ToolError::not_found("artifact", id))?;
+
+        Ok(hooteproto::responses::ArtifactInfoResponse {
+            id: artifact.id.as_str().to_string(),
+            content_hash: artifact.content_hash.as_str().to_string(),
+            mime_type: "application/octet-stream".to_string(), // Would need metadata lookup
+            tags: artifact.tags.clone(),
+            creator: artifact.creator.clone(),
+            created_at: artifact.created_at.timestamp() as u64,
+            parent_id: artifact.parent_id.as_ref().map(|p| p.as_str().to_string()),
+            variation_set_id: artifact
+                .variation_set_id
+                .as_ref()
+                .map(|v| v.as_str().to_string()),
+            metadata: None, // Could extract from artifact.metadata
+        })
+    }
+
+    /// List artifacts - typed response
+    pub async fn artifact_list_typed(
+        &self,
+        tag: Option<&str>,
+        creator: Option<&str>,
+    ) -> Result<hooteproto::responses::ArtifactListResponse, ToolError> {
+        let store = self
+            .artifact_store
+            .read()
+            .map_err(|_| ToolError::internal("Lock poisoned"))?;
+
+        let all_artifacts = store
+            .all()
+            .map_err(|e| ToolError::internal(format!("Failed to list artifacts: {}", e)))?;
+
+        let artifacts: Vec<hooteproto::responses::ArtifactInfoResponse> = all_artifacts
+            .into_iter()
+            .filter(|a| {
+                let tag_match = tag.is_none_or(|t| a.tags.iter().any(|at| at == t));
+                let creator_match = creator.is_none_or(|c| a.creator.as_str() == c);
+                tag_match && creator_match
+            })
+            .map(|a| hooteproto::responses::ArtifactInfoResponse {
+                id: a.id.as_str().to_string(),
+                content_hash: a.content_hash.as_str().to_string(),
+                mime_type: "application/octet-stream".to_string(),
+                tags: a.tags.clone(),
+                creator: a.creator.clone(),
+                created_at: a.created_at.timestamp() as u64,
+                parent_id: a.parent_id.as_ref().map(|p| p.as_str().to_string()),
+                variation_set_id: a.variation_set_id.as_ref().map(|v| v.as_str().to_string()),
+                metadata: None,
+            })
+            .collect();
+
+        let count = artifacts.len();
+        Ok(hooteproto::responses::ArtifactListResponse { artifacts, count })
+    }
+
+    // =========================================================================
+    // Graph - Typed (Phase 1)
+    // =========================================================================
+
+    /// Find graph identities - typed response
+    pub async fn graph_find_typed(
+        &self,
+        name: Option<&str>,
+        tag_namespace: Option<&str>,
+        tag_value: Option<&str>,
+    ) -> Result<hooteproto::responses::GraphIdentitiesResponse, ToolError> {
+        use audio_graph_mcp::graph_find;
+
+        let identities = graph_find(&self.audio_graph_db, name, tag_namespace, tag_value)
+            .map_err(|e| ToolError::internal(format!("Graph find failed: {}", e)))?;
+
+        let converted: Vec<hooteproto::responses::GraphIdentityInfo> = identities
+            .into_iter()
+            .map(|id| hooteproto::responses::GraphIdentityInfo {
+                id: id.id.clone(),
+                name: id.name.clone(),
+                tags: id.tags.iter().map(|t| format!("{}:{}", t.namespace, t.value)).collect(),
+            })
+            .collect();
+
+        let count = converted.len();
+        Ok(hooteproto::responses::GraphIdentitiesResponse {
+            identities: converted,
+            count,
+        })
+    }
+
+    /// Get graph context for LLM - typed response
+    pub async fn graph_context_typed(
+        &self,
+        limit: Option<usize>,
+        tag: Option<&str>,
+        creator: Option<&str>,
+        vibe_search: Option<&str>,
+        within_minutes: Option<i64>,
+        include_annotations: bool,
+        include_metadata: bool,
+    ) -> Result<hooteproto::responses::GraphContextResponse, ToolError> {
+        // Build context string from artifacts
+        let store = self
+            .artifact_store
+            .read()
+            .map_err(|_| ToolError::internal("Lock poisoned"))?;
+
+        let all_artifacts = store
+            .all()
+            .map_err(|e| ToolError::internal(format!("Failed to list artifacts: {}", e)))?;
+
+        let now = chrono::Utc::now();
+        let time_threshold = within_minutes.map(|mins| {
+            now - chrono::Duration::minutes(mins)
+        });
+
+        let filtered: Vec<_> = all_artifacts
+            .into_iter()
+            .filter(|a| {
+                let tag_match = tag.is_none_or(|t| a.tags.iter().any(|at| at == t));
+                let creator_match = creator.is_none_or(|c| a.creator.as_str() == c);
+                let time_match = time_threshold.is_none_or(|threshold| a.created_at >= threshold);
+                let vibe_match = vibe_search.is_none(); // TODO: implement vibe search
+                tag_match && creator_match && time_match && vibe_match
+            })
+            .take(limit.unwrap_or(20))
+            .collect();
+
+        let artifact_count = filtered.len();
+
+        // Build context string
+        let mut context = String::new();
+        for a in &filtered {
+            context.push_str(&format!(
+                "- {} ({}) [{}]\n",
+                a.id.as_str(),
+                a.creator,
+                a.tags.join(", ")
+            ));
+            if include_metadata {
+                context.push_str(&format!("  metadata: {:?}\n", a.metadata));
+            }
+            if include_annotations {
+                // Would fetch annotations here
+            }
+        }
+
+        // Count identities
+        let identity_count = audio_graph_mcp::graph_find(&self.audio_graph_db, None, None, None)
+            .map(|ids| ids.len())
+            .unwrap_or(0);
+
+        Ok(hooteproto::responses::GraphContextResponse {
+            context,
+            artifact_count,
+            identity_count,
+        })
+    }
+
+    /// Execute graph Trustfall query - typed response
+    pub async fn graph_query_typed(
+        &self,
+        query: &str,
+        limit: Option<usize>,
+        variables: Option<&serde_json::Value>,
+    ) -> Result<hooteproto::responses::GraphQueryResultResponse, ToolError> {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+        use trustfall::{execute_query, FieldValue};
+
+        // Convert variables
+        let vars: BTreeMap<Arc<str>, FieldValue> = variables
+            .map(|v| {
+                v.as_object()
+                    .map(|obj| {
+                        obj.iter()
+                            .map(|(k, v)| {
+                                let key: Arc<str> = Arc::from(k.as_str());
+                                let val = match v {
+                                    serde_json::Value::String(s) => FieldValue::String(s.clone().into()),
+                                    serde_json::Value::Number(n) => {
+                                        if let Some(i) = n.as_i64() {
+                                            FieldValue::Int64(i)
+                                        } else if let Some(f) = n.as_f64() {
+                                            FieldValue::Float64(f)
+                                        } else {
+                                            FieldValue::Null
+                                        }
+                                    }
+                                    serde_json::Value::Bool(b) => FieldValue::Boolean(*b),
+                                    _ => FieldValue::Null,
+                                };
+                                (key, val)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+
+        // Use the pre-existing graph adapter from the server
+        let results_iter = execute_query(
+            self.graph_adapter.schema(),
+            Arc::clone(&self.graph_adapter),
+            query,
+            vars,
+        )
+        .map_err(|e| ToolError::internal(format!("Query execution failed: {}", e)))?;
+
+        let limit = limit.unwrap_or(100);
+        let results: Vec<serde_json::Value> = results_iter
+            .take(limit)
+            .map(|row| {
+                let obj: serde_json::Map<String, serde_json::Value> = row
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let val = match v {
+                            FieldValue::String(s) => serde_json::Value::String(s.to_string()),
+                            FieldValue::Int64(i) => serde_json::Value::Number(i.into()),
+                            FieldValue::Float64(f) => serde_json::json!(f),
+                            FieldValue::Boolean(b) => serde_json::Value::Bool(b),
+                            FieldValue::Null => serde_json::Value::Null,
+                            _ => serde_json::Value::Null,
+                        };
+                        (k.to_string(), val)
+                    })
+                    .collect();
+                serde_json::Value::Object(obj)
+            })
+            .collect();
+
+        let count = results.len();
+        Ok(hooteproto::responses::GraphQueryResultResponse { results, count })
+    }
+
+    // =========================================================================
+    // Garden Query - Typed (Phase 1)
+    // =========================================================================
+
+    /// Execute garden Trustfall query - typed response
+    pub async fn garden_query_typed(
+        &self,
+        query: &str,
+        variables: Option<&serde_json::Value>,
+    ) -> Result<hooteproto::responses::GardenQueryResultResponse, ToolError> {
+        use chaosgarden::ipc::QueryReply;
+
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
+
+        // Convert variables to HashMap
+        let vars: std::collections::HashMap<String, serde_json::Value> = variables
+            .and_then(|v| v.as_object())
+            .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default();
+
+        let reply = manager
+            .query(query, vars)
+            .await
+            .map_err(|e| ToolError::service("chaosgarden", "query_failed", e.to_string()))?;
+
+        match reply {
+            QueryReply::Results { rows } => {
+                let count = rows.len();
+                Ok(hooteproto::responses::GardenQueryResultResponse { results: rows, count })
+            }
+            QueryReply::Error { error } => {
+                Err(ToolError::service("chaosgarden", "query_error", error))
+            }
+        }
+    }
+
+    // =========================================================================
+    // Orpheus Classify - Typed (Phase 1)
+    // =========================================================================
+
+    /// Classify MIDI content - typed response
+    pub async fn orpheus_classify_typed(
+        &self,
+        midi_hash: &str,
+    ) -> Result<hooteproto::responses::OrpheusClassifiedResponse, ToolError> {
+        // Get MIDI from CAS
+        let cas_ref = self
+            .local_models
+            .inspect_cas_content(midi_hash)
+            .await
+            .map_err(|e| ToolError::internal(format!("Failed to get MIDI from CAS: {}", e)))?;
+
+        let local_path = cas_ref
+            .local_path
+            .ok_or_else(|| ToolError::not_found("midi", midi_hash))?;
+
+        // Call Orpheus classify service
+        let client = reqwest::Client::new();
+        let response = client
+            .post("http://localhost:2001/classify")
+            .json(&serde_json::json!({
+                "midi_path": local_path,
+            }))
+            .send()
+            .await
+            .map_err(|e| ToolError::service("orpheus", "request_failed", e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(ToolError::service(
+                "orpheus",
+                "classify_failed",
+                format!("HTTP {}", response.status()),
+            ));
+        }
+
+        let result: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| ToolError::service("orpheus", "parse_failed", e.to_string()))?;
+
+        // Extract classifications from response
+        let classifications: Vec<hooteproto::responses::MidiClassification> = result
+            .get("classifications")
+            .and_then(|c| c.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| {
+                        Some(hooteproto::responses::MidiClassification {
+                            label: v.get("label")?.as_str()?.to_string(),
+                            confidence: v.get("confidence")?.as_f64()? as f32,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(hooteproto::responses::OrpheusClassifiedResponse { classifications })
     }
 }

@@ -136,6 +136,96 @@ impl TypedDispatcher {
                 }
             }
 
+            // === CAS ===
+            ToolRequest::CasInspect(req) => {
+                match self.server.cas_inspect_typed(&req.hash).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::CasInspected(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+
+            // === Artifacts ===
+            ToolRequest::ArtifactGet(req) => {
+                match self.server.artifact_get_typed(&req.id).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::ArtifactInfo(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::ArtifactList(req) => {
+                match self
+                    .server
+                    .artifact_list_typed(req.tag.as_deref(), req.creator.as_deref())
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::ArtifactList(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+
+            // === Graph ===
+            ToolRequest::GraphFind(req) => {
+                match self
+                    .server
+                    .graph_find_typed(
+                        req.name.as_deref(),
+                        req.tag_namespace.as_deref(),
+                        req.tag_value.as_deref(),
+                    )
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GraphIdentities(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::GraphContext(req) => {
+                match self
+                    .server
+                    .graph_context_typed(
+                        req.limit.map(|l| l as usize),
+                        req.tag.as_deref(),
+                        req.creator.as_deref(),
+                        req.vibe_search.as_deref(),
+                        req.within_minutes,
+                        req.include_annotations,
+                        req.include_metadata,
+                    )
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GraphContext(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::GraphQuery(req) => {
+                match self
+                    .server
+                    .graph_query_typed(&req.query, req.limit.map(|l| l as usize), req.variables.as_ref())
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GraphQueryResult(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+
+            // === Garden Query ===
+            ToolRequest::GardenQuery(req) => {
+                match self
+                    .server
+                    .garden_query_typed(&req.query, req.variables.as_ref())
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenQueryResult(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+
+            // === Orpheus Classify ===
+            ToolRequest::OrpheusClassify(req) => {
+                match self.server.orpheus_classify_typed(&req.midi_hash).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::OrpheusClassified(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+
             // === Admin ===
             ToolRequest::Ping => ResponseEnvelope::ack("pong"),
             ToolRequest::ListTools => {
@@ -162,32 +252,219 @@ impl TypedDispatcher {
         }
     }
 
-    /// Dispatch async tools - creates job, polls for result
+    /// Dispatch async tools - creates job, spawns task, returns job_id
+    ///
+    /// AsyncShort/AsyncMedium tools spawn a background task and return the job_id.
+    /// The client can poll with job_status or job_poll to get results.
     async fn dispatch_async(&self, request: ToolRequest) -> ResponseEnvelope {
-        // For now, fall back to the existing dispatch path
-        // Full implementation will create jobs and handle polling
-        let name = request.name();
-        tracing::debug!(tool = name, "Async tool - falling back to JSON dispatch");
+        let tool_name = request.name();
+        let timing = request.timing();
 
-        ResponseEnvelope::error(ToolError::internal(format!(
-            "Async tool {} not yet implemented in typed dispatcher",
-            name
-        )))
+        // Create job for tracking
+        let job_id = self.server.job_store.create_job(tool_name.to_string());
+
+        // Clone what the spawned task needs
+        let server = Arc::clone(&self.server);
+        let job_id_clone = job_id.clone();
+
+        // Spawn background task to execute the tool
+        tokio::spawn(async move {
+            let _ = server.job_store.mark_running(&job_id_clone);
+
+            // Execute the tool via JSON dispatch (existing infrastructure)
+            let result = Self::execute_async_tool(&server, request).await;
+
+            // Update job status based on result
+            match result {
+                Ok(value) => {
+                    let _ = server.job_store.mark_complete(&job_id_clone, value);
+                }
+                Err(error) => {
+                    tracing::error!(job_id = %job_id_clone, %error, "Async tool failed");
+                    let _ = server.job_store.mark_failed(&job_id_clone, error);
+                }
+            }
+        });
+
+        // Return job_id immediately
+        ResponseEnvelope::JobStarted {
+            job_id: job_id.to_string(),
+            tool: tool_name.to_string(),
+            timing,
+        }
+    }
+
+    /// Execute an async tool and return its result
+    async fn execute_async_tool(
+        server: &EventDualityServer,
+        request: ToolRequest,
+    ) -> Result<serde_json::Value, String> {
+        use crate::api::dispatch::dispatch_tool;
+
+        // Convert request back to JSON args for the existing dispatch infrastructure
+        let (name, args) = Self::request_to_tool_args(&request)?;
+
+        // Call the existing JSON dispatch (returns serde_json::Value directly)
+        match dispatch_tool(server, &name, args).await {
+            Ok(value) => Ok(value),
+            Err(e) => Err(e.message),
+        }
+    }
+
+    /// Convert a ToolRequest back to (name, args) for JSON dispatch
+    ///
+    /// Note: Some tools have different names in the typed vs JSON dispatch.
+    /// The typed request uses `orpheus_generate` but JSON dispatch uses `sample`.
+    fn request_to_tool_args(request: &ToolRequest) -> Result<(String, serde_json::Value), String> {
+        // Map typed request to JSON dispatch name and args
+        let (name, args) = match request {
+            // Orpheus tools map to "sample" with space field
+            ToolRequest::OrpheusGenerate(req) => {
+                let mut args = serde_json::to_value(req).map_err(|e| e.to_string())?;
+                args["space"] = serde_json::json!("orpheus");
+                ("sample".to_string(), args)
+            }
+            ToolRequest::OrpheusGenerateSeeded(req) => {
+                let mut args = serde_json::to_value(req).map_err(|e| e.to_string())?;
+                args["space"] = serde_json::json!("orpheus");
+                args["seed"] = serde_json::json!({"type": "midi", "artifact_id": req.seed_hash});
+                ("sample".to_string(), args)
+            }
+            ToolRequest::OrpheusContinue(req) => {
+                let args = serde_json::json!({
+                    "encoding": {"type": "midi", "artifact_id": req.input_hash},
+                    "space": "orpheus",
+                    "inference": {
+                        "max_tokens": req.max_tokens,
+                        "temperature": req.temperature,
+                        "top_p": req.top_p,
+                    },
+                    "num_variations": req.num_variations,
+                    "tags": req.tags,
+                    "creator": req.creator,
+                    "parent_id": req.parent_id,
+                });
+                ("extend".to_string(), args)
+            }
+            ToolRequest::OrpheusBridge(req) => {
+                let args = serde_json::json!({
+                    "from": {"type": "midi", "artifact_id": req.section_a_hash},
+                    "to": req.section_b_hash.as_ref().map(|h| serde_json::json!({"type": "midi", "artifact_id": h})),
+                    "inference": {
+                        "max_tokens": req.max_tokens,
+                        "temperature": req.temperature,
+                        "top_p": req.top_p,
+                    },
+                    "tags": req.tags,
+                    "creator": req.creator,
+                    "parent_id": req.parent_id,
+                });
+                ("bridge".to_string(), args)
+            }
+            ToolRequest::OrpheusLoops(req) => {
+                let mut args = serde_json::to_value(req).map_err(|e| e.to_string())?;
+                args["space"] = serde_json::json!("orpheus_loops");
+                args["as_loop"] = serde_json::json!(true);
+                ("sample".to_string(), args)
+            }
+
+            // MidiToWav maps to "project"
+            ToolRequest::MidiToWav(req) => {
+                let args = serde_json::json!({
+                    "encoding": {"type": "midi", "artifact_id": req.input_hash},
+                    "target": {
+                        "type": "audio",
+                        "soundfont_hash": req.soundfont_hash,
+                        "sample_rate": req.sample_rate.unwrap_or(44100),
+                    },
+                    "tags": req.tags,
+                    "creator": req.creator,
+                    "parent_id": req.parent_id,
+                });
+                ("project".to_string(), args)
+            }
+
+            // MusicGen maps to "sample" with space
+            ToolRequest::MusicgenGenerate(req) => {
+                let mut args = serde_json::to_value(req).map_err(|e| e.to_string())?;
+                args["space"] = serde_json::json!("music_gen");
+                ("sample".to_string(), args)
+            }
+
+            // YuE maps to "sample" with space
+            ToolRequest::YueGenerate(req) => {
+                let mut args = serde_json::to_value(req).map_err(|e| e.to_string())?;
+                args["space"] = serde_json::json!("yue");
+                ("sample".to_string(), args)
+            }
+
+            // Analysis tools map to "analyze"
+            ToolRequest::BeatthisAnalyze(req) => {
+                let args = serde_json::json!({
+                    "encoding": {"type": "audio", "artifact_id": req.audio_hash},
+                    "tasks": ["beats"],
+                });
+                ("analyze".to_string(), args)
+            }
+            ToolRequest::ClapAnalyze(req) => {
+                let args = serde_json::json!({
+                    "encoding": {"type": "audio", "artifact_id": req.audio_hash},
+                    "tasks": ["embeddings"],
+                });
+                ("analyze".to_string(), args)
+            }
+
+            // Direct mappings (name matches)
+            ToolRequest::CasStore(req) => {
+                (request.name().to_string(), serde_json::to_value(req).map_err(|e| e.to_string())?)
+            }
+            ToolRequest::CasGet(req) => {
+                (request.name().to_string(), serde_json::to_value(req).map_err(|e| e.to_string())?)
+            }
+            ToolRequest::CasUploadFile(req) => {
+                (request.name().to_string(), serde_json::to_value(req).map_err(|e| e.to_string())?)
+            }
+            ToolRequest::ArtifactUpload(req) => {
+                (request.name().to_string(), serde_json::to_value(req).map_err(|e| e.to_string())?)
+            }
+            ToolRequest::AbcToMidi(req) => {
+                (request.name().to_string(), serde_json::to_value(req).map_err(|e| e.to_string())?)
+            }
+            ToolRequest::GraphBind(req) => {
+                (request.name().to_string(), serde_json::to_value(req).map_err(|e| e.to_string())?)
+            }
+            ToolRequest::GraphTag(req) => {
+                (request.name().to_string(), serde_json::to_value(req).map_err(|e| e.to_string())?)
+            }
+            ToolRequest::GraphConnect(req) => {
+                (request.name().to_string(), serde_json::to_value(req).map_err(|e| e.to_string())?)
+            }
+            ToolRequest::AddAnnotation(req) => {
+                (request.name().to_string(), serde_json::to_value(req).map_err(|e| e.to_string())?)
+            }
+            ToolRequest::JobPoll(req) => {
+                (request.name().to_string(), serde_json::to_value(req).map_err(|e| e.to_string())?)
+            }
+            ToolRequest::JobCancel(req) => {
+                (request.name().to_string(), serde_json::to_value(req).map_err(|e| e.to_string())?)
+            }
+            ToolRequest::JobSleep(req) => {
+                (request.name().to_string(), serde_json::to_value(req).map_err(|e| e.to_string())?)
+            }
+            _ => return Err(format!("Tool {} not supported for async dispatch", request.name())),
+        };
+
+        Ok((name, args))
     }
 
     /// Dispatch long-running async tools - return job_id immediately
+    ///
+    /// AsyncLong tools (MusicGen, YuE, etc.) spawn a background task and return job_id.
+    /// Same as dispatch_async but semantically different: clients expect longer waits.
     async fn dispatch_async_return_job_id(&self, request: ToolRequest) -> ResponseEnvelope {
-        let name = request.name();
-        let _timing = request.timing();
-
-        // These tools should spawn a job and return immediately
-        // For now, return an error indicating not implemented
-        tracing::debug!(tool = name, "AsyncLong tool - would return job_id");
-
-        ResponseEnvelope::error(ToolError::internal(format!(
-            "Long-running tool {} not yet implemented in typed dispatcher",
-            name
-        )))
+        // Long-running tools use the same job-spawning pattern as medium async tools
+        // The only difference is timing semantics (client expects longer wait)
+        self.dispatch_async(request).await
     }
 
     /// Dispatch fire-and-forget tools - create job, execute, return job_id

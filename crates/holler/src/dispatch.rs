@@ -11,6 +11,49 @@ use hooteproto::Payload;
 use serde::Deserialize;
 use serde_json::Value;
 
+/// Preprocess JSON args to handle string-encoded nested objects.
+///
+/// Some MCP clients (including Claude Code) pass complex object parameters
+/// as JSON strings instead of actual JSON objects. This function detects
+/// and parses string-encoded fields back to proper JSON objects.
+fn preprocess_encoding_field(mut args: Value) -> Value {
+    if let Some(obj) = args.as_object_mut() {
+        // Handle encoding field (used by schedule, analyze, project, etc.)
+        if let Some(encoding) = obj.get_mut("encoding") {
+            if let Some(s) = encoding.as_str() {
+                if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+                    *encoding = parsed;
+                }
+            }
+        }
+        // Handle target field (used by project)
+        if let Some(target) = obj.get_mut("target") {
+            if let Some(s) = target.as_str() {
+                if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+                    *target = parsed;
+                }
+            }
+        }
+        // Handle seed field (used by sample)
+        if let Some(seed) = obj.get_mut("seed") {
+            if let Some(s) = seed.as_str() {
+                if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+                    *seed = parsed;
+                }
+            }
+        }
+        // Handle inference field (used by sample, extend, bridge)
+        if let Some(inference) = obj.get_mut("inference") {
+            if let Some(s) = inference.as_str() {
+                if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+                    *inference = parsed;
+                }
+            }
+        }
+    }
+    args
+}
+
 /// Convert MCP tool call (name + JSON args) to typed Payload.
 ///
 /// This is where JSON parsing happens. hooteproto Payload variants
@@ -419,6 +462,8 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
 
         // === Model-Native API ===
         "schedule" => {
+            // MCP clients may pass encoding as a JSON string instead of an object
+            let args = preprocess_encoding_field(args);
             let p: ScheduleArgs = serde_json::from_value(args)
                 .context("Invalid schedule arguments")?;
             Ok(Payload::Schedule {
@@ -430,6 +475,7 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             })
         }
         "analyze" => {
+            let args = preprocess_encoding_field(args);
             let p: AnalyzeArgs = serde_json::from_value(args)
                 .context("Invalid analyze arguments")?;
             Ok(Payload::Analyze {
