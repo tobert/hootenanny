@@ -1,21 +1,21 @@
 //! Typed response types for tool dispatch.
 //!
-//! These types replace `serde_json::Value` in `Payload::Success` for internal
-//! communication. JSON conversion happens only at gateway edges.
+//! These types provide structured responses for internal communication.
+//! JSON conversion happens only at gateway edges (holler).
 //!
 //! ## Design Principles
 //!
 //! 1. **Rich types** - Use domain types, not primitives
 //! 2. **Option for optional** - Use `Option<T>` instead of nullable JSON
 //! 3. **Enums for variants** - Use Rust enums, not string discriminators
-//! 4. **MsgPack-friendly** - All types derive Serialize/Deserialize
+//! 4. **Cap'n Proto friendly** - All types map to capnp schemas
 
 use serde::{Deserialize, Serialize};
 
 /// Unified response type for all tools.
 ///
 /// Each variant corresponds to a tool or tool category.
-/// Gateway layer converts this to JSON; internal layers use MsgPack.
+/// Gateway layer (holler) converts this to JSON; internal layers use Cap'n Proto.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolResponse {
@@ -77,6 +77,17 @@ pub enum ToolResponse {
 
     // === Annotations ===
     AnnotationAdded(AnnotationAddedResponse),
+
+    // === Vibeweaver (Python kernel) ===
+    WeaveEval(WeaveEvalResponse),
+    WeaveSession(WeaveSessionResponse),
+    WeaveReset(WeaveResetResponse),
+    WeaveHelp(WeaveHelpResponse),
+
+    // === Transitional (to be removed) ===
+    /// Legacy JSON escape hatch for tools not yet converted to typed responses.
+    /// TODO: Remove this variant once all tools use proper typed responses.
+    LegacyJson(serde_json::Value),
 }
 
 // =============================================================================
@@ -489,6 +500,61 @@ impl AckResponse {
 pub struct AnnotationAddedResponse {
     pub artifact_id: String,
     pub annotation_id: String,
+}
+
+// =============================================================================
+// Vibeweaver Responses
+// =============================================================================
+
+/// Type of Python output
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WeaveOutputType {
+    /// Expression evaluation - returns repr() of result
+    Expression,
+    /// Statement execution - captures stdout/stderr
+    Statement,
+}
+
+/// Result of evaluating Python code
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeaveEvalResponse {
+    pub output_type: WeaveOutputType,
+    /// Expression result (repr string), None for statements
+    pub result: Option<String>,
+    /// Captured stdout, None for expressions
+    pub stdout: Option<String>,
+    /// Captured stderr
+    pub stderr: Option<String>,
+}
+
+/// Session info for active vibeweaver session
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeaveSessionInfo {
+    pub id: String,
+    pub name: String,
+    pub vibe: Option<String>,
+}
+
+/// Current session state
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeaveSessionResponse {
+    pub session: Option<WeaveSessionInfo>,
+    pub message: Option<String>,
+}
+
+/// Kernel reset confirmation
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeaveResetResponse {
+    pub reset: bool,
+    pub message: String,
+}
+
+/// Help documentation
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeaveHelpResponse {
+    pub help: String,
+    pub topic: Option<String>,
 }
 
 // =============================================================================

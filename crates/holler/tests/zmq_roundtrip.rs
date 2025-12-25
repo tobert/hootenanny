@@ -1,7 +1,8 @@
 //! ZMQ roundtrip tests for hooteproto using localhost TCP
 
 use bytes::Bytes;
-use hooteproto::{Envelope, Payload};
+use hooteproto::{Envelope, Payload, ResponseEnvelope};
+use hooteproto::responses::ToolResponse;
 use rzmq::{Context, Msg, SocketType};
 use rzmq::socket::options::LINGER;
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -38,18 +39,18 @@ async fn mock_router(endpoint: &str) -> anyhow::Result<()> {
             worker_id: Uuid::new_v4(),
             uptime_secs: 42,
         },
-        Payload::LuaEval { code, .. } => Payload::Success {
-            result: serde_json::json!({
+        Payload::WeaveEval { code } => Payload::TypedResponse(ResponseEnvelope::success(
+            ToolResponse::LegacyJson(serde_json::json!({
                 "evaluated": code,
                 "result": "mock result"
-            }),
-        },
-        Payload::JobStatus { job_id } => Payload::Success {
-            result: serde_json::json!({
+            })),
+        )),
+        Payload::JobStatus { job_id } => Payload::TypedResponse(ResponseEnvelope::success(
+            ToolResponse::LegacyJson(serde_json::json!({
                 "job_id": job_id,
                 "status": "complete"
-            }),
-        },
+            })),
+        )),
         _ => Payload::Error {
             code: "not_implemented".to_string(),
             message: "Mock doesn't handle this payload type".to_string(),
@@ -137,9 +138,8 @@ async fn test_lua_eval() {
     dealer.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
     dealer.connect(&endpoint).await.unwrap();
 
-    let envelope = Envelope::new(Payload::LuaEval {
-        code: "return 1 + 1".to_string(),
-        params: None,
+    let envelope = Envelope::new(Payload::WeaveEval {
+        code: "print('hello')".to_string(),
     });
     let json = serde_json::to_string(&envelope).unwrap();
     dealer.send(Msg::from_vec(json.into_bytes())).await.unwrap();
@@ -154,10 +154,11 @@ async fn test_lua_eval() {
     let response_envelope: Envelope = serde_json::from_str(response_str).unwrap();
 
     match response_envelope.payload {
-        Payload::Success { result } => {
-            assert_eq!(result["evaluated"], "return 1 + 1");
+        Payload::TypedResponse(envelope) => {
+            let result = envelope.to_json();
+            assert_eq!(result["evaluated"], "print('hello')");
         }
-        _ => panic!("Expected Success"),
+        _ => panic!("Expected TypedResponse"),
     }
 
     router_handle.await.unwrap();
@@ -195,11 +196,12 @@ async fn test_job_status() {
     let response_envelope: Envelope = serde_json::from_str(response_str).unwrap();
 
     match response_envelope.payload {
-        Payload::Success { result } => {
+        Payload::TypedResponse(envelope) => {
+            let result = envelope.to_json();
             assert_eq!(result["job_id"], "test-job-123");
             assert_eq!(result["status"], "complete");
         }
-        _ => panic!("Expected Success"),
+        _ => panic!("Expected TypedResponse"),
     }
 
     router_handle.await.unwrap();

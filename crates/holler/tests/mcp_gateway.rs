@@ -2,7 +2,8 @@
 //!
 //! Tests holler serve receiving MCP requests and routing to a mock ZMQ backend.
 
-use hooteproto::{Envelope, Payload, ToolInfo};
+use hooteproto::{Envelope, Payload, ResponseEnvelope, ToolInfo};
+use hooteproto::responses::ToolResponse;
 use rzmq::{Context, Msg, SocketType};
 use rzmq::socket::options::LINGER;
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -61,14 +62,14 @@ async fn mock_hootenanny(endpoint: &str, requests_to_handle: usize) -> anyhow::R
                     },
                 ],
             },
-            Payload::CasInspect { hash } => Payload::Success {
-                result: serde_json::json!({
+            Payload::CasInspect { hash } => Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::LegacyJson(serde_json::json!({
                     "hash": hash,
                     "exists": true,
                     "size": 42,
                     "preview": "Hello, world!"
-                }),
-            },
+                })),
+            )),
             _ => Payload::Error {
                 code: "not_implemented".to_string(),
                 message: "Mock doesn't handle this".to_string(),
@@ -197,9 +198,9 @@ async fn test_mcp_tool_call_with_traceparent() {
         let response = Envelope {
             id: envelope.id,
             traceparent: envelope.traceparent,
-            payload: Payload::Success {
-                result: serde_json::json!({"traced": true}),
-            },
+            payload: Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::LegacyJson(serde_json::json!({"traced": true})),
+            )),
         };
 
         let response_json = serde_json::to_string(&response).unwrap();
@@ -238,10 +239,11 @@ async fn test_mcp_tool_call_with_traceparent() {
         let response_envelope: Envelope = serde_json::from_str(response_str).unwrap();
 
         match response_envelope.payload {
-            Payload::Success { result } => {
+            Payload::TypedResponse(envelope) => {
+                let result = envelope.to_json();
                 assert_eq!(result["traced"], true);
             }
-            other => panic!("Expected Success, got {:?}", other),
+            other => panic!("Expected TypedResponse, got {:?}", other),
         }
     });
 

@@ -11,6 +11,7 @@ use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::mcp_tools::rustysynth::{inspect_soundfont, render_midi_to_wav};
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
+use hooteproto::responses::ToolResponse;
 use hooteproto::{ToolError, ToolOutput, ToolResult};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -321,8 +322,10 @@ impl EventDualityServer {
 
             match result {
                 Ok(response) => {
-                    let _ = job_store
-                        .mark_complete(&job_id_clone, serde_json::to_value(response).unwrap());
+                    let _ = job_store.mark_complete(
+                        &job_id_clone,
+                        ToolResponse::LegacyJson(serde_json::to_value(response).unwrap()),
+                    );
                 }
                 Err(e) => {
                     let _ = job_store.mark_failed(&job_id_clone, e.to_string());

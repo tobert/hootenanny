@@ -10,6 +10,7 @@
 //! - Helper methods provide **ergonomic APIs** for common operations
 //! - Python/Lua clients use generated capnp types directly (no wrappers needed)
 
+use crate::responses::ToolResponse;
 use crate::{common_capnp, jobs_capnp};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -116,7 +117,7 @@ pub struct JobInfo {
     pub job_id: JobId,
     pub status: JobStatus,
     pub source: String,
-    pub result: Option<serde_json::Value>,
+    pub result: Option<ToolResponse>,
     pub error: Option<String>,
     pub created_at: u64,
     pub started_at: Option<u64>,
@@ -171,7 +172,7 @@ impl JobInfo {
         );
     }
 
-    pub fn mark_complete(&mut self, result: serde_json::Value) {
+    pub fn mark_complete(&mut self, result: ToolResponse) {
         self.status = JobStatus::Complete;
         self.result = Some(result);
         self.completed_at = Some(
@@ -338,7 +339,7 @@ mod tests {
         let job_id = JobId::new();
         let mut info = JobInfo::new(job_id.clone(), "test_tool".to_string());
         info.mark_running();
-        info.mark_complete(serde_json::json!({"answer": 42}));
+        info.mark_complete(ToolResponse::LegacyJson(serde_json::json!({"answer": 42})));
 
         // Write to capnp
         let mut message = capnp::message::Builder::new_default();
@@ -354,6 +355,9 @@ mod tests {
         assert_eq!(recovered.job_id, info.job_id);
         assert_eq!(recovered.status, JobStatus::Complete);
         assert_eq!(recovered.source, "test_tool");
-        assert_eq!(recovered.result, Some(serde_json::json!({"answer": 42})));
+        assert_eq!(
+            recovered.result,
+            Some(ToolResponse::LegacyJson(serde_json::json!({"answer": 42})))
+        );
     }
 }

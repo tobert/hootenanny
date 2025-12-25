@@ -6,6 +6,7 @@
 //! Uses canonical job types from hooteproto for interoperability.
 
 use anyhow::Result;
+use hooteproto::responses::ToolResponse;
 use hooteproto::{JobId, JobInfo, JobStatus, JobStoreStats};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -63,7 +64,7 @@ impl JobStore {
     }
 
     /// Mark a job as complete with result
-    pub fn mark_complete(&self, job_id: &JobId, result: serde_json::Value) -> Result<()> {
+    pub fn mark_complete(&self, job_id: &JobId, result: ToolResponse) -> Result<()> {
         let mut jobs = self.jobs.lock().unwrap();
         let job = jobs
             .get_mut(job_id.as_str())
@@ -360,7 +361,7 @@ mod tests {
         let job_id = store.create_job("test_tool".to_string());
         store.mark_running(&job_id).unwrap();
         store
-            .mark_complete(&job_id, serde_json::json!({"result": "ok"}))
+            .mark_complete(&job_id, ToolResponse::LegacyJson(serde_json::json!({"result": "ok"})))
             .unwrap();
 
         // Manually backdate the completion time
@@ -397,11 +398,11 @@ mod tests {
         // Complete both
         store.mark_running(&garden_job).unwrap();
         store
-            .mark_complete(&garden_job, serde_json::json!({}))
+            .mark_complete(&garden_job, ToolResponse::LegacyJson(serde_json::json!({})))
             .unwrap();
         store.mark_running(&other_job).unwrap();
         store
-            .mark_complete(&other_job, serde_json::json!({}))
+            .mark_complete(&other_job, ToolResponse::LegacyJson(serde_json::json!({})))
             .unwrap();
 
         // Backdate both jobs

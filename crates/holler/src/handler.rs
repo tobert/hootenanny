@@ -146,7 +146,8 @@ impl Handler for ZmqHandler {
 
         // TODO: Extract traceparent from context if available
         match backend.request(payload).await {
-            Ok(Payload::Success { result }) => {
+            Ok(Payload::TypedResponse(envelope)) => {
+                let result = envelope.to_json();
                 let text = serde_json::to_string_pretty(&result).unwrap_or_default();
                 Ok(CallToolResult::success(vec![Content::text(text)]))
             }

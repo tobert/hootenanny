@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use hooteproto::{
     capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope, Command, ContentType,
-    HootFrame, Payload, PROTOCOL_VERSION,
+    HootFrame, Payload, ResponseEnvelope, PROTOCOL_VERSION,
 };
 use std::sync::Arc;
 use tokio::select;
@@ -22,7 +22,6 @@ use tracing::{debug, error, info, warn};
 use zeromq::{PubSocket, RepSocket, RouterSocket, Socket, SocketRecv, SocketSend, ZmqMessage};
 
 use crate::daemon::GardenDaemon;
-use crate::ipc::{Message, ShellReply, ShellRequest};
 use uuid::Uuid;
 
 /// Frames to ZmqMessage helper
@@ -198,13 +197,28 @@ impl CapnpGardenServer {
             Command::Request => {
                 match frame.content_type {
                     ContentType::Json => {
-                        // JSON request - parse as Message<ShellRequest>
-                        let result = self
-                            .handle_json_shell_request(handler, &frame.body, frame.request_id)
-                            .await;
-
-                        // Send JSON response
-                        let reply_frames = result.to_frames_with_identity(&identity);
+                        // JSON requests are not supported on internal protocol
+                        // Use Cap'n Proto for all inter-service communication
+                        warn!(
+                            "[{}] JSON content type not supported, use Cap'n Proto",
+                            channel
+                        );
+                        let error_payload = Payload::Error {
+                            code: "unsupported_content_type".to_string(),
+                            message: "JSON not supported on internal protocol, use Cap'n Proto".to_string(),
+                            details: None,
+                        };
+                        let error_msg = payload_to_capnp_envelope(frame.request_id, &error_payload)?;
+                        let bytes = capnp::serialize::write_message_to_words(&error_msg);
+                        let response_frame = HootFrame {
+                            command: Command::Reply,
+                            content_type: ContentType::CapnProto,
+                            request_id: frame.request_id,
+                            service: "chaosgarden".to_string(),
+                            traceparent: None,
+                            body: bytes.into(),
+                        };
+                        let reply_frames = response_frame.to_frames_with_identity(&identity);
                         let reply = frames_to_zmq_message(&reply_frames);
                         socket.send(reply).await?;
                     }
@@ -384,57 +398,6 @@ impl CapnpGardenServer {
         Ok(())
     }
 
-    /// Handle JSON ShellRequest messages (from GardenClient)
-    async fn handle_json_shell_request(
-        &self,
-        handler: &Arc<GardenDaemon>,
-        body: &[u8],
-        request_id: Uuid,
-    ) -> HootFrame {
-        // Parse Message<ShellRequest>
-        let msg_result: Result<Message<ShellRequest>, _> = serde_json::from_slice(body);
-
-        let (reply_content, parent_header) = match msg_result {
-            Ok(msg) => {
-                debug!("Received ShellRequest: {:?}", msg.content);
-                let reply = handler.handle_shell(msg.content);
-                (reply, Some(msg.header))
-            }
-            Err(e) => {
-                error!("Failed to parse ShellRequest: {}", e);
-                (
-                    ShellReply::Error {
-                        error: format!("JSON parse error: {}", e),
-                        traceback: None,
-                    },
-                    None,
-                )
-            }
-        };
-
-        // Build reply message
-        let reply_msg = Message {
-            header: crate::ipc::MessageHeader::new(Uuid::nil(), "shell_reply"),
-            parent_header,
-            metadata: std::collections::HashMap::new(),
-            content: reply_content,
-        };
-
-        let reply_json = serde_json::to_vec(&reply_msg).unwrap_or_else(|e| {
-            error!("Failed to serialize reply: {}", e);
-            b"{}".to_vec()
-        });
-
-        HootFrame {
-            command: Command::Reply,
-            content_type: ContentType::Json,
-            request_id,
-            service: "chaosgarden".to_string(),
-            traceparent: None,
-            body: Bytes::from(reply_json),
-        }
-    }
-
     /// Dispatch a Payload to the appropriate handler
     async fn dispatch_payload(&self, handler: &Arc<GardenDaemon>, payload: Payload) -> Payload {
         match payload {
@@ -443,9 +406,10 @@ impl CapnpGardenServer {
                 let ipc_definition = convert_to_ipc_stream_definition(definition);
 
                 match handler.handle_stream_start(uri.clone(), ipc_definition, chunk_path) {
-                    Ok(()) => Payload::Success {
-                        result: serde_json::json!({"status": "stream_started", "uri": uri}),
-                    },
+                    Ok(()) => Payload::TypedResponse(ResponseEnvelope::ack(format!(
+                        "stream_started: {}",
+                        uri
+                    ))),
                     Err(e) => Payload::Error {
                         code: "stream_start_failed".to_string(),
                         message: e,
@@ -456,9 +420,10 @@ impl CapnpGardenServer {
 
             Payload::StreamStop { uri } => {
                 match handler.handle_stream_stop(uri.clone()) {
-                    Ok(()) => Payload::Success {
-                        result: serde_json::json!({"status": "stream_stopped", "uri": uri}),
-                    },
+                    Ok(()) => Payload::TypedResponse(ResponseEnvelope::ack(format!(
+                        "stream_stopped: {}",
+                        uri
+                    ))),
                     Err(e) => Payload::Error {
                         code: "stream_stop_failed".to_string(),
                         message: e,
@@ -469,9 +434,10 @@ impl CapnpGardenServer {
 
             Payload::StreamSwitchChunk { uri, new_chunk_path } => {
                 match handler.handle_stream_switch_chunk(uri.clone(), new_chunk_path) {
-                    Ok(()) => Payload::Success {
-                        result: serde_json::json!({"status": "chunk_switched", "uri": uri}),
-                    },
+                    Ok(()) => Payload::TypedResponse(ResponseEnvelope::ack(format!(
+                        "chunk_switched: {}",
+                        uri
+                    ))),
                     Err(e) => Payload::Error {
                         code: "stream_switch_chunk_failed".to_string(),
                         message: e,

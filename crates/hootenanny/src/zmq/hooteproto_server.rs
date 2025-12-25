@@ -4,10 +4,10 @@
 //! This is the primary interface for the MCP-over-ZMQ architecture where
 //! holler acts as the MCP gateway and hootenanny handles the actual tool execution.
 //!
-//! Supports both legacy MsgPack envelope format and new HOOT01 frame protocol.
+//! Uses the HOOT01 frame protocol with Cap'n Proto serialization.
 //! The HOOT01 protocol enables:
 //! - Routing without deserialization (fixed-width header fields)
-//! - Efficient heartbeats (no MsgPack overhead)
+//! - Efficient heartbeats (lightweight frame header)
 //! - Native binary payloads (no base64 encoding)
 //!
 //! Bidirectional heartbeating:
@@ -20,7 +20,11 @@ use bytes::Bytes;
 use cas::ContentStore;
 use hooteproto::{
     capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope, Command, ContentType,
-    HootFrame, Payload, ToolInfo, PROTOCOL_VERSION,
+    HootFrame, Payload, ResponseEnvelope, ToolInfo, PROTOCOL_VERSION,
+};
+use hooteproto::responses::{
+    ArtifactInfoResponse, ArtifactListResponse, ArtifactMetadata, CasContentResponse,
+    CasInspectedResponse, CasStoredResponse, ToolResponse,
 };
 use rzmq::{Context, Msg, MsgFlags, Socket, SocketType};
 use rzmq::socket::options::{LINGER, ROUTER_MANDATORY};
@@ -417,95 +421,52 @@ impl HooteprotoServer {
 
     /// Dispatch via EventDualityServer for full tool functionality
     ///
-    /// Tries the typed dispatch path first (Protocol v2), falling back to
-    /// JSON dispatch for tools not yet converted.
+    /// Dispatches payload via typed dispatcher.
     async fn dispatch_via_server(&self, server: &EventDualityServer, payload: Payload) -> Payload {
-        use crate::api::dispatch::{dispatch_tool, DispatchError};
         use crate::api::typed_dispatcher::TypedDispatcher;
         use hooteproto::{envelope_to_payload, payload_to_request};
 
-        // Fast path: ToolCall goes directly to name-based dispatch
-        // This is the preferred way for holler to call tools
-        if let Payload::ToolCall { name, args } = payload {
-            debug!("ToolCall dispatch: {}", name);
-            return match dispatch_tool(server, &name, args).await {
-                Ok(result) => Payload::Success { result },
-                Err(DispatchError {
-                    code,
-                    message,
-                    details,
-                }) => Payload::Error {
-                    code,
-                    message,
-                    details,
-                },
-            };
-        }
-
-        // Try typed dispatch path first (Protocol v2)
+        // Typed dispatch path
         match payload_to_request(&payload) {
             Ok(Some(request)) => {
                 // Typed path available - use TypedDispatcher
                 debug!("Using typed dispatch for: {}", request.name());
                 let dispatcher = TypedDispatcher::new(std::sync::Arc::new(server.clone()));
                 let envelope = dispatcher.dispatch(request).await;
-                return envelope_to_payload(envelope);
+                envelope_to_payload(envelope)
             }
             Ok(None) => {
-                // Tool not yet converted - fall back to JSON dispatch
-                debug!(
-                    "Falling back to JSON dispatch for: {:?}",
-                    payload_type_name(&payload)
-                );
+                // No typed request available for this payload
+                Payload::Error {
+                    code: "unhandled_payload".to_string(),
+                    message: format!(
+                        "No typed dispatch for payload type: {}",
+                        payload_type_name(&payload)
+                    ),
+                    details: None,
+                }
             }
             Err(e) => {
                 // Conversion error
-                return Payload::Error {
+                Payload::Error {
                     code: e.code().to_string(),
                     message: e.message().to_string(),
                     details: None,
-                };
+                }
             }
-        }
-
-        // TODO: Tech debt - remove this fallback once all tools use typed dispatch.
-        // Currently orpheus_*, musicgen_*, beatthis_*, and other tools still use
-        // the legacy Payload variants which fall through here. Migrate them to
-        // Payload::ToolCall and typed dispatch via TypedDispatcher.
-        let (tool_name, args) = match payload_to_tool_args(payload) {
-            Ok(v) => v,
-            Err(e) => {
-                return Payload::Error {
-                    code: "conversion_error".to_string(),
-                    message: e.to_string(),
-                    details: None,
-                };
-            }
-        };
-
-        // Call the tool via dispatch
-        match dispatch_tool(server, &tool_name, args).await {
-            Ok(result) => Payload::Success { result },
-            Err(DispatchError {
-                code,
-                message,
-                details,
-            }) => Payload::Error {
-                code,
-                message,
-                details,
-            },
         }
     }
 
     /// Check if a payload should be routed to vibeweaver
     fn should_route_to_vibeweaver(&self, payload: &Payload) -> bool {
-        // weave_* tools go to vibeweaver for Python kernel execution
-        // These are ToolCall payloads with weave_* tool names
-        if let Payload::ToolCall { name, .. } = payload {
-            return name.starts_with("weave_");
-        }
-        false
+        // Typed weave payloads go to vibeweaver for Python kernel execution
+        matches!(
+            payload,
+            Payload::WeaveEval { .. }
+                | Payload::WeaveSession
+                | Payload::WeaveReset { .. }
+                | Payload::WeaveHelp { .. }
+        )
     }
 
     /// Dispatch a payload to vibeweaver via ZMQ proxy
@@ -532,13 +493,13 @@ impl HooteprotoServer {
     async fn cas_store(&self, data: Vec<u8>, mime_type: Option<String>) -> Payload {
         let mime = mime_type.as_deref().unwrap_or("application/octet-stream");
         match self.cas.store(&data, mime) {
-            Ok(hash) => Payload::Success {
-                result: serde_json::json!({
-                    "hash": hash.to_string(),
-                    "size": data.len(),
-                    "mime_type": mime,
+            Ok(hash) => Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::CasStored(CasStoredResponse {
+                    hash: hash.to_string(),
+                    size: data.len(),
+                    mime_type: mime.to_string(),
                 }),
-            },
+            )),
             Err(e) => Payload::Error {
                 code: "cas_store_error".to_string(),
                 message: e.to_string(),
@@ -571,21 +532,23 @@ impl HooteprotoServer {
                     )
                 };
 
-                Payload::Success {
-                    result: serde_json::json!({
-                        "hash": hash,
-                        "size": data.len(),
-                        "preview": preview,
-                        "exists": true,
+                Payload::TypedResponse(ResponseEnvelope::success(
+                    ToolResponse::CasInspected(CasInspectedResponse {
+                        hash: hash.to_string(),
+                        exists: true,
+                        size: Some(data.len()),
+                        preview: Some(preview),
                     }),
-                }
+                ))
             }
-            Ok(None) => Payload::Success {
-                result: serde_json::json!({
-                    "hash": hash,
-                    "exists": false,
+            Ok(None) => Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::CasInspected(CasInspectedResponse {
+                    hash: hash.to_string(),
+                    exists: false,
+                    size: None,
+                    preview: None,
                 }),
-            },
+            )),
             Err(e) => Payload::Error {
                 code: "cas_inspect_error".to_string(),
                 message: e.to_string(),
@@ -607,16 +570,13 @@ impl HooteprotoServer {
         };
 
         match self.cas.retrieve(&content_hash) {
-            Ok(Some(data)) => {
-                use base64::Engine;
-                Payload::Success {
-                    result: serde_json::json!({
-                        "hash": hash,
-                        "size": data.len(),
-                        "data": base64::engine::general_purpose::STANDARD.encode(&data),
-                    }),
-                }
-            }
+            Ok(Some(data)) => Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::CasContent(CasContentResponse {
+                    hash: hash.to_string(),
+                    size: data.len(),
+                    data,
+                }),
+            )),
             Ok(None) => Payload::Error {
                 code: "not_found".to_string(),
                 message: format!("Hash not found: {}", hash),
@@ -643,11 +603,13 @@ impl HooteprotoServer {
                             creator.as_ref().is_none_or(|c| a.creator.as_str() == c);
                         tag_match && creator_match
                     })
+                    .map(artifact_to_info)
                     .collect();
+                let count = artifacts.len();
 
-                Payload::Success {
-                    result: serde_json::to_value(&artifacts).unwrap_or_default(),
-                }
+                Payload::TypedResponse(ResponseEnvelope::success(
+                    ToolResponse::ArtifactList(ArtifactListResponse { artifacts, count }),
+                ))
             }
             Err(e) => Payload::Error {
                 code: "artifact_list_error".to_string(),
@@ -660,9 +622,9 @@ impl HooteprotoServer {
     async fn artifact_get(&self, id: &str) -> Payload {
         let store = self.artifacts.read().unwrap();
         match store.get(id) {
-            Ok(Some(artifact)) => Payload::Success {
-                result: serde_json::to_value(&artifact).unwrap_or_default(),
-            },
+            Ok(Some(artifact)) => Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::ArtifactInfo(artifact_to_info(artifact)),
+            )),
             Ok(None) => Payload::Error {
                 code: "not_found".to_string(),
                 message: format!("Artifact not found: {}", id),
@@ -679,7 +641,7 @@ impl HooteprotoServer {
     fn list_tools(&self) -> Payload {
         // Start with tools from dispatch if available
         let mut tools = if self.event_server.is_some() {
-            crate::api::dispatch::list_tools()
+            crate::api::tools_registry::list_tools()
         } else {
             vec![]
         };
@@ -762,12 +724,6 @@ fn payload_type_name(payload: &Payload) -> &'static str {
         Payload::Ping => "ping",
         Payload::Pong { .. } => "pong",
         Payload::Shutdown { .. } => "shutdown",
-        Payload::ToolCall { .. } => "tool_call",
-        Payload::LuaEval { .. } => "lua_eval",
-        Payload::LuaDescribe { .. } => "lua_describe",
-        Payload::ScriptStore { .. } => "script_store",
-        Payload::ScriptSearch { .. } => "script_search",
-        Payload::JobExecute { .. } => "job_execute",
         Payload::JobStatus { .. } => "job_status",
         Payload::JobPoll { .. } => "job_poll",
         Payload::JobCancel { .. } => "job_cancel",
@@ -842,11 +798,69 @@ fn payload_type_name(payload: &Payload) -> &'static str {
         Payload::TimelineAddMarker { .. } => "timeline_add_marker",
         Payload::ListTools => "list_tools",
         Payload::ToolList { .. } => "tool_list",
-        Payload::Success { .. } => "success",
+        Payload::WeaveEval { .. } => "weave_eval",
+        Payload::WeaveSession => "weave_session",
+        Payload::WeaveReset { .. } => "weave_reset",
+        Payload::WeaveHelp { .. } => "weave_help",
+        Payload::TypedResponse(_) => "typed_response",
         Payload::Error { .. } => "error",
         Payload::StreamStart { .. } => "stream_start",
         Payload::StreamSwitchChunk { .. } => "stream_switch_chunk",
         Payload::StreamStop { .. } => "stream_stop",
+    }
+}
+
+/// Convert an artifact to ArtifactInfoResponse
+fn artifact_to_info(artifact: artifact_store::Artifact) -> ArtifactInfoResponse {
+    use hooteproto::responses::MidiMetadata;
+
+    // Extract metadata fields from JSON Value
+    let metadata = if artifact.metadata.is_null() {
+        None
+    } else {
+        // Extract MIDI info if present
+        let midi_info = artifact.metadata.get("midi_info").and_then(|m| {
+            Some(MidiMetadata {
+                tracks: m.get("tracks")?.as_u64()? as u16,
+                ticks_per_quarter: m.get("ticks_per_quarter")?.as_u64()? as u16,
+                duration_ticks: m.get("duration_ticks")?.as_u64()?,
+            })
+        });
+
+        Some(ArtifactMetadata {
+            duration_seconds: artifact.metadata.get("duration_seconds").and_then(|v| v.as_f64()),
+            sample_rate: artifact.metadata.get("sample_rate").and_then(|v| v.as_u64()).map(|v| v as u32),
+            channels: artifact.metadata.get("channels").and_then(|v| v.as_u64()).map(|v| v as u8),
+            midi_info,
+        })
+    };
+
+    // Try to get mime_type from metadata, fall back to detecting from tags
+    let mime_type = artifact.metadata
+        .get("mime_type")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            // Infer from tags
+            if artifact.tags.iter().any(|t| t.contains("midi")) {
+                "audio/midi".to_string()
+            } else if artifact.tags.iter().any(|t| t.contains("wav") || t.contains("audio")) {
+                "audio/wav".to_string()
+            } else {
+                "application/octet-stream".to_string()
+            }
+        });
+
+    ArtifactInfoResponse {
+        id: artifact.id.to_string(),
+        content_hash: artifact.content_hash.to_string(),
+        mime_type,
+        tags: artifact.tags,
+        creator: artifact.creator,
+        created_at: artifact.created_at.timestamp() as u64,
+        parent_id: artifact.parent_id.map(|id| id.to_string()),
+        variation_set_id: artifact.variation_set_id.map(|id| id.to_string()),
+        metadata,
     }
 }
 

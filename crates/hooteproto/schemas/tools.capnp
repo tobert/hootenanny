@@ -81,6 +81,12 @@ struct ToolRequest {
     # === Misc Tools ===
     sampleLlm @46 :SampleLlm;
     listTools @47 :Void;
+
+    # === Vibeweaver Tools ===
+    weaveEval @48 :WeaveEval;
+    weaveSession @49 :Void;
+    weaveReset @50 :WeaveReset;
+    weaveHelp @51 :WeaveHelp;
   }
 }
 
@@ -353,4 +359,17 @@ struct SampleLlm {
   maxTokens @1 :UInt32;
   temperature @2 :Float64;
   systemPrompt @3 :Text;
+}
+
+# === Vibeweaver Types ===
+struct WeaveEval {
+  code @0 :Text;
+}
+
+struct WeaveReset {
+  clearSession @0 :Bool;
+}
+
+struct WeaveHelp {
+  topic @0 :Text;  # Empty for general help
 }

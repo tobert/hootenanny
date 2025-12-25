@@ -7,7 +7,11 @@ use anyhow::{Context as AnyhowContext, Result};
 use bytes::Bytes;
 use hooteproto::{
     capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope, Command, ContentType,
-    HootFrame, Payload, PROTOCOL_VERSION,
+    HootFrame, Payload, ResponseEnvelope, PROTOCOL_VERSION,
+};
+use hooteproto::responses::{
+    ToolResponse, WeaveEvalResponse, WeaveHelpResponse, WeaveOutputType, WeaveResetResponse,
+    WeaveSessionInfo, WeaveSessionResponse,
 };
 use pyo3::prelude::*;
 use rzmq::{Context, Msg, MsgFlags, Socket, SocketType};
@@ -248,33 +252,11 @@ impl Server {
                 uptime_secs: self.start_time.elapsed().as_secs(),
             },
 
-            // Handle ToolCall payloads (how hootenanny sends weave_* calls)
-            Payload::ToolCall { name, args } => match name.as_str() {
-                "weave_eval" => {
-                    let code = args
-                        .get("code")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default();
-                    self.weave_eval(code).await
-                }
-                "weave_session" => self.weave_session().await,
-                "weave_reset" => {
-                    let clear_session = args
-                        .get("clear_session")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    self.weave_reset(clear_session).await
-                }
-                "weave_help" => {
-                    let topic = args.get("topic").and_then(|v| v.as_str());
-                    self.weave_help(topic).await
-                }
-                _ => Payload::Error {
-                    code: "unknown_tool".to_string(),
-                    message: format!("Unknown tool: {}", name),
-                    details: None,
-                },
-            },
+            // Handle typed weave payloads
+            Payload::WeaveEval { code } => self.weave_eval(&code).await,
+            Payload::WeaveSession => self.weave_session().await,
+            Payload::WeaveReset { clear_session } => self.weave_reset(clear_session).await,
+            Payload::WeaveHelp { topic } => self.weave_help(topic.as_deref()).await,
 
             other => {
                 warn!("Unhandled payload type: {:?}", other);
@@ -300,12 +282,14 @@ impl Server {
                 Python::with_gil(|py| {
                     let result_str = py_obj.bind(py).repr().map(|r| r.to_string());
                     match result_str {
-                        Ok(s) => Payload::Success {
-                            result: serde_json::json!({
-                                "result": s,
-                                "type": "expression"
+                        Ok(s) => Payload::TypedResponse(ResponseEnvelope::success(
+                            ToolResponse::WeaveEval(WeaveEvalResponse {
+                                output_type: WeaveOutputType::Expression,
+                                result: Some(s),
+                                stdout: None,
+                                stderr: None,
                             }),
-                        },
+                        )),
                         Err(e) => Payload::Error {
                             code: "repr_error".to_string(),
                             message: e.to_string(),
@@ -317,13 +301,14 @@ impl Server {
             Err(_) => {
                 // Try exec for statements
                 match kernel.exec_with_capture(code) {
-                    Ok((stdout, stderr)) => Payload::Success {
-                        result: serde_json::json!({
-                            "stdout": stdout,
-                            "stderr": stderr,
-                            "type": "statement"
+                    Ok((stdout, stderr)) => Payload::TypedResponse(ResponseEnvelope::success(
+                        ToolResponse::WeaveEval(WeaveEvalResponse {
+                            output_type: WeaveOutputType::Statement,
+                            result: None,
+                            stdout: Some(stdout),
+                            stderr: Some(stderr),
                         }),
-                    },
+                    )),
                     Err(e) => Payload::Error {
                         code: "python_error".to_string(),
                         message: e.to_string(),
@@ -337,33 +322,33 @@ impl Server {
     /// Get current session state
     async fn weave_session(&self) -> Payload {
         let session = self.session.read().await;
-        match session.as_ref() {
-            Some(s) => Payload::Success {
-                result: serde_json::json!({
-                    "id": s.id.to_string(),
-                    "name": s.name,
-                    "vibe": s.vibe,
+        let response = match session.as_ref() {
+            Some(s) => WeaveSessionResponse {
+                session: Some(WeaveSessionInfo {
+                    id: s.id.to_string(),
+                    name: s.name.clone(),
+                    vibe: s.vibe.clone(),
                 }),
+                message: None,
             },
-            None => Payload::Success {
-                result: serde_json::json!({
-                    "session": null,
-                    "message": "No active session"
-                }),
+            None => WeaveSessionResponse {
+                session: None,
+                message: Some("No active session".to_string()),
             },
-        }
+        };
+        Payload::TypedResponse(ResponseEnvelope::success(ToolResponse::WeaveSession(response)))
     }
 
     /// Reset the kernel
     async fn weave_reset(&self, _clear_session: bool) -> Payload {
         let kernel = self.kernel.read().await;
         match kernel.clear() {
-            Ok(()) => Payload::Success {
-                result: serde_json::json!({
-                    "reset": true,
-                    "message": "Kernel reset successfully"
+            Ok(()) => Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::WeaveReset(WeaveResetResponse {
+                    reset: true,
+                    message: "Kernel reset successfully".to_string(),
                 }),
-            },
+            )),
             Err(e) => Payload::Error {
                 code: "reset_error".to_string(),
                 message: e.to_string(),
@@ -417,10 +402,11 @@ Use weave_help(topic="api|session|examples") for more info.
             }
         };
 
-        Payload::Success {
-            result: serde_json::json!({
-                "help": help_text
-            }),
-        }
+        Payload::TypedResponse(ResponseEnvelope::success(ToolResponse::WeaveHelp(
+            WeaveHelpResponse {
+                help: help_text.to_string(),
+                topic: topic.map(|t| t.to_string()),
+            },
+        )))
     }
 }

@@ -54,7 +54,8 @@ pub async fn job_status(endpoint: &str, job_id: &str, timeout_ms: u64) -> Result
     let response = client.request(payload).await?;
 
     match response.payload {
-        Payload::Success { result } => {
+        Payload::TypedResponse(envelope) => {
+            let result = envelope.to_json();
             let output = serde_json::to_string_pretty(&result)?;
             println!("{}", output);
             Ok(())
@@ -78,7 +79,8 @@ pub async fn job_list(endpoint: &str, status: Option<&str>, timeout_ms: u64) -> 
     let response = client.request(payload).await?;
 
     match response.payload {
-        Payload::Success { result } => {
+        Payload::TypedResponse(envelope) => {
+            let result = envelope.to_json();
             let output = serde_json::to_string_pretty(&result)?;
             println!("{}", output);
             Ok(())
@@ -115,7 +117,8 @@ pub async fn job_poll(
     let response = client.request(payload).await?;
 
     match response.payload {
-        Payload::Success { result } => {
+        Payload::TypedResponse(envelope) => {
+            let result = envelope.to_json();
             let output = serde_json::to_string_pretty(&result)?;
             println!("{}", output);
             Ok(())

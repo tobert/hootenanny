@@ -22,6 +22,7 @@ use crate::{common_capnp, envelope_capnp, streams_capnp, tools_capnp};
 
 use crate::envelope::ResponseEnvelope;
 use crate::request::*;
+use crate::responses::ToolResponse;
 use crate::ToolError;
 
 /// Convert a Payload to a ToolRequest for typed dispatch.
@@ -415,31 +416,17 @@ pub fn payload_to_request(payload: &Payload) -> Result<Option<ToolRequest>, Tool
 }
 
 /// Convert a ResponseEnvelope back to Payload for ZMQ transport.
+///
+/// Uses TypedResponse to preserve the full typed structure.
 pub fn envelope_to_payload(envelope: ResponseEnvelope) -> Payload {
-    match envelope {
-        ResponseEnvelope::Success { response } => {
-            // Convert typed response to JSON for legacy Payload::Success
-            let result = response.to_json();
-            Payload::Success { result }
-        }
-        ResponseEnvelope::JobStarted { job_id, tool, .. } => Payload::Success {
-            result: serde_json::json!({
-                "job_id": job_id,
-                "tool": tool,
-                "status": "started",
-            }),
-        },
-        ResponseEnvelope::Ack { message } => Payload::Success {
-            result: serde_json::json!({
-                "status": "ok",
-                "message": message,
-            }),
-        },
+    match &envelope {
         ResponseEnvelope::Error(err) => Payload::Error {
             code: err.code().to_string(),
             message: err.message().to_string(),
             details: None,
         },
+        // All other cases use the typed envelope directly
+        _ => Payload::TypedResponse(envelope),
     }
 }
 
@@ -583,7 +570,9 @@ pub fn capnp_envelope_to_payload(
             let success = success?;
             let result_str = success.get_result()?.to_str()?;
             let result = serde_json::from_str(result_str).unwrap_or_default();
-            Ok(Payload::Success { result })
+            Ok(Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::LegacyJson(result),
+            )))
         }
 
         envelope_capnp::payload::Error(error) => {
@@ -666,17 +655,9 @@ pub fn capnp_envelope_to_payload(
             })
         }
 
-        // Generic tool call - name + JSON args
-        envelope_capnp::payload::ToolCall(tool_call) => {
-            let tool_call = tool_call?;
-            let name = tool_call.get_name()?.to_str()?.to_string();
-            let args_str = tool_call.get_args()?.to_str()?;
-            let args = if args_str.is_empty() {
-                serde_json::Value::Object(serde_json::Map::new())
-            } else {
-                serde_json::from_str(args_str).unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
-            };
-            Ok(Payload::ToolCall { name, args })
+        // Generic tool call - removed, use typed ToolRequest
+        envelope_capnp::payload::ToolCall(_) => {
+            Err(capnp::Error::failed("ToolCall payload variant removed - use typed ToolRequest".into()))
         }
 
         envelope_capnp::payload::Pong(pong_reader) => {
@@ -1138,66 +1119,26 @@ fn capnp_tool_request_to_payload(
             })
         }
 
-        // === Lua Tools ===
-        tools_capnp::tool_request::LuaEval(lua) => {
-            let lua = lua?;
-            let params_str = lua.get_params()?.to_str()?;
-            let params = if params_str.is_empty() {
-                None
-            } else {
-                serde_json::from_str(params_str).ok()
-            };
-
-            Ok(Payload::LuaEval {
-                code: lua.get_code()?.to_str()?.to_string(),
-                params,
-            })
+        // === Lua Tools (REMOVED) ===
+        tools_capnp::tool_request::LuaEval(_) => {
+            Err(capnp::Error::failed("LuaEval payload variant removed - Lua integration discontinued".into()))
         }
 
-        tools_capnp::tool_request::LuaDescribe(lua) => {
-            let lua = lua?;
-            Ok(Payload::LuaDescribe {
-                script_hash: lua.get_script_hash()?.to_str()?.to_string(),
-            })
+        tools_capnp::tool_request::LuaDescribe(_) => {
+            Err(capnp::Error::failed("LuaDescribe payload variant removed - Lua integration discontinued".into()))
         }
 
-        tools_capnp::tool_request::ScriptStore(script) => {
-            let script = script?;
-            let tags_reader = script.get_tags()?;
-            let creator = script.get_creator()?.to_str()?;
-
-            Ok(Payload::ScriptStore {
-                content: script.get_content()?.to_str()?.to_string(),
-                tags: Some(capnp_string_list(tags_reader)),
-                creator: if creator.is_empty() { None } else { Some(creator.to_string()) },
-            })
+        tools_capnp::tool_request::ScriptStore(_) => {
+            Err(capnp::Error::failed("ScriptStore payload variant removed - Lua integration discontinued".into()))
         }
 
-        tools_capnp::tool_request::ScriptSearch(script) => {
-            let script = script?;
-            let tag = script.get_tag()?.to_str()?;
-            let creator = script.get_creator()?.to_str()?;
-            let vibe = script.get_vibe()?.to_str()?;
-
-            Ok(Payload::ScriptSearch {
-                tag: if tag.is_empty() { None } else { Some(tag.to_string()) },
-                creator: if creator.is_empty() { None } else { Some(creator.to_string()) },
-                vibe: if vibe.is_empty() { None } else { Some(vibe.to_string()) },
-            })
+        tools_capnp::tool_request::ScriptSearch(_) => {
+            Err(capnp::Error::failed("ScriptSearch payload variant removed - Lua integration discontinued".into()))
         }
 
         // === Job Tools ===
-        tools_capnp::tool_request::JobExecute(job) => {
-            let job = job?;
-            let params_str = job.get_params()?.to_str()?;
-            let params = serde_json::from_str(params_str).unwrap_or_default();
-            let tags_reader = job.get_tags()?;
-
-            Ok(Payload::JobExecute {
-                script_hash: job.get_script_hash()?.to_str()?.to_string(),
-                params,
-                tags: Some(capnp_string_list(tags_reader)),
-            })
+        tools_capnp::tool_request::JobExecute(_) => {
+            Err(capnp::Error::failed("JobExecute payload variant removed - use typed ToolRequest".into()))
         }
 
         tools_capnp::tool_request::JobStatus(job) => {
@@ -1283,6 +1224,33 @@ fn capnp_tool_request_to_payload(
 
         tools_capnp::tool_request::ListTools(()) => {
             Ok(Payload::ListTools)
+        }
+
+        // === Vibeweaver Tools ===
+        tools_capnp::tool_request::WeaveEval(eval) => {
+            let eval = eval?;
+            Ok(Payload::WeaveEval {
+                code: eval.get_code()?.to_str()?.to_string(),
+            })
+        }
+
+        tools_capnp::tool_request::WeaveSession(()) => {
+            Ok(Payload::WeaveSession)
+        }
+
+        tools_capnp::tool_request::WeaveReset(reset) => {
+            let reset = reset?;
+            Ok(Payload::WeaveReset {
+                clear_session: reset.get_clear_session(),
+            })
+        }
+
+        tools_capnp::tool_request::WeaveHelp(help) => {
+            let help = help?;
+            let topic = help.get_topic()?.to_str()?;
+            Ok(Payload::WeaveHelp {
+                topic: if topic.is_empty() { None } else { Some(topic.to_string()) },
+            })
         }
     }
 }
@@ -1414,9 +1382,11 @@ fn payload_to_capnp_payload(
     payload: &Payload,
 ) -> capnp::Result<()> {
     match payload {
-        Payload::Success { result } => {
+        Payload::TypedResponse(envelope) => {
+            // Convert ResponseEnvelope to JSON for wire format
+            let result = envelope.to_json();
             let mut success = builder.reborrow().init_success();
-            success.set_result(serde_json::to_string(result).unwrap_or_default());
+            success.set_result(serde_json::to_string(&result).unwrap_or_default());
         }
 
         Payload::Error { code, message, details } => {
@@ -1985,55 +1955,7 @@ fn payload_to_capnp_payload(
             req.set_key(key.as_deref().unwrap_or(""));
         }
 
-        // === Lua Tools (ToolRequest) ===
-        Payload::LuaEval { code, params } => {
-            let mut req = builder.reborrow().init_tool_request().init_lua_eval();
-            req.set_code(code);
-            req.set_params(
-                params
-                    .as_ref()
-                    .map(|p| serde_json::to_string(p).unwrap_or_default())
-                    .unwrap_or_default(),
-            );
-        }
-
-        Payload::LuaDescribe { script_hash } => {
-            let mut req = builder.reborrow().init_tool_request().init_lua_describe();
-            req.set_script_hash(script_hash);
-        }
-
-        Payload::ScriptStore { content, tags, creator } => {
-            let mut req = builder.reborrow().init_tool_request().init_script_store();
-            req.set_content(content);
-            if let Some(ref tags_vec) = tags {
-                let mut tags_builder = req.reborrow().init_tags(tags_vec.len() as u32);
-                for (i, tag) in tags_vec.iter().enumerate() {
-                    tags_builder.set(i as u32, tag);
-                }
-            }
-            req.set_creator(creator.as_deref().unwrap_or(""));
-        }
-
-        Payload::ScriptSearch { tag, creator, vibe } => {
-            let mut req = builder.reborrow().init_tool_request().init_script_search();
-            req.set_tag(tag.as_deref().unwrap_or(""));
-            req.set_creator(creator.as_deref().unwrap_or(""));
-            req.set_vibe(vibe.as_deref().unwrap_or(""));
-        }
-
         // === Job Tools (ToolRequest) ===
-        Payload::JobExecute { script_hash, params, tags } => {
-            let mut req = builder.reborrow().init_tool_request().init_job_execute();
-            req.set_script_hash(script_hash);
-            req.set_params(serde_json::to_string(params).unwrap_or_default());
-            if let Some(ref tags_vec) = tags {
-                let mut tags_builder = req.reborrow().init_tags(tags_vec.len() as u32);
-                for (i, tag) in tags_vec.iter().enumerate() {
-                    tags_builder.set(i as u32, tag);
-                }
-            }
-        }
-
         Payload::JobStatus { job_id } => {
             let mut req = builder.reborrow().init_tool_request().init_job_status();
             req.set_job_id(job_id);
@@ -2119,11 +2041,28 @@ fn payload_to_capnp_payload(
             shutdown.set_reason(reason);
         }
 
-        // Generic tool call - name + JSON args
-        Payload::ToolCall { name, args } => {
-            let mut tool_call = builder.reborrow().init_tool_call();
-            tool_call.set_name(name);
-            tool_call.set_args(serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string()));
+        // === Vibeweaver Tools ===
+        Payload::WeaveEval { code } => {
+            let tool_request = builder.reborrow().init_tool_request();
+            let mut weave = tool_request.init_weave_eval();
+            weave.set_code(code);
+        }
+
+        Payload::WeaveSession => {
+            let mut tool_request = builder.reborrow().init_tool_request();
+            tool_request.set_weave_session(());
+        }
+
+        Payload::WeaveReset { clear_session } => {
+            let tool_request = builder.reborrow().init_tool_request();
+            let mut reset = tool_request.init_weave_reset();
+            reset.set_clear_session(*clear_session);
+        }
+
+        Payload::WeaveHelp { topic } => {
+            let tool_request = builder.reborrow().init_tool_request();
+            let mut help = tool_request.init_weave_help();
+            help.set_topic(topic.as_deref().unwrap_or(""));
         }
     }
 
@@ -2175,11 +2114,10 @@ mod tests {
 
     #[test]
     fn test_unsupported_returns_none() {
-        // ToolCall is the legacy path - should return None for typed dispatch
-        let payload = Payload::ToolCall {
-            name: "unknown_tool".to_string(),
-            args: serde_json::json!({}),
-        };
+        // Response payloads like TypedResponse are not tool requests - should return None
+        let payload = Payload::TypedResponse(ResponseEnvelope::success(
+            ToolResponse::LegacyJson(serde_json::json!({"test": true})),
+        ));
 
         let request = payload_to_request(&payload).unwrap();
         assert!(request.is_none());
@@ -2191,11 +2129,10 @@ mod tests {
         let payload = envelope_to_payload(envelope);
 
         match payload {
-            Payload::Success { result } => {
-                assert_eq!(result["status"], "ok");
-                assert_eq!(result["message"], "test");
+            Payload::TypedResponse(ResponseEnvelope::Ack { message }) => {
+                assert_eq!(message, "test");
             }
-            _ => panic!("Expected Success payload"),
+            _ => panic!("Expected TypedResponse(Ack) payload"),
         }
     }
 }

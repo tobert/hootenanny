@@ -485,11 +485,7 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
         }
 
         // === Fallback: Unknown tool ===
-        // TODO: Remove this fallback once all tools are typed
-        _ => Ok(Payload::ToolCall {
-            name: name.to_string(),
-            args,
-        }),
+        _ => anyhow::bail!("Unknown tool: {}. All tools must have typed dispatch.", name),
     }
 }
 

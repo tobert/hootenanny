@@ -34,11 +34,17 @@ impl EventDualityServer {
             JobStatus::Cancelled => crate::api::responses::JobStatus::Cancelled,
         };
 
+        // Convert ToolResponse to JSON for the MCP API
+        let result_json = job_info
+            .result
+            .as_ref()
+            .and_then(|r| serde_json::to_value(r).ok());
+
         let response = JobStatusResponse {
             job_id: job_info.job_id.as_str().to_string(),
             status,
             tool_name: job_info.source.clone(),
-            result: job_info.result.clone(),
+            result: result_json,
             error: job_info.error.clone(),
             created_at: Some(job_info.created_at as i64),
             started_at: job_info.started_at.map(|t| t as i64),

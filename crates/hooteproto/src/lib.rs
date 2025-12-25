@@ -11,7 +11,7 @@
 //! - Resources and completions follow MCP patterns
 //!
 //! However, hooteproto is **loosely coupled** to MCP:
-//! - Internal transport uses MsgPack over ZMQ (not JSON-RPC)
+//! - Internal transport uses Cap'n Proto over ZMQ (not JSON-RPC)
 //! - Typed dispatch avoids JSON in the core path
 //! - Timing semantics (sync/async/fire-and-forget) are richer than MCP
 //!
@@ -23,7 +23,7 @@
 //! The `frame` module implements the HOOT01 wire protocol - a hybrid frame-based
 //! format inspired by MDP (Majordomo Protocol). This enables:
 //! - Routing without deserialization (fixed-width routing fields)
-//! - Efficient heartbeats (no MsgPack overhead)
+//! - Efficient heartbeats (minimal overhead)
 //! - Native binary payloads (no base64 encoding)
 //!
 //! ## Domain Types
@@ -106,6 +106,7 @@ pub mod domain;
 pub mod envelope;
 pub mod frame;
 pub mod garden;
+pub mod metadata;
 pub mod params;
 pub mod request;
 pub mod responses;
@@ -125,6 +126,7 @@ pub use conversion::{
 pub use domain::{JobId, JobInfo, JobStatus, JobStoreStats};
 pub use envelope::{ResponseEnvelope, ToolError};
 pub use frame::{Command, ContentType, FrameError, HootFrame, ReadyPayload, PROTOCOL_VERSION};
+pub use metadata::{GenerationParams, Metrics, StoredMetadata};
 pub use request::ToolRequest;
 pub use responses::ToolResponse;
 pub use timing::ToolTiming;
@@ -241,40 +243,7 @@ pub enum Payload {
         reason: String,
     },
 
-    // === Generic Tool Call (name-based dispatch) ===
-    /// Generic tool call - routes to dispatch.rs by name
-    /// This is the preferred way to call tools - avoids needing Payload variants for each tool
-    ToolCall {
-        name: String,
-        #[serde(default)]
-        args: serde_json::Value,
-    },
-
-    // === Lua Tools (legacy, now handled by hootenanny) ===
-    LuaEval {
-        code: String,
-        params: Option<serde_json::Value>,
-    },
-    LuaDescribe {
-        script_hash: String,
-    },
-    ScriptStore {
-        content: String,
-        tags: Option<Vec<String>>,
-        creator: Option<String>,
-    },
-    ScriptSearch {
-        tag: Option<String>,
-        creator: Option<String>,
-        vibe: Option<String>,
-    },
-
     // === Job System ===
-    JobExecute {
-        script_hash: String,
-        params: serde_json::Value,
-        tags: Option<Vec<String>>,
-    },
     JobStatus {
         job_id: String,
     },
@@ -652,6 +621,18 @@ pub enum Payload {
         source: Option<String>,
     },
 
+    // === Vibeweaver Tools (Holler → Hootenanny → Vibeweaver) ===
+    WeaveEval {
+        code: String,
+    },
+    WeaveSession,
+    WeaveReset {
+        clear_session: bool,
+    },
+    WeaveHelp {
+        topic: Option<String>,
+    },
+
     // === Config Tools (Holler → Hootenanny) ===
     ConfigGet {
         section: Option<String>,
@@ -698,9 +679,9 @@ pub enum Payload {
     },
 
     // === Responses ===
-    Success {
-        result: serde_json::Value,
-    },
+    /// Typed response envelope for structured tool responses.
+    TypedResponse(ResponseEnvelope),
+
     Error {
         code: String,
         message: String,
@@ -1002,10 +983,9 @@ mod tests {
     }
 
     #[test]
-    fn lua_eval_roundtrip() {
-        let envelope = Envelope::new(Payload::LuaEval {
-            code: "return 1 + 1".to_string(),
-            params: Some(serde_json::json!({"x": 42})),
+    fn weave_eval_roundtrip() {
+        let envelope = Envelope::new(Payload::WeaveEval {
+            code: "print('hello')".to_string(),
         });
         let json = serde_json::to_string_pretty(&envelope).unwrap();
         let parsed: Envelope = serde_json::from_str(&json).unwrap();
@@ -1013,10 +993,12 @@ mod tests {
     }
 
     #[test]
-    fn success_response_roundtrip() {
-        let envelope = Envelope::new(Payload::Success {
-            result: serde_json::json!({"answer": 42}),
-        });
+    fn typed_response_roundtrip() {
+        use crate::responses::ToolResponse;
+
+        let envelope = Envelope::new(Payload::TypedResponse(ResponseEnvelope::success(
+            ToolResponse::LegacyJson(serde_json::json!({"answer": 42})),
+        )));
         let json = serde_json::to_string(&envelope).unwrap();
         let parsed: Envelope = serde_json::from_str(&json).unwrap();
         assert_eq!(envelope.payload, parsed.payload);

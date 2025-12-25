@@ -1,7 +1,7 @@
 //! Typed tool requests for the hooteproto protocol.
 //!
 //! Each variant represents a complete, typed request for a specific tool.
-//! No JSON involved - these serialize directly to MsgPack.
+//! No JSON involved - these serialize directly to Cap'n Proto.
 
 use crate::timing::ToolTiming;
 use serde::{Deserialize, Serialize};
