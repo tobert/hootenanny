@@ -1,12 +1,13 @@
 //! MCP Handler implementation for ZMQ backend forwarding
-//!
-//! Implements baton::Handler to bridge MCP protocol to ZMQ backends.
-//! Tools are dynamically discovered from backends and calls are routed based on prefix.
+//! 
+//! Implements baton::Handler to bridge MCP protocol to ZMQ backends. 
+//! Tools are dynamically discovered from backends and calls are routed based on prefix. 
 //! Tool lists are cached and refreshed when backends recover from failures.
 
 use async_trait::async_trait;
 use baton::{CallToolResult, Content, ErrorData, Handler, Implementation, Tool, ToolSchema};
 use hooteproto::{Payload, ToolInfo};
+use hooteproto::request::ToolRequest;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -111,7 +112,7 @@ impl Handler for ZmqHandler {
             progress_token: None,
             progress_sender: None,
             sampler: None,
-            logger: baton::transport::McpLogger::new(Arc::new(baton::InMemorySessionStore::new())),
+            logger: baton::transport::McpLogger::new(Arc::new(baton::InMemorySessionStore::new()))
         }).await
     }
 
@@ -154,7 +155,8 @@ impl Handler for ZmqHandler {
             Ok(Payload::Error { code, message, details }) => {
                 let error_text = if let Some(d) = details {
                     format!(
-                        "{}: {}\n{}",
+                        "{}: {}
+{}",
                         code,
                         message,
                         serde_json::to_string_pretty(&d).unwrap_or_default()
@@ -183,7 +185,7 @@ async fn collect_tools_async(backends: &BackendPool) -> Vec<Tool> {
 
     // Query hootenanny for all tools (it proxies to vibeweaver and chaosgarden)
     if let Some(ref backend) = backends.hootenanny {
-        match backend.request(Payload::ListTools).await {
+        match backend.request(Payload::ToolRequest(ToolRequest::ListTools)).await {
             Ok(Payload::ToolList { tools }) => {
                 debug!("Got {} tools from hootenanny", tools.len());
                 all_tools.extend(tools.into_iter().map(tool_info_to_baton));
@@ -205,4 +207,3 @@ fn tool_info_to_baton(info: ToolInfo) -> Tool {
     Tool::new(&info.name, &info.description)
         .with_input_schema(ToolSchema::from_value(info.input_schema))
 }
-

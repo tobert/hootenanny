@@ -9,6 +9,7 @@ use hooteproto::{
     capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope, Command, ContentType,
     HootFrame, Payload, ResponseEnvelope, PROTOCOL_VERSION,
 };
+use hooteproto::request::ToolRequest;
 use hooteproto::responses::{
     ToolResponse, WeaveEvalResponse, WeaveHelpResponse, WeaveOutputType, WeaveResetResponse,
     WeaveSessionInfo, WeaveSessionResponse,
@@ -253,10 +254,10 @@ impl Server {
             },
 
             // Handle typed weave payloads
-            Payload::WeaveEval { code } => self.weave_eval(&code).await,
-            Payload::WeaveSession => self.weave_session().await,
-            Payload::WeaveReset { clear_session } => self.weave_reset(clear_session).await,
-            Payload::WeaveHelp { topic } => self.weave_help(topic.as_deref()).await,
+            Payload::ToolRequest(ToolRequest::WeaveEval(req)) => self.weave_eval(&req.code).await,
+            Payload::ToolRequest(ToolRequest::WeaveSession) => self.weave_session().await,
+            Payload::ToolRequest(ToolRequest::WeaveReset(req)) => self.weave_reset(req.clear_session).await,
+            Payload::ToolRequest(ToolRequest::WeaveHelp(req)) => self.weave_help(req.topic.as_deref()).await,
 
             other => {
                 warn!("Unhandled payload type: {:?}", other);

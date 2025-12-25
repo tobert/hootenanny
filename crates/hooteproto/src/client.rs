@@ -525,18 +525,13 @@ pub fn spawn_health_task(
                             // During initial connection phase, just wait silently
                             if ever_connected {
                                 let failures = client.health.record_failure();
-                                if failures == 1 || failures % 5 == 0 {
-                                    warn!(
-                                        "{}: Heartbeat failed: {} ({}/{})",
-                                        client.config.name, e, failures, max_failures
-                                    );
+                                if failures == 1 || failures.is_multiple_of(5) {
+                                    debug!("{}: Peer still not responding (failures={})", client.config.name, failures);
                                 }
 
-                                if failures >= max_failures {
-                                    if client.health.get_state() != ConnectionState::Dead {
-                                        client.health.set_state(ConnectionState::Dead);
-                                        warn!("{}: Peer marked DEAD (not responding)", client.config.name);
-                                    }
+                                if failures >= max_failures && client.health.get_state() != ConnectionState::Dead {
+                                    client.health.set_state(ConnectionState::Dead);
+                                    warn!("{}: Peer marked DEAD (not responding)", client.config.name);
                                 }
                                 was_connected = false;
                             } else {

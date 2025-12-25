@@ -2,6 +2,7 @@
 
 using Common = import "common.capnp";
 using Jobs = import "jobs.capnp";
+using Garden = import "garden.capnp";
 
 # All tool requests in a single union for typed dispatch
 struct ToolRequest {
@@ -57,7 +58,7 @@ struct ToolRequest {
     # === Config Tools ===
     configGet @32 :ConfigGet;
 
-    # === Lua Tools ===
+    # === Lua Tools (Deprecated) ===
     luaEval @33 :LuaEval;
     luaDescribe @34 :LuaDescribe;
     scriptStore @35 :ScriptStore;
@@ -87,6 +88,32 @@ struct ToolRequest {
     weaveSession @49 :Void;
     weaveReset @50 :WeaveReset;
     weaveHelp @51 :WeaveHelp;
+
+    # === Garden Tools ===
+    gardenStatus @52 :Void;
+    gardenPlay @53 :Void;
+    gardenPause @54 :Void;
+    gardenStop @55 :Void;
+    gardenSeek @56 :Garden.Seek;
+    gardenSetTempo @57 :Garden.SetTempo;
+    gardenQuery @58 :Garden.Query;
+    gardenEmergencyPause @59 :Void;
+    gardenCreateRegion @60 :Garden.CreateRegion;
+    gardenDeleteRegion @61 :Garden.DeleteRegion;
+    gardenMoveRegion @62 :Garden.MoveRegion;
+    gardenGetRegions @63 :Garden.GetRegions;
+    gardenAttachAudio @64 :Garden.AttachAudio;
+    gardenDetachAudio @65 :Void;
+    gardenAudioStatus @66 :Void;
+    gardenAttachInput @67 :Garden.AttachInput;
+    gardenDetachInput @68 :Void;
+    gardenInputStatus @69 :Void;
+    gardenSetMonitor @70 :Garden.SetMonitor;
+
+    # === Help & Model-Native ===
+    getToolHelp @71 :GetToolHelp;
+    schedule @72 :Schedule;
+    analyze @73 :Analyze;
   }
 }
 
@@ -372,4 +399,23 @@ struct WeaveReset {
 
 struct WeaveHelp {
   topic @0 :Text;  # Empty for general help
+}
+
+# === Help Types ===
+struct GetToolHelp {
+  topic @0 :Text;
+}
+
+# === Model-Native Types ===
+struct Schedule {
+  encoding @0 :Common.Encoding;
+  at @1 :Float64;
+  duration @2 :Float64;
+  gain @3 :Float64;
+  rate @4 :Float64;
+}
+
+struct Analyze {
+  encoding @0 :Common.Encoding;
+  tasks @1 :List(Common.AnalysisTask);
 }

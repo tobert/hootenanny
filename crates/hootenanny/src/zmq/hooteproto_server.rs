@@ -22,6 +22,7 @@ use hooteproto::{
     capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope, Command, ContentType,
     HootFrame, Payload, ResponseEnvelope, ToolInfo, PROTOCOL_VERSION,
 };
+use hooteproto::request::ToolRequest;
 use hooteproto::responses::{
     ArtifactInfoResponse, ArtifactListResponse, ArtifactMetadata, CasContentResponse,
     CasInspectedResponse, CasStoredResponse, ToolResponse,
@@ -353,7 +354,7 @@ impl HooteprotoServer {
                     uptime_secs: self.start_time.elapsed().as_secs(),
                 };
             }
-            Payload::ListTools => {
+            Payload::ToolRequest(ToolRequest::ListTools) => {
                 return self.list_tools();
             }
             _ => {}
@@ -361,17 +362,15 @@ impl HooteprotoServer {
 
         // Intercept tools that HooteprotoServer handles directly
         // This ensures they work even if dispatch_tool doesn't implement them
-        // CasStore is intercepted here because Payload::CasStore uses `data` field
-        // but dispatch_tool expects CasStoreRequest with `content_base64` field
         match &payload {
-            Payload::CasStore { data, mime_type } => {
-                return self.cas_store(data.clone(), Some(mime_type.clone())).await
+            Payload::ToolRequest(ToolRequest::CasStore(req)) => {
+                return self.cas_store(req.data.clone(), Some(req.mime_type.clone())).await
             }
-            Payload::CasGet { hash } => return self.cas_get(hash).await,
-            Payload::ArtifactList { tag, creator } => {
-                return self.artifact_list(tag.clone(), creator.clone()).await
+            Payload::ToolRequest(ToolRequest::CasGet(req)) => return self.cas_get(&req.hash).await,
+            Payload::ToolRequest(ToolRequest::ArtifactList(req)) => {
+                return self.artifact_list(req.tag.clone(), req.creator.clone()).await
             }
-            Payload::ArtifactGet { id } => return self.artifact_get(id).await,
+            Payload::ToolRequest(ToolRequest::ArtifactGet(req)) => return self.artifact_get(&req.id).await,
             _ => {}
         }
 
@@ -395,12 +394,11 @@ impl HooteprotoServer {
 
         // Fallback to standalone mode for basic CAS/artifact operations
         match payload {
-            Payload::CasStore { data, mime_type } => self.cas_store(data, Some(mime_type)).await,
-            Payload::CasInspect { hash } => self.cas_inspect(&hash).await,
-            // (Intercepted above, but here for completeness/fallback if interception logic changes)
-            Payload::CasGet { hash } => self.cas_get(&hash).await,
-            Payload::ArtifactList { tag, creator } => self.artifact_list(tag, creator).await,
-            Payload::ArtifactGet { id } => self.artifact_get(&id).await,
+            Payload::ToolRequest(ToolRequest::CasStore(req)) => self.cas_store(req.data, Some(req.mime_type)).await,
+            Payload::ToolRequest(ToolRequest::CasInspect(req)) => self.cas_inspect(&req.hash).await,
+            Payload::ToolRequest(ToolRequest::CasGet(req)) => self.cas_get(&req.hash).await,
+            Payload::ToolRequest(ToolRequest::ArtifactList(req)) => self.artifact_list(req.tag, req.creator).await,
+            Payload::ToolRequest(ToolRequest::ArtifactGet(req)) => self.artifact_get(&req.id).await,
 
             other => {
                 warn!(
@@ -460,13 +458,17 @@ impl HooteprotoServer {
     /// Check if a payload should be routed to vibeweaver
     fn should_route_to_vibeweaver(&self, payload: &Payload) -> bool {
         // Typed weave payloads go to vibeweaver for Python kernel execution
-        matches!(
-            payload,
-            Payload::WeaveEval { .. }
-                | Payload::WeaveSession
-                | Payload::WeaveReset { .. }
-                | Payload::WeaveHelp { .. }
-        )
+        if let Payload::ToolRequest(tr) = payload {
+            matches!(
+                tr,
+                ToolRequest::WeaveEval(_)
+                    | ToolRequest::WeaveSession
+                    | ToolRequest::WeaveReset(_)
+                    | ToolRequest::WeaveHelp(_)
+            )
+        } else {
+            false
+        }
     }
 
     /// Dispatch a payload to vibeweaver via ZMQ proxy
@@ -724,89 +726,20 @@ fn payload_type_name(payload: &Payload) -> &'static str {
         Payload::Ping => "ping",
         Payload::Pong { .. } => "pong",
         Payload::Shutdown { .. } => "shutdown",
-        Payload::JobStatus { .. } => "job_status",
-        Payload::JobPoll { .. } => "job_poll",
-        Payload::JobCancel { .. } => "job_cancel",
-        Payload::JobList { .. } => "job_list",
-        Payload::JobSleep { .. } => "job_sleep",
-        Payload::ReadResource { .. } => "read_resource",
-        Payload::ListResources => "list_resources",
-        Payload::Complete { .. } => "complete",
-        Payload::TimelineEvent { .. } => "timeline_event",
-        Payload::CasStore { .. } => "cas_store",
-        Payload::CasInspect { .. } => "cas_inspect",
-        Payload::CasGet { .. } => "cas_get",
-        Payload::CasUploadFile { .. } => "cas_upload_file",
-        Payload::ArtifactUpload { .. } => "artifact_upload",
-        Payload::ArtifactGet { .. } => "artifact_get",
-        Payload::ArtifactList { .. } => "artifact_list",
-        Payload::ArtifactCreate { .. } => "artifact_create",
-        Payload::GraphQuery { .. } => "graph_query",
-        Payload::GraphBind { .. } => "graph_bind",
-        Payload::GraphTag { .. } => "graph_tag",
-        Payload::GraphConnect { .. } => "graph_connect",
-        Payload::GraphFind { .. } => "graph_find",
-        Payload::GraphContext { .. } => "graph_context",
-        Payload::AddAnnotation { .. } => "add_annotation",
-        Payload::ConfigGet { .. } => "config_get",
-        Payload::OrpheusGenerate { .. } => "orpheus_generate",
-        Payload::OrpheusGenerateSeeded { .. } => "orpheus_generate_seeded",
-        Payload::OrpheusContinue { .. } => "orpheus_continue",
-        Payload::OrpheusBridge { .. } => "orpheus_bridge",
-        Payload::OrpheusLoops { .. } => "orpheus_loops",
-        Payload::OrpheusClassify { .. } => "orpheus_classify",
-        Payload::ConvertMidiToWav { .. } => "convert_midi_to_wav",
-        Payload::SoundfontInspect { .. } => "soundfont_inspect",
-        Payload::SoundfontPresetInspect { .. } => "soundfont_preset_inspect",
-        Payload::AbcParse { .. } => "abc_parse",
-        Payload::AbcToMidi { .. } => "abc_to_midi",
-        Payload::AbcValidate { .. } => "abc_validate",
-        Payload::AbcTranspose { .. } => "abc_transpose",
-        Payload::BeatthisAnalyze { .. } => "beatthis_analyze",
-        Payload::ClapAnalyze { .. } => "clap_analyze",
-        Payload::MusicgenGenerate { .. } => "musicgen_generate",
-        Payload::YueGenerate { .. } => "yue_generate",
-        Payload::GardenStatus => "garden_status",
-        Payload::GardenPlay => "garden_play",
-        Payload::GardenPause => "garden_pause",
-        Payload::GardenStop => "garden_stop",
-        Payload::GardenSeek { .. } => "garden_seek",
-        Payload::GardenSetTempo { .. } => "garden_set_tempo",
-        Payload::GardenQuery { .. } => "garden_query",
-        Payload::GardenEmergencyPause => "garden_emergency_pause",
-        Payload::GardenCreateRegion { .. } => "garden_create_region",
-        Payload::GardenDeleteRegion { .. } => "garden_delete_region",
-        Payload::GardenMoveRegion { .. } => "garden_move_region",
-        Payload::GardenGetRegions { .. } => "garden_get_regions",
-        Payload::GardenAttachAudio { .. } => "garden_attach_audio",
-        Payload::GardenDetachAudio => "garden_detach_audio",
-        Payload::GardenAudioStatus => "garden_audio_status",
-        Payload::GardenAttachInput { .. } => "garden_attach_input",
-        Payload::GardenDetachInput => "garden_detach_input",
-        Payload::GardenInputStatus => "garden_input_status",
-        Payload::GardenSetMonitor { .. } => "garden_set_monitor",
-        Payload::GetToolHelp { .. } => "get_tool_help",
-        Payload::ToolHelpList { .. } => "tool_help_list",
-        Payload::Schedule { .. } => "schedule",
-        Payload::Analyze { .. } => "analyze",
-        Payload::SampleLlm { .. } => "sample_llm",
+        Payload::ToolRequest(tr) => tr.name(),
+        Payload::ToolList { .. } => "tool_list",
+        Payload::TypedResponse(_) => "typed_response",
+        Payload::Error { .. } => "error",
+        Payload::StreamStart { .. } => "stream_start",
+        Payload::StreamSwitchChunk { .. } => "stream_switch_chunk",
+        Payload::StreamStop { .. } => "stream_stop",
         Payload::TransportPlay => "transport_play",
         Payload::TransportStop => "transport_stop",
         Payload::TransportSeek { .. } => "transport_seek",
         Payload::TransportStatus => "transport_status",
         Payload::TimelineQuery { .. } => "timeline_query",
         Payload::TimelineAddMarker { .. } => "timeline_add_marker",
-        Payload::ListTools => "list_tools",
-        Payload::ToolList { .. } => "tool_list",
-        Payload::WeaveEval { .. } => "weave_eval",
-        Payload::WeaveSession => "weave_session",
-        Payload::WeaveReset { .. } => "weave_reset",
-        Payload::WeaveHelp { .. } => "weave_help",
-        Payload::TypedResponse(_) => "typed_response",
-        Payload::Error { .. } => "error",
-        Payload::StreamStart { .. } => "stream_start",
-        Payload::StreamSwitchChunk { .. } => "stream_switch_chunk",
-        Payload::StreamStop { .. } => "stream_stop",
+        Payload::TimelineEvent { .. } => "timeline_event",
     }
 }
 

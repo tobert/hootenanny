@@ -21,7 +21,6 @@ impl Kernel {
             let builtins = py.import("builtins")?;
             globals.set_item("__builtins__", builtins)?;
 
-            // Register and inject vibeweaver module
             Self::inject_vibeweaver_api(py, &globals)?;
 
             Ok(Self {
@@ -143,7 +142,7 @@ impl Kernel {
                 globals.set_item("__builtins__", builtins)?;
             }
 
-            // Re-inject vibeweaver API
+            #[allow(clippy::needless_borrow)]
             Self::inject_vibeweaver_api(py, &globals)?;
 
             Ok(())

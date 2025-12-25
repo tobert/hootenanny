@@ -31,6 +31,8 @@ pub enum ToolRequest {
     ArtifactGet(ArtifactGetRequest),
     /// List artifacts with optional filters
     ArtifactList(ArtifactListRequest),
+    /// Create artifact from CAS hash
+    ArtifactCreate(ArtifactCreateRequest),
 
     // ==========================================================================
     // Orpheus MIDI Generation
@@ -109,6 +111,26 @@ pub enum ToolRequest {
     GardenQuery(GardenQueryRequest),
     /// Emergency pause
     GardenEmergencyPause,
+    /// Attach audio output
+    GardenAttachAudio(GardenAttachAudioRequest),
+    /// Detach audio output
+    GardenDetachAudio,
+    /// Get audio output status
+    GardenAudioStatus,
+    /// Attach audio input
+    GardenAttachInput(GardenAttachInputRequest),
+    /// Detach audio input
+    GardenDetachInput,
+    /// Get audio input status
+    GardenInputStatus,
+    /// Set monitor
+    GardenSetMonitor(GardenSetMonitorRequest),
+
+    // ==========================================================================
+    // Tool Help
+    // ==========================================================================
+    /// Get help for a tool
+    GetToolHelp(GetToolHelpRequest),
 
     // ==========================================================================
     // Jobs
@@ -153,6 +175,38 @@ pub enum ToolRequest {
     AddAnnotation(AddAnnotationRequest),
 
     // ==========================================================================
+    // Vibeweaver (Python Kernel)
+    // ==========================================================================
+    /// Evaluate Python/Weave code
+    WeaveEval(WeaveEvalRequest),
+    /// Start a new session
+    WeaveSession,
+    /// Reset session state
+    WeaveReset(WeaveResetRequest),
+    /// Get help for Weave environment
+    WeaveHelp(WeaveHelpRequest),
+
+    // ==========================================================================
+    // Resources & Completion
+    // ==========================================================================
+    /// Read a resource by URI
+    ReadResource(ReadResourceRequest),
+    /// List available resources
+    ListResources,
+    /// Get completion for prompt
+    Complete(CompleteRequest),
+    /// Sample LLM directly
+    SampleLlm(SampleLlmRequest),
+
+    // ==========================================================================
+    // Model-Native API
+    // ==========================================================================
+    /// Schedule content on timeline
+    Schedule(ScheduleRequest),
+    /// Analyze content
+    Analyze(AnalyzeRequest),
+
+    // ==========================================================================
     // Admin
     // ==========================================================================
     /// Ping for liveness
@@ -175,9 +229,11 @@ impl ToolRequest {
             Self::JobStatus(_) | Self::JobList(_) => ToolTiming::Sync,
             Self::ConfigGet(_) => ToolTiming::Sync,
             Self::GraphFind(_) | Self::GraphContext(_) | Self::GraphQuery(_) => ToolTiming::Sync,
-            Self::ArtifactGet(_) | Self::ArtifactList(_) => ToolTiming::Sync,
+            Self::ArtifactGet(_) | Self::ArtifactList(_) | Self::ArtifactCreate(_) => ToolTiming::Sync,
             Self::CasInspect(_) => ToolTiming::Sync,
-            Self::Ping | Self::ListTools => ToolTiming::Sync,
+            Self::Ping | Self::ListTools | Self::ListResources => ToolTiming::Sync,
+            Self::ReadResource(_) => ToolTiming::Sync,
+            Self::WeaveHelp(_) => ToolTiming::Sync,
 
             // AsyncShort - IO bound, ~30s
             Self::CasStore(_) | Self::CasGet(_) | Self::CasUploadFile(_) => ToolTiming::AsyncShort,
@@ -186,6 +242,13 @@ impl ToolRequest {
             Self::GraphBind(_) | Self::GraphTag(_) | Self::GraphConnect(_) => ToolTiming::AsyncShort,
             Self::AddAnnotation(_) => ToolTiming::AsyncShort,
             Self::JobPoll(_) | Self::JobCancel(_) | Self::JobSleep(_) => ToolTiming::AsyncShort,
+            Self::WeaveEval(_) | Self::WeaveSession | Self::WeaveReset(_) => ToolTiming::AsyncShort,
+            Self::Complete(_) | Self::SampleLlm(_) => ToolTiming::AsyncShort,
+            Self::Schedule(_) => ToolTiming::AsyncShort,
+            Self::GardenAttachAudio(_) | Self::GardenDetachAudio | Self::GardenAudioStatus => ToolTiming::AsyncShort,
+            Self::GardenAttachInput(_) | Self::GardenDetachInput | Self::GardenInputStatus => ToolTiming::AsyncShort,
+            Self::GardenSetMonitor(_) => ToolTiming::AsyncShort,
+            Self::GetToolHelp(_) => ToolTiming::Sync,
 
             // AsyncMedium - GPU inference, ~120s
             Self::MidiToWav(_) => ToolTiming::AsyncMedium,
@@ -194,6 +257,7 @@ impl ToolRequest {
             | Self::OrpheusContinue(_)
             | Self::OrpheusBridge(_)
             | Self::OrpheusLoops(_) => ToolTiming::AsyncMedium,
+            Self::Analyze(_) => ToolTiming::AsyncMedium,
 
             // AsyncLong - long running, client manages
             Self::MusicgenGenerate(_) => ToolTiming::AsyncLong,
@@ -224,6 +288,7 @@ impl ToolRequest {
             Self::ArtifactUpload(_) => "artifact_upload",
             Self::ArtifactGet(_) => "artifact_get",
             Self::ArtifactList(_) => "artifact_list",
+            Self::ArtifactCreate(_) => "artifact_create",
             Self::OrpheusGenerate(_) => "orpheus_generate",
             Self::OrpheusGenerateSeeded(_) => "orpheus_generate_seeded",
             Self::OrpheusContinue(_) => "orpheus_continue",
@@ -253,6 +318,14 @@ impl ToolRequest {
             Self::GardenMoveRegion(_) => "garden_move_region",
             Self::GardenQuery(_) => "garden_query",
             Self::GardenEmergencyPause => "garden_emergency_pause",
+            Self::GardenAttachAudio(_) => "garden_attach_audio",
+            Self::GardenDetachAudio => "garden_detach_audio",
+            Self::GardenAudioStatus => "garden_audio_status",
+            Self::GardenAttachInput(_) => "garden_attach_input",
+            Self::GardenDetachInput => "garden_detach_input",
+            Self::GardenInputStatus => "garden_input_status",
+            Self::GardenSetMonitor(_) => "garden_set_monitor",
+            Self::GetToolHelp(_) => "get_tool_help",
             Self::JobStatus(_) => "job_status",
             Self::JobList(_) => "job_list",
             Self::JobPoll(_) => "job_poll",
@@ -266,6 +339,16 @@ impl ToolRequest {
             Self::GraphContext(_) => "graph_context",
             Self::ConfigGet(_) => "config_get",
             Self::AddAnnotation(_) => "add_annotation",
+            Self::WeaveEval(_) => "weave_eval",
+            Self::WeaveSession => "weave_session",
+            Self::WeaveReset(_) => "weave_reset",
+            Self::WeaveHelp(_) => "weave_help",
+            Self::ReadResource(_) => "read_resource",
+            Self::ListResources => "list_resources",
+            Self::Complete(_) => "complete",
+            Self::SampleLlm(_) => "sample_llm",
+            Self::Schedule(_) => "schedule",
+            Self::Analyze(_) => "analyze",
             Self::Ping => "ping",
             Self::ListTools => "list_tools",
         }
@@ -323,6 +406,15 @@ pub struct ArtifactListRequest {
     pub tag: Option<String>,
     pub creator: Option<String>,
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtifactCreateRequest {
+    pub cas_hash: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub creator: Option<String>,
+    pub metadata: serde_json::Value,
 }
 
 // =============================================================================
@@ -698,4 +790,101 @@ pub struct AddAnnotationRequest {
     pub message: String,
     pub source: Option<String>,
     pub vibe: Option<String>,
+}
+
+// =============================================================================
+// Vibeweaver Request Types
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeaveEvalRequest {
+    pub code: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeaveResetRequest {
+    pub clear_session: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct WeaveHelpRequest {
+    pub topic: Option<String>,
+}
+
+// =============================================================================
+// Resource Request Types
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReadResourceRequest {
+    pub uri: String,
+}
+
+// =============================================================================
+// Completion Request Types
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompleteRequest {
+    pub context: String,
+    pub partial: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SampleLlmRequest {
+    pub prompt: String,
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f64>,
+    pub system_prompt: Option<String>,
+}
+
+// =============================================================================
+// Model-Native Request Types
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScheduleRequest {
+    pub encoding: crate::Encoding,
+    pub at: f64,
+    pub duration: Option<f64>,
+    pub gain: Option<f64>,
+    pub rate: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnalyzeRequest {
+    pub encoding: crate::Encoding,
+    pub tasks: Vec<crate::AnalysisTask>,
+}
+
+// =============================================================================
+// Garden Audio Request Types
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct GardenAttachAudioRequest {
+    pub device_name: Option<String>,
+    pub sample_rate: Option<u32>,
+    pub latency_frames: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct GardenAttachInputRequest {
+    pub device_name: Option<String>,
+    pub sample_rate: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct GardenSetMonitorRequest {
+    pub enabled: Option<bool>,
+    pub gain: Option<f32>,
+}
+
+// =============================================================================
+// Tool Help Request Types
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct GetToolHelpRequest {
+    pub topic: Option<String>,
 }

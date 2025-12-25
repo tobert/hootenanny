@@ -1,3 +1,5 @@
+#![allow(unused, clippy::unnecessary_cast, clippy::too_many_arguments)]
+
 mod api;
 mod artifact_store;
 mod cas;

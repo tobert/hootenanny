@@ -1,7 +1,8 @@
 //! CLI command implementations
 
 use anyhow::{bail, Context, Result};
-use hooteproto::{Payload, PollMode};
+use hooteproto::Payload;
+use hooteproto::request::{JobStatusRequest, JobListRequest, JobPollRequest, ToolRequest};
 
 use crate::client::Client;
 
@@ -46,9 +47,9 @@ pub async fn send(endpoint: &str, json: &str, timeout_ms: u64) -> Result<()> {
 
 /// Get status of a specific job
 pub async fn job_status(endpoint: &str, job_id: &str, timeout_ms: u64) -> Result<()> {
-    let payload = Payload::JobStatus {
+    let payload = Payload::ToolRequest(ToolRequest::JobStatus(JobStatusRequest {
         job_id: job_id.to_string(),
-    };
+    }));
 
     let client = Client::connect(endpoint, timeout_ms).await?;
     let response = client.request(payload).await?;
@@ -71,9 +72,9 @@ pub async fn job_status(endpoint: &str, job_id: &str, timeout_ms: u64) -> Result
 
 /// List all jobs
 pub async fn job_list(endpoint: &str, status: Option<&str>, timeout_ms: u64) -> Result<()> {
-    let payload = Payload::JobList {
+    let payload = Payload::ToolRequest(ToolRequest::JobList(JobListRequest {
         status: status.map(|s| s.to_string()),
-    };
+    }));
 
     let client = Client::connect(endpoint, timeout_ms).await?;
     let response = client.request(payload).await?;
@@ -101,17 +102,12 @@ pub async fn job_poll(
     timeout_ms: u64,
     mode: &str,
 ) -> Result<()> {
-    let mode = match mode.to_lowercase().as_str() {
-        "any" => PollMode::Any,
-        "all" => PollMode::All,
-        _ => bail!("Invalid poll mode: {} (expected 'any' or 'all')", mode),
-    };
-
-    let payload = Payload::JobPoll {
+    // Mode is "any" or "all" string in CLI
+    let payload = Payload::ToolRequest(ToolRequest::JobPoll(JobPollRequest {
         job_ids,
         timeout_ms,
-        mode,
-    };
+        mode: Some(mode.to_string()),
+    }));
 
     let client = Client::connect(endpoint, timeout_ms + 5000).await?;
     let response = client.request(payload).await?;

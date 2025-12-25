@@ -8,14 +8,11 @@
 
 use anyhow::{Context, Result};
 use hooteproto::Payload;
+use hooteproto::request::{self, ToolRequest};
 use serde::Deserialize;
 use serde_json::Value;
 
 /// Preprocess JSON args to handle string-encoded nested objects.
-///
-/// Some MCP clients (including Claude Code) pass complex object parameters
-/// as JSON strings instead of actual JSON objects. This function detects
-/// and parses string-encoded fields back to proper JSON objects.
 fn preprocess_encoding_field(mut args: Value) -> Value {
     if let Some(obj) = args.as_object_mut() {
         // Handle encoding field (used by schedule, analyze, project, etc.)
@@ -55,26 +52,20 @@ fn preprocess_encoding_field(mut args: Value) -> Value {
 }
 
 /// Convert MCP tool call (name + JSON args) to typed Payload.
-///
-/// This is where JSON parsing happens. hooteproto Payload variants
-/// should be typed, not contain serde_json::Value.
 pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
     match name {
         // === ABC Tools ===
         "abc_parse" => {
-            let p: AbcParseArgs = serde_json::from_value(args)
-                .context("Invalid abc_parse arguments")?;
-            Ok(Payload::AbcParse { abc: p.abc })
+            let p: AbcParseArgs = serde_json::from_value(args).context("Invalid abc_parse arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::AbcParse(request::AbcParseRequest { abc: p.abc })))
         }
         "abc_validate" => {
-            let p: AbcValidateArgs = serde_json::from_value(args)
-                .context("Invalid abc_validate arguments")?;
-            Ok(Payload::AbcValidate { abc: p.abc })
+            let p: AbcValidateArgs = serde_json::from_value(args).context("Invalid abc_validate arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::AbcValidate(request::AbcValidateRequest { abc: p.abc })))
         }
         "abc_to_midi" => {
-            let p: AbcToMidiArgs = serde_json::from_value(args)
-                .context("Invalid abc_to_midi arguments")?;
-            Ok(Payload::AbcToMidi {
+            let p: AbcToMidiArgs = serde_json::from_value(args).context("Invalid abc_to_midi arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::AbcToMidi(request::AbcToMidiRequest {
                 abc: p.abc,
                 tempo_override: p.tempo_override,
                 transpose: p.transpose,
@@ -84,171 +75,146 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 parent_id: p.parent_id,
                 tags: p.tags.unwrap_or_default(),
                 creator: p.creator,
-            })
+            })))
         }
         "abc_transpose" => {
-            let p: AbcTransposeArgs = serde_json::from_value(args)
-                .context("Invalid abc_transpose arguments")?;
-            Ok(Payload::AbcTranspose {
+            let p: AbcTransposeArgs = serde_json::from_value(args).context("Invalid abc_transpose arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::AbcTranspose(request::AbcTransposeRequest {
                 abc: p.abc,
                 semitones: p.semitones,
                 target_key: p.target_key,
-            })
+            })))
         }
 
         // === CAS Tools ===
         "cas_store" => {
-            let p: CasStoreArgs = serde_json::from_value(args)
-                .context("Invalid cas_store arguments")?;
-            let data = base64::Engine::decode(
-                &base64::engine::general_purpose::STANDARD,
-                &p.content_base64,
-            )
-            .context("Invalid base64 in content_base64")?;
-            Ok(Payload::CasStore {
+            let p: CasStoreArgs = serde_json::from_value(args).context("Invalid cas_store arguments")?;
+            let data = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &p.content_base64)
+                .context("Invalid base64 in content_base64")?;
+            Ok(Payload::ToolRequest(ToolRequest::CasStore(request::CasStoreRequest {
                 data,
                 mime_type: p.mime_type,
-            })
+            })))
         }
         "cas_inspect" => {
-            let p: CasInspectArgs = serde_json::from_value(args)
-                .context("Invalid cas_inspect arguments")?;
-            Ok(Payload::CasInspect { hash: p.hash })
+            let p: CasInspectArgs = serde_json::from_value(args).context("Invalid cas_inspect arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::CasInspect(request::CasInspectRequest { hash: p.hash })))
         }
         "cas_upload_file" => {
-            let p: CasUploadFileArgs = serde_json::from_value(args)
-                .context("Invalid cas_upload_file arguments")?;
-            Ok(Payload::CasUploadFile {
+            let p: CasUploadFileArgs = serde_json::from_value(args).context("Invalid cas_upload_file arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::CasUploadFile(request::CasUploadFileRequest {
                 file_path: p.file_path,
                 mime_type: p.mime_type,
-            })
+            })))
         }
 
         // === Garden Tools ===
-        "garden_status" => Ok(Payload::GardenStatus),
-        "garden_play" => Ok(Payload::GardenPlay),
-        "garden_pause" => Ok(Payload::GardenPause),
-        "garden_stop" => Ok(Payload::GardenStop),
+        "garden_status" => Ok(Payload::ToolRequest(ToolRequest::GardenStatus)),
+        "garden_play" => Ok(Payload::ToolRequest(ToolRequest::GardenPlay)),
+        "garden_pause" => Ok(Payload::ToolRequest(ToolRequest::GardenPause)),
+        "garden_stop" => Ok(Payload::ToolRequest(ToolRequest::GardenStop)),
         "garden_seek" => {
-            let p: GardenSeekArgs = serde_json::from_value(args)
-                .context("Invalid garden_seek arguments")?;
-            Ok(Payload::GardenSeek { beat: p.beat })
+            let p: GardenSeekArgs = serde_json::from_value(args).context("Invalid garden_seek arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::GardenSeek(request::GardenSeekRequest { beat: p.beat })))
         }
         "garden_set_tempo" => {
-            let p: GardenSetTempoArgs = serde_json::from_value(args)
-                .context("Invalid garden_set_tempo arguments")?;
-            Ok(Payload::GardenSetTempo { bpm: p.bpm })
+            let p: GardenSetTempoArgs = serde_json::from_value(args).context("Invalid garden_set_tempo arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::GardenSetTempo(request::GardenSetTempoRequest { bpm: p.bpm })))
         }
         "garden_query" => {
-            let p: GardenQueryArgs = serde_json::from_value(args)
-                .context("Invalid garden_query arguments")?;
-            // GardenQuery keeps JSON for Trustfall variables (exception to the rule)
-            Ok(Payload::GardenQuery {
+            let p: GardenQueryArgs = serde_json::from_value(args).context("Invalid garden_query arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::GardenQuery(request::GardenQueryRequest {
                 query: p.query,
                 variables: p.variables,
-            })
+            })))
         }
-        "garden_emergency_pause" => Ok(Payload::GardenEmergencyPause),
+        "garden_emergency_pause" => Ok(Payload::ToolRequest(ToolRequest::GardenEmergencyPause)),
         "garden_create_region" => {
-            let p: GardenCreateRegionArgs = serde_json::from_value(args)
-                .context("Invalid garden_create_region arguments")?;
-            Ok(Payload::GardenCreateRegion {
+            let p: GardenCreateRegionArgs = serde_json::from_value(args).context("Invalid garden_create_region arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::GardenCreateRegion(request::GardenCreateRegionRequest {
                 position: p.position,
                 duration: p.duration,
                 behavior_type: p.behavior_type,
                 content_id: p.content_id,
-            })
+            })))
         }
         "garden_delete_region" => {
-            let p: GardenDeleteRegionArgs = serde_json::from_value(args)
-                .context("Invalid garden_delete_region arguments")?;
-            Ok(Payload::GardenDeleteRegion {
+            let p: GardenDeleteRegionArgs = serde_json::from_value(args).context("Invalid garden_delete_region arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::GardenDeleteRegion(request::GardenDeleteRegionRequest {
                 region_id: p.region_id,
-            })
+            })))
         }
         "garden_move_region" => {
-            let p: GardenMoveRegionArgs = serde_json::from_value(args)
-                .context("Invalid garden_move_region arguments")?;
-            Ok(Payload::GardenMoveRegion {
+            let p: GardenMoveRegionArgs = serde_json::from_value(args).context("Invalid garden_move_region arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::GardenMoveRegion(request::GardenMoveRegionRequest {
                 region_id: p.region_id,
                 new_position: p.new_position,
-            })
+            })))
         }
         "garden_get_regions" => {
             let p: GardenGetRegionsArgs = serde_json::from_value(args).unwrap_or_default();
-            Ok(Payload::GardenGetRegions {
+            Ok(Payload::ToolRequest(ToolRequest::GardenGetRegions(request::GardenGetRegionsRequest {
                 start: p.start,
                 end: p.end,
-            })
+            })))
         }
         "garden_attach_audio" => {
             let p: GardenAttachAudioArgs = serde_json::from_value(args).unwrap_or_default();
-            Ok(Payload::GardenAttachAudio {
+            Ok(Payload::ToolRequest(ToolRequest::GardenAttachAudio(request::GardenAttachAudioRequest {
                 device_name: p.device_name,
                 sample_rate: p.sample_rate,
                 latency_frames: p.latency_frames,
-            })
+            })))
         }
-        "garden_detach_audio" => Ok(Payload::GardenDetachAudio),
-        "garden_audio_status" => Ok(Payload::GardenAudioStatus),
+        "garden_detach_audio" => Ok(Payload::ToolRequest(ToolRequest::GardenDetachAudio)),
+        "garden_audio_status" => Ok(Payload::ToolRequest(ToolRequest::GardenAudioStatus)),
         "garden_attach_input" => {
             let p: GardenAttachInputArgs = serde_json::from_value(args).unwrap_or_default();
-            Ok(Payload::GardenAttachInput {
+            Ok(Payload::ToolRequest(ToolRequest::GardenAttachInput(request::GardenAttachInputRequest {
                 device_name: p.device_name,
                 sample_rate: p.sample_rate,
-            })
+            })))
         }
-        "garden_detach_input" => Ok(Payload::GardenDetachInput),
-        "garden_input_status" => Ok(Payload::GardenInputStatus),
+        "garden_detach_input" => Ok(Payload::ToolRequest(ToolRequest::GardenDetachInput)),
+        "garden_input_status" => Ok(Payload::ToolRequest(ToolRequest::GardenInputStatus)),
         "garden_set_monitor" => {
             let p: GardenSetMonitorArgs = serde_json::from_value(args).unwrap_or_default();
-            Ok(Payload::GardenSetMonitor {
+            Ok(Payload::ToolRequest(ToolRequest::GardenSetMonitor(request::GardenSetMonitorRequest {
                 enabled: p.enabled,
                 gain: p.gain,
-            })
+            })))
         }
 
         // === Job Tools ===
         "job_status" => {
-            let p: JobStatusArgs = serde_json::from_value(args)
-                .context("Invalid job_status arguments")?;
-            Ok(Payload::JobStatus { job_id: p.job_id })
+            let p: JobStatusArgs = serde_json::from_value(args).context("Invalid job_status arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::JobStatus(request::JobStatusRequest { job_id: p.job_id })))
         }
         "job_list" => {
             let p: JobListArgs = serde_json::from_value(args).unwrap_or_default();
-            Ok(Payload::JobList { status: p.status })
+            Ok(Payload::ToolRequest(ToolRequest::JobList(request::JobListRequest { status: p.status })))
         }
         "job_poll" => {
-            let p: JobPollArgs = serde_json::from_value(args)
-                .context("Invalid job_poll arguments")?;
-            let mode = match p.mode.as_deref() {
-                Some("all") => hooteproto::PollMode::All,
-                _ => hooteproto::PollMode::Any,
-            };
-            Ok(Payload::JobPoll {
+            let p: JobPollArgs = serde_json::from_value(args).context("Invalid job_poll arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::JobPoll(request::JobPollRequest {
                 job_ids: p.job_ids,
                 timeout_ms: p.timeout_ms,
-                mode,
-            })
+                mode: p.mode,
+            })))
         }
         "job_cancel" => {
-            let p: JobCancelArgs = serde_json::from_value(args)
-                .context("Invalid job_cancel arguments")?;
-            Ok(Payload::JobCancel { job_id: p.job_id })
+            let p: JobCancelArgs = serde_json::from_value(args).context("Invalid job_cancel arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::JobCancel(request::JobCancelRequest { job_id: p.job_id })))
         }
         "job_sleep" => {
-            let p: JobSleepArgs = serde_json::from_value(args)
-                .context("Invalid job_sleep arguments")?;
-            Ok(Payload::JobSleep {
-                milliseconds: p.milliseconds,
-            })
+            let p: JobSleepArgs = serde_json::from_value(args).context("Invalid job_sleep arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::JobSleep(request::JobSleepRequest { milliseconds: p.milliseconds })))
         }
 
         // === Orpheus Tools ===
         "sample" | "orpheus_generate" => {
-            let p: OrpheusGenerateArgs = serde_json::from_value(args)
-                .context("Invalid orpheus_generate arguments")?;
-            Ok(Payload::OrpheusGenerate {
+            let p: OrpheusGenerateArgs = serde_json::from_value(args).context("Invalid orpheus_generate arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::OrpheusGenerate(request::OrpheusGenerateRequest {
                 model: p.model,
                 temperature: p.temperature,
                 top_p: p.top_p,
@@ -258,12 +224,11 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 parent_id: p.parent_id,
                 tags: p.tags.unwrap_or_default(),
                 creator: p.creator,
-            })
+            })))
         }
         "extend" | "orpheus_continue" => {
-            let p: OrpheusContinueArgs = serde_json::from_value(args)
-                .context("Invalid orpheus_continue arguments")?;
-            Ok(Payload::OrpheusContinue {
+            let p: OrpheusContinueArgs = serde_json::from_value(args).context("Invalid orpheus_continue arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::OrpheusContinue(request::OrpheusContinueRequest {
                 input_hash: p.input_hash,
                 model: p.model,
                 temperature: p.temperature,
@@ -274,12 +239,11 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 parent_id: p.parent_id,
                 tags: p.tags.unwrap_or_default(),
                 creator: p.creator,
-            })
+            })))
         }
         "bridge" | "orpheus_bridge" => {
-            let p: OrpheusBridgeArgs = serde_json::from_value(args)
-                .context("Invalid orpheus_bridge arguments")?;
-            Ok(Payload::OrpheusBridge {
+            let p: OrpheusBridgeArgs = serde_json::from_value(args).context("Invalid orpheus_bridge arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::OrpheusBridge(request::OrpheusBridgeRequest {
                 section_a_hash: p.section_a_hash,
                 section_b_hash: p.section_b_hash,
                 model: p.model,
@@ -290,12 +254,11 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 parent_id: p.parent_id,
                 tags: p.tags.unwrap_or_default(),
                 creator: p.creator,
-            })
+            })))
         }
         "orpheus_loops" => {
-            let p: OrpheusLoopsArgs = serde_json::from_value(args)
-                .context("Invalid orpheus_loops arguments")?;
-            Ok(Payload::OrpheusLoops {
+            let p: OrpheusLoopsArgs = serde_json::from_value(args).context("Invalid orpheus_loops arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::OrpheusLoops(request::OrpheusLoopsRequest {
                 temperature: p.temperature,
                 top_p: p.top_p,
                 max_tokens: p.max_tokens,
@@ -305,125 +268,111 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 parent_id: p.parent_id,
                 tags: p.tags.unwrap_or_default(),
                 creator: p.creator,
-            })
+            })))
         }
         "orpheus_classify" => {
-            let p: OrpheusClassifyArgs = serde_json::from_value(args)
-                .context("Invalid orpheus_classify arguments")?;
-            Ok(Payload::OrpheusClassify {
-                midi_hash: p.midi_hash,
-            })
+            let p: OrpheusClassifyArgs = serde_json::from_value(args).context("Invalid orpheus_classify arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::OrpheusClassify(request::OrpheusClassifyRequest { midi_hash: p.midi_hash })))
         }
 
         // === Artifact Tools ===
         "artifact_upload" => {
-            let p: ArtifactUploadArgs = serde_json::from_value(args)
-                .context("Invalid artifact_upload arguments")?;
-            Ok(Payload::ArtifactUpload {
+            let p: ArtifactUploadArgs = serde_json::from_value(args).context("Invalid artifact_upload arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::ArtifactUpload(request::ArtifactUploadRequest {
                 file_path: p.file_path,
                 mime_type: p.mime_type,
                 variation_set_id: p.variation_set_id,
                 parent_id: p.parent_id,
                 tags: p.tags.unwrap_or_default(),
                 creator: p.creator,
-            })
+            })))
         }
         "artifact_list" => {
             let p: ArtifactListArgs = serde_json::from_value(args).unwrap_or_default();
-            Ok(Payload::ArtifactList {
+            Ok(Payload::ToolRequest(ToolRequest::ArtifactList(request::ArtifactListRequest {
                 tag: p.tag,
                 creator: p.creator,
-            })
+                limit: None,
+            })))
         }
         "artifact_get" => {
-            let p: ArtifactGetArgs = serde_json::from_value(args)
-                .context("Invalid artifact_get arguments")?;
-            Ok(Payload::ArtifactGet { id: p.id })
+            let p: ArtifactGetArgs = serde_json::from_value(args).context("Invalid artifact_get arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::ArtifactGet(request::ArtifactGetRequest { id: p.id })))
         }
 
         // === Graph Tools ===
         "graph_query" => {
-            let p: GraphQueryArgs = serde_json::from_value(args)
-                .context("Invalid graph_query arguments")?;
-            // GraphQuery keeps JSON for Trustfall variables (exception to the rule)
-            Ok(Payload::GraphQuery {
+            let p: GraphQueryArgs = serde_json::from_value(args).context("Invalid graph_query arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::GraphQuery(request::GraphQueryRequest {
                 query: p.query,
-                variables: p.variables.unwrap_or_default(),
+                variables: p.variables,
                 limit: p.limit,
-            })
+            })))
         }
         "graph_find" => {
             let p: GraphFindArgs = serde_json::from_value(args).unwrap_or_default();
-            Ok(Payload::GraphFind {
+            Ok(Payload::ToolRequest(ToolRequest::GraphFind(request::GraphFindRequest {
                 name: p.name,
                 tag_namespace: p.tag_namespace,
                 tag_value: p.tag_value,
-            })
+            })))
         }
         "graph_bind" => {
-            let p: GraphBindArgs = serde_json::from_value(args)
-                .context("Invalid graph_bind arguments")?;
-            Ok(Payload::GraphBind {
+            let p: GraphBindArgs = serde_json::from_value(args).context("Invalid graph_bind arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::GraphBind(request::GraphBindRequest {
                 id: p.id,
                 name: p.name,
-                hints: p
-                    .hints
-                    .into_iter()
-                    .map(|h| hooteproto::GraphHint {
-                        kind: h.kind,
-                        value: h.value,
-                        confidence: h.confidence,
-                    })
-                    .collect(),
-            })
+                hints: p.hints.into_iter().map(|h| request::GraphHint {
+                    kind: h.kind,
+                    value: h.value,
+                    confidence: h.confidence,
+                }).collect(),
+            })))
         }
         "graph_tag" => {
-            let p: GraphTagArgs = serde_json::from_value(args)
-                .context("Invalid graph_tag arguments")?;
-            Ok(Payload::GraphTag {
+            let p: GraphTagArgs = serde_json::from_value(args).context("Invalid graph_tag arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::GraphTag(request::GraphTagRequest {
                 identity_id: p.identity_id,
                 namespace: p.namespace,
                 value: p.value,
-            })
+            })))
         }
         "graph_connect" => {
-            let p: GraphConnectArgs = serde_json::from_value(args)
-                .context("Invalid graph_connect arguments")?;
-            Ok(Payload::GraphConnect {
+            let p: GraphConnectArgs = serde_json::from_value(args).context("Invalid graph_connect arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::GraphConnect(request::GraphConnectRequest {
                 from_identity: p.from_identity,
                 from_port: p.from_port,
                 to_identity: p.to_identity,
                 to_port: p.to_port,
                 transport: p.transport,
-            })
+            })))
         }
         "graph_context" => {
             let p: GraphContextArgs = serde_json::from_value(args).unwrap_or_default();
-            Ok(Payload::GraphContext {
+            Ok(Payload::ToolRequest(ToolRequest::GraphContext(request::GraphContextRequest {
                 tag: p.tag,
                 vibe_search: p.vibe_search,
                 creator: p.creator,
                 limit: p.limit,
                 include_metadata: p.include_metadata,
                 include_annotations: p.include_annotations,
-            })
+                within_minutes: None,
+            })))
         }
         "add_annotation" => {
-            let p: AddAnnotationArgs = serde_json::from_value(args)
-                .context("Invalid add_annotation arguments")?;
-            Ok(Payload::AddAnnotation {
+            let p: AddAnnotationArgs = serde_json::from_value(args).context("Invalid add_annotation arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::AddAnnotation(request::AddAnnotationRequest {
                 artifact_id: p.artifact_id,
                 message: p.message,
                 vibe: p.vibe,
                 source: p.source,
-            })
+            })))
         }
 
         // === MIDI/Audio Tools ===
         "project" | "convert_midi_to_wav" => {
-            let p: ConvertMidiToWavArgs = serde_json::from_value(args)
-                .context("Invalid convert_midi_to_wav arguments")?;
-            Ok(Payload::ConvertMidiToWav {
+            let p: ConvertMidiToWavArgs = serde_json::from_value(args).context("Invalid convert_midi_to_wav arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::MidiToWav(request::MidiToWavRequest {
                 input_hash: p.input_hash,
                 soundfont_hash: p.soundfont_hash,
                 sample_rate: p.sample_rate,
@@ -431,57 +380,53 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 parent_id: p.parent_id,
                 tags: p.tags.unwrap_or_default(),
                 creator: p.creator,
-            })
+            })))
         }
         "soundfont_inspect" => {
-            let p: SoundfontInspectArgs = serde_json::from_value(args)
-                .context("Invalid soundfont_inspect arguments")?;
-            Ok(Payload::SoundfontInspect {
+            let p: SoundfontInspectArgs = serde_json::from_value(args).context("Invalid soundfont_inspect arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::SoundfontInspect(request::SoundfontInspectRequest {
                 soundfont_hash: p.soundfont_hash,
                 include_drum_map: p.include_drum_map.unwrap_or(false),
-            })
+            })))
         }
 
         // === Config Tools ===
         "config_get" => {
             let p: ConfigGetArgs = serde_json::from_value(args).unwrap_or_default();
-            Ok(Payload::ConfigGet {
+            Ok(Payload::ToolRequest(ToolRequest::ConfigGet(request::ConfigGetRequest {
                 section: p.section,
                 key: p.key,
-            })
+            })))
         }
 
         // === Tool Discovery ===
-        "list_tools" => Ok(Payload::ListTools),
+        "list_tools" => Ok(Payload::ToolRequest(ToolRequest::ListTools)),
 
         // === Tool Help ===
         "holler_help" | "get_tool_help" => {
             let p: GetToolHelpArgs = serde_json::from_value(args).unwrap_or_default();
-            Ok(Payload::GetToolHelp { topic: p.topic })
+            Ok(Payload::ToolRequest(ToolRequest::GetToolHelp(request::GetToolHelpRequest { topic: p.topic })))
         }
 
         // === Model-Native API ===
         "schedule" => {
-            // MCP clients may pass encoding as a JSON string instead of an object
             let args = preprocess_encoding_field(args);
-            let p: ScheduleArgs = serde_json::from_value(args)
-                .context("Invalid schedule arguments")?;
-            Ok(Payload::Schedule {
+            let p: ScheduleArgs = serde_json::from_value(args).context("Invalid schedule arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::Schedule(request::ScheduleRequest {
                 encoding: p.encoding,
                 at: p.at,
                 duration: p.duration,
                 gain: p.gain,
                 rate: p.rate,
-            })
+            })))
         }
         "analyze" => {
             let args = preprocess_encoding_field(args);
-            let p: AnalyzeArgs = serde_json::from_value(args)
-                .context("Invalid analyze arguments")?;
-            Ok(Payload::Analyze {
+            let p: AnalyzeArgs = serde_json::from_value(args).context("Invalid analyze arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::Analyze(request::AnalyzeRequest {
                 encoding: p.encoding,
                 tasks: p.tasks,
-            })
+            })))
         }
 
         // === Fallback: Unknown tool ===

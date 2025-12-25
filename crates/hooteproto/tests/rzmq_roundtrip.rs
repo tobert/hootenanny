@@ -195,8 +195,8 @@ async fn test_raw_frames_roundtrip() {
 
     // Send payload frames
     let last_idx = router_recv.len() - 1;
-    for i in payload_start..router_recv.len() {
-        let data = router_recv[i].data().unwrap_or_default().to_vec();
+    for (i, frame) in router_recv.iter().enumerate().skip(payload_start) {
+        let data = frame.data().unwrap_or_default().to_vec();
         let mut msg = Msg::from_vec(data);
         if i < last_idx {
             msg.set_flags(MsgFlags::MORE);

@@ -70,3 +70,23 @@ struct WorkerRegistration {
   hostname @4 :Text;
   version @5 :Text;
 }
+
+struct Encoding {
+  union {
+    midi @0 :Text; # artifact_id
+    audio @1 :Text; # artifact_id
+    abc @2 :Text; # notation
+    hash :group {
+      contentHash @3 :Text;
+      format @4 :Text;
+    }
+  }
+}
+
+enum AnalysisTask {
+  classify @0;
+  beats @1;
+  embeddings @2;
+  genre @3;
+  mood @4;
+}

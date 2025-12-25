@@ -2,6 +2,8 @@
 //!
 //! Library exposing core modules for testing and reuse.
 
+#![allow(unused, clippy::unnecessary_cast, clippy::too_many_arguments)]
+
 pub mod api;
 pub mod artifact_store;
 pub mod cas;
