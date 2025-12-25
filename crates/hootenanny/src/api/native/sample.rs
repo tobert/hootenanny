@@ -9,7 +9,7 @@ use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::mcp_tools::local_models::OrpheusGenerateParams;
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
-use hooteproto::responses::ToolResponse;
+use hooteproto::responses::{AudioFormat, AudioGeneratedResponse, OrpheusGeneratedResponse, ToolResponse};
 use hooteproto::{ToolError, ToolOutput, ToolResult};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -119,7 +119,7 @@ impl EventDualityServer {
         let handle = tokio::spawn(async move {
             let _ = job_store.mark_running(&job_id_clone);
 
-            let result: anyhow::Result<serde_json::Value> = (async {
+            let result: anyhow::Result<ToolResponse> = (async {
                 match request.space {
                     // Orpheus family - MIDI generation
                     Space::Orpheus | Space::OrpheusChildren | Space::OrpheusMonoMelodies => {
@@ -184,7 +184,7 @@ impl EventDualityServer {
 
             match result {
                 Ok(response) => {
-                    let _ = job_store.mark_complete(&job_id_clone, ToolResponse::LegacyJson(response));
+                    let _ = job_store.mark_complete(&job_id_clone, response);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, space = ?space, "Sample generation failed");
@@ -220,7 +220,7 @@ async fn sample_orpheus(
     request: &SampleRequest,
     job_id: &str,
     broadcaster: &Option<crate::zmq::BroadcastPublisher>,
-) -> anyhow::Result<serde_json::Value> {
+) -> anyhow::Result<ToolResponse> {
     let (variant, temperature, top_p, max_tokens) = request.inference.to_orpheus_params();
     let model = variant.or_else(|| request.space.model_variant().map(String::from));
 
@@ -347,13 +347,16 @@ async fn sample_orpheus(
         }
     }
 
-    Ok(serde_json::json!({
-        "status": result.status,
-        "output_hashes": result.output_hashes,
-        "artifact_ids": artifacts.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
-        "summary": result.summary,
-        "variation_set_id": artifacts.first().and_then(|a| a.variation_set_id.as_ref().map(|s| s.as_str())),
-        "variation_indices": artifacts.iter().map(|a| a.variation_index).collect::<Vec<_>>(),
+    let tokens_per_variation: Vec<u64> = result.num_tokens.iter().map(|&t| t as u64).collect();
+    let total_tokens: u64 = tokens_per_variation.iter().sum();
+
+    Ok(ToolResponse::OrpheusGenerated(OrpheusGeneratedResponse {
+        output_hashes: result.output_hashes,
+        artifact_ids: artifacts.iter().map(|a| a.id.as_str().to_string()).collect(),
+        tokens_per_variation,
+        total_tokens,
+        variation_set_id: artifacts.first().and_then(|a| a.variation_set_id.as_ref().map(|s| s.as_str().to_string())),
+        summary: result.summary,
     }))
 }
 
@@ -364,7 +367,7 @@ async fn sample_orpheus_loops(
     request: &SampleRequest,
     job_id: &str,
     broadcaster: &Option<crate::zmq::BroadcastPublisher>,
-) -> anyhow::Result<serde_json::Value> {
+) -> anyhow::Result<ToolResponse> {
     let (_, temperature, top_p, max_tokens) = request.inference.to_orpheus_params();
 
     // Resolve seed if provided
@@ -466,11 +469,16 @@ async fn sample_orpheus_loops(
         }
     }
 
-    Ok(serde_json::json!({
-        "status": result.status,
-        "output_hashes": result.output_hashes,
-        "artifact_ids": artifacts.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
-        "summary": result.summary,
+    let tokens_per_variation: Vec<u64> = result.num_tokens.iter().map(|&t| t as u64).collect();
+    let total_tokens: u64 = tokens_per_variation.iter().sum();
+
+    Ok(ToolResponse::OrpheusGenerated(OrpheusGeneratedResponse {
+        output_hashes: result.output_hashes,
+        artifact_ids: artifacts.iter().map(|a| a.id.as_str().to_string()).collect(),
+        tokens_per_variation,
+        total_tokens,
+        variation_set_id: artifacts.first().and_then(|a| a.variation_set_id.as_ref().map(|s| s.as_str().to_string())),
+        summary: result.summary,
     }))
 }
 
@@ -480,7 +488,7 @@ async fn sample_musicgen(
     artifact_store: &Arc<std::sync::RwLock<crate::artifact_store::FileStore>>,
     request: &SampleRequest,
     job_id: &str,
-) -> anyhow::Result<serde_json::Value> {
+) -> anyhow::Result<ToolResponse> {
     let (temperature, top_p, top_k, guidance_scale, duration) =
         request.inference.to_musicgen_params();
 
@@ -574,11 +582,13 @@ async fn sample_musicgen(
         store.flush()?;
     }
 
-    Ok(serde_json::json!({
-        "status": "completed",
-        "artifact_id": artifact_id.as_str(),
-        "content_hash": audio_hash,
-        "message": format!("Generated {:.1}s of music", duration_secs),
+    Ok(ToolResponse::AudioGenerated(AudioGeneratedResponse {
+        artifact_id: artifact_id.as_str().to_string(),
+        content_hash: audio_hash,
+        duration_seconds: duration_secs,
+        sample_rate: sample_rate as u32,
+        format: AudioFormat::Wav,
+        genre: None,
     }))
 }
 
@@ -588,7 +598,7 @@ async fn sample_yue(
     artifact_store: &Arc<std::sync::RwLock<crate::artifact_store::FileStore>>,
     request: &SampleRequest,
     job_id: &str,
-) -> anyhow::Result<serde_json::Value> {
+) -> anyhow::Result<ToolResponse> {
     let lyrics = request
         .prompt
         .as_ref()
@@ -693,10 +703,18 @@ async fn sample_yue(
         store.flush()?;
     }
 
-    Ok(serde_json::json!({
-        "status": "completed",
-        "artifact_id": artifact_id.as_str(),
-        "content_hash": audio_hash,
-        "message": format!("Generated song with vocals ({})", format),
+    let audio_format = match format {
+        "mp3" => AudioFormat::Mp3,
+        "flac" => AudioFormat::Flac,
+        _ => AudioFormat::Wav,
+    };
+
+    Ok(ToolResponse::AudioGenerated(AudioGeneratedResponse {
+        artifact_id: artifact_id.as_str().to_string(),
+        content_hash: audio_hash,
+        duration_seconds: 0.0, // YuE doesn't report duration
+        sample_rate: 0,        // YuE doesn't report sample rate
+        format: audio_format,
+        genre: genre_value,
     }))
 }

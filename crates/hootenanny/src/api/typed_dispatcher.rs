@@ -297,28 +297,22 @@ impl TypedDispatcher {
         let job_id_str = job_id.to_string();
 
         // Execute the command and track result
-        let result: Result<serde_json::Value, String> = match request {
+        let result: Result<ToolResponse, String> = match request {
             ToolRequest::GardenPlay => {
                 match self.server.garden_play_fire(Some(&job_id_str)).await {
-                    Ok(()) => Ok(
-                        serde_json::json!({"status": "ok", "command": "play", "job_id": job_id_str}),
-                    ),
+                    Ok(()) => Ok(ToolResponse::ack("play")),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
             ToolRequest::GardenPause => {
                 match self.server.garden_pause_fire(Some(&job_id_str)).await {
-                    Ok(()) => Ok(
-                        serde_json::json!({"status": "ok", "command": "pause", "job_id": job_id_str}),
-                    ),
+                    Ok(()) => Ok(ToolResponse::ack("pause")),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
             ToolRequest::GardenStop => {
                 match self.server.garden_stop_fire(Some(&job_id_str)).await {
-                    Ok(()) => Ok(
-                        serde_json::json!({"status": "ok", "command": "stop", "job_id": job_id_str}),
-                    ),
+                    Ok(()) => Ok(ToolResponse::ack("stop")),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
@@ -328,9 +322,7 @@ impl TypedDispatcher {
                     .garden_seek_fire(req.beat, Some(&job_id_str))
                     .await
                 {
-                    Ok(()) => Ok(
-                        serde_json::json!({"status": "ok", "command": "seek", "beat": req.beat, "job_id": job_id_str}),
-                    ),
+                    Ok(()) => Ok(ToolResponse::ack(format!("seek to beat {}", req.beat))),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
@@ -340,9 +332,7 @@ impl TypedDispatcher {
                     .garden_set_tempo_fire(req.bpm, Some(&job_id_str))
                     .await
                 {
-                    Ok(()) => Ok(
-                        serde_json::json!({"status": "ok", "command": "set_tempo", "bpm": req.bpm, "job_id": job_id_str}),
-                    ),
+                    Ok(()) => Ok(ToolResponse::ack(format!("set tempo to {} bpm", req.bpm))),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
@@ -352,9 +342,7 @@ impl TypedDispatcher {
                     .garden_emergency_pause_fire(Some(&job_id_str))
                     .await
                 {
-                    Ok(()) => Ok(
-                        serde_json::json!({"status": "ok", "command": "emergency_pause", "job_id": job_id_str}),
-                    ),
+                    Ok(()) => Ok(ToolResponse::ack("emergency pause")),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
@@ -370,9 +358,13 @@ impl TypedDispatcher {
                     )
                     .await
                 {
-                    Ok(region_id) => Ok(
-                        serde_json::json!({"status": "ok", "command": "create_region", "region_id": region_id, "job_id": job_id_str}),
-                    ),
+                    Ok(region_id) => Ok(ToolResponse::GardenRegionCreated(
+                        hooteproto::responses::GardenRegionCreatedResponse {
+                            region_id,
+                            position: req.position,
+                            duration: req.duration,
+                        },
+                    )),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
@@ -382,9 +374,7 @@ impl TypedDispatcher {
                     .garden_delete_region_fire(&req.region_id, Some(&job_id_str))
                     .await
                 {
-                    Ok(()) => Ok(
-                        serde_json::json!({"status": "ok", "command": "delete_region", "region_id": req.region_id, "job_id": job_id_str}),
-                    ),
+                    Ok(()) => Ok(ToolResponse::ack(format!("deleted region {}", req.region_id))),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
@@ -394,23 +384,24 @@ impl TypedDispatcher {
                     .garden_move_region_fire(&req.region_id, req.new_position, Some(&job_id_str))
                     .await
                 {
-                    Ok(()) => Ok(
-                        serde_json::json!({"status": "ok", "command": "move_region", "region_id": req.region_id, "new_position": req.new_position, "job_id": job_id_str}),
-                    ),
+                    Ok(()) => Ok(ToolResponse::ack(format!(
+                        "moved region {} to position {}",
+                        req.region_id, req.new_position
+                    ))),
                     Err(e) => Err(e.message().to_string()),
                 }
             }
 
             other => {
                 tracing::warn!(tool = other.name(), "FireAndForget tool not implemented");
-                Ok(serde_json::json!({"status": "ok", "command": "unknown", "job_id": job_id_str}))
+                Ok(ToolResponse::ack("unknown command"))
             }
         };
 
         // Update job status based on result
         match result {
-            Ok(value) => {
-                let _ = self.server.job_store.mark_complete(&job_id, ToolResponse::LegacyJson(value));
+            Ok(response) => {
+                let _ = self.server.job_store.mark_complete(&job_id, response);
             }
             Err(error) => {
                 tracing::error!(job_id = %job_id, %error, "FireAndForget command failed");

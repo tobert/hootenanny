@@ -39,17 +39,25 @@ async fn mock_router(endpoint: &str) -> anyhow::Result<()> {
             worker_id: Uuid::new_v4(),
             uptime_secs: 42,
         },
-        Payload::WeaveEval { code } => Payload::TypedResponse(ResponseEnvelope::success(
-            ToolResponse::LegacyJson(serde_json::json!({
-                "evaluated": code,
-                "result": "mock result"
-            })),
+        Payload::WeaveEval { code: _ } => Payload::TypedResponse(ResponseEnvelope::success(
+            ToolResponse::WeaveEval(hooteproto::responses::WeaveEvalResponse {
+                output_type: hooteproto::responses::WeaveOutputType::Expression,
+                result: Some("mock result".to_string()),
+                stdout: None,
+                stderr: None,
+            }),
         )),
         Payload::JobStatus { job_id } => Payload::TypedResponse(ResponseEnvelope::success(
-            ToolResponse::LegacyJson(serde_json::json!({
-                "job_id": job_id,
-                "status": "complete"
-            })),
+            ToolResponse::JobStatus(hooteproto::responses::JobStatusResponse {
+                job_id,
+                status: hooteproto::responses::JobState::Complete,
+                source: "mock".to_string(),
+                result: None,
+                error: None,
+                created_at: 0,
+                started_at: None,
+                completed_at: None,
+            }),
         )),
         _ => Payload::Error {
             code: "not_implemented".to_string(),
@@ -156,7 +164,9 @@ async fn test_lua_eval() {
     match response_envelope.payload {
         Payload::TypedResponse(envelope) => {
             let result = envelope.to_json();
-            assert_eq!(result["evaluated"], "print('hello')");
+            assert_eq!(result["kind"], "success");
+            assert_eq!(result["response"]["type"], "weave_eval");
+            assert_eq!(result["response"]["result"], "mock result");
         }
         _ => panic!("Expected TypedResponse"),
     }
@@ -198,8 +208,10 @@ async fn test_job_status() {
     match response_envelope.payload {
         Payload::TypedResponse(envelope) => {
             let result = envelope.to_json();
-            assert_eq!(result["job_id"], "test-job-123");
-            assert_eq!(result["status"], "complete");
+            assert_eq!(result["kind"], "success");
+            assert_eq!(result["response"]["type"], "job_status");
+            assert_eq!(result["response"]["job_id"], "test-job-123");
+            assert_eq!(result["response"]["status"], "complete");
         }
         _ => panic!("Expected TypedResponse"),
     }

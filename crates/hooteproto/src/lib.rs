@@ -997,7 +997,7 @@ mod tests {
         use crate::responses::ToolResponse;
 
         let envelope = Envelope::new(Payload::TypedResponse(ResponseEnvelope::success(
-            ToolResponse::LegacyJson(serde_json::json!({"answer": 42})),
+            ToolResponse::ack("test response"),
         )));
         let json = serde_json::to_string(&envelope).unwrap();
         let parsed: Envelope = serde_json::from_str(&json).unwrap();

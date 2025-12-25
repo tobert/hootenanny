@@ -63,12 +63,12 @@ async fn mock_hootenanny(endpoint: &str, requests_to_handle: usize) -> anyhow::R
                 ],
             },
             Payload::CasInspect { hash } => Payload::TypedResponse(ResponseEnvelope::success(
-                ToolResponse::LegacyJson(serde_json::json!({
-                    "hash": hash,
-                    "exists": true,
-                    "size": 42,
-                    "preview": "Hello, world!"
-                })),
+                ToolResponse::CasInspected(hooteproto::responses::CasInspectedResponse {
+                    hash,
+                    exists: true,
+                    size: Some(42),
+                    preview: Some("Hello, world!".to_string()),
+                }),
             )),
             _ => Payload::Error {
                 code: "not_implemented".to_string(),
@@ -198,9 +198,7 @@ async fn test_mcp_tool_call_with_traceparent() {
         let response = Envelope {
             id: envelope.id,
             traceparent: envelope.traceparent,
-            payload: Payload::TypedResponse(ResponseEnvelope::success(
-                ToolResponse::LegacyJson(serde_json::json!({"traced": true})),
-            )),
+            payload: Payload::TypedResponse(ResponseEnvelope::success(ToolResponse::ack("traced"))),
         };
 
         let response_json = serde_json::to_string(&response).unwrap();
@@ -241,7 +239,10 @@ async fn test_mcp_tool_call_with_traceparent() {
         match response_envelope.payload {
             Payload::TypedResponse(envelope) => {
                 let result = envelope.to_json();
-                assert_eq!(result["traced"], true);
+                // ResponseEnvelope::Success has { "kind": "success", "response": { "type": "ack", "message": "traced" } }
+                assert_eq!(result["kind"], "success");
+                assert_eq!(result["response"]["type"], "ack");
+                assert_eq!(result["response"]["message"], "traced");
             }
             other => panic!("Expected TypedResponse, got {:?}", other),
         }

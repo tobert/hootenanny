@@ -8,7 +8,7 @@ use crate::api::responses::{JobSpawnResponse, JobStatus};
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
-use hooteproto::responses::ToolResponse;
+use hooteproto::responses::{OrpheusGeneratedResponse, ToolResponse};
 use hooteproto::{ToolError, ToolOutput, ToolResult};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -107,7 +107,7 @@ impl EventDualityServer {
         let handle = tokio::spawn(async move {
             let _ = job_store.mark_running(&job_id_clone);
 
-            let result: anyhow::Result<serde_json::Value> = (async {
+            let result: anyhow::Result<ToolResponse> = (async {
                 // Resolve section_a hash
                 let section_a_hash = {
                     let store = artifact_store
@@ -220,20 +220,23 @@ impl EventDualityServer {
                     }
                 }
 
-                Ok(serde_json::json!({
-                    "status": orpheus_result.status,
-                    "output_hashes": orpheus_result.output_hashes,
-                    "artifact_ids": artifacts.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
-                    "summary": orpheus_result.summary,
-                    "variation_set_id": artifacts.first().and_then(|a| a.variation_set_id.as_ref().map(|s| s.as_str())),
-                    "variation_indices": artifacts.iter().map(|a| a.variation_index).collect::<Vec<_>>(),
+                let tokens_per_variation: Vec<u64> = orpheus_result.num_tokens.iter().map(|&t| t as u64).collect();
+                let total_tokens: u64 = tokens_per_variation.iter().sum();
+
+                Ok(ToolResponse::OrpheusGenerated(OrpheusGeneratedResponse {
+                    output_hashes: orpheus_result.output_hashes,
+                    artifact_ids: artifacts.iter().map(|a| a.id.as_str().to_string()).collect(),
+                    tokens_per_variation,
+                    total_tokens,
+                    variation_set_id: artifacts.first().and_then(|a| a.variation_set_id.as_ref().map(|s| s.as_str().to_string())),
+                    summary: orpheus_result.summary,
                 }))
             })
             .await;
 
             match result {
                 Ok(response) => {
-                    let _ = job_store.mark_complete(&job_id_clone, ToolResponse::LegacyJson(response));
+                    let _ = job_store.mark_complete(&job_id_clone, response);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Bridge generation failed");

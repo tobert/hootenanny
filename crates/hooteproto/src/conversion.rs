@@ -569,10 +569,14 @@ pub fn capnp_envelope_to_payload(
         envelope_capnp::payload::Success(success) => {
             let success = success?;
             let result_str = success.get_result()?.to_str()?;
-            let result = serde_json::from_str(result_str).unwrap_or_default();
-            Ok(Payload::TypedResponse(ResponseEnvelope::success(
-                ToolResponse::LegacyJson(result),
-            )))
+            // Deserialize as typed ToolResponse - fail if unknown format
+            let response = serde_json::from_str::<ToolResponse>(result_str).map_err(|e| {
+                capnp::Error::failed(format!(
+                    "Unknown response format in Success payload: {}",
+                    e
+                ))
+            })?;
+            Ok(Payload::TypedResponse(ResponseEnvelope::success(response)))
         }
 
         envelope_capnp::payload::Error(error) => {
@@ -2115,9 +2119,7 @@ mod tests {
     #[test]
     fn test_unsupported_returns_none() {
         // Response payloads like TypedResponse are not tool requests - should return None
-        let payload = Payload::TypedResponse(ResponseEnvelope::success(
-            ToolResponse::LegacyJson(serde_json::json!({"test": true})),
-        ));
+        let payload = Payload::TypedResponse(ResponseEnvelope::success(ToolResponse::ack("test")));
 
         let request = payload_to_request(&payload).unwrap();
         assert!(request.is_none());

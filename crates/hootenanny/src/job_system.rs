@@ -360,9 +360,7 @@ mod tests {
         // Create and complete a job
         let job_id = store.create_job("test_tool".to_string());
         store.mark_running(&job_id).unwrap();
-        store
-            .mark_complete(&job_id, ToolResponse::LegacyJson(serde_json::json!({"result": "ok"})))
-            .unwrap();
+        store.mark_complete(&job_id, ToolResponse::ack("ok")).unwrap();
 
         // Manually backdate the completion time
         {
@@ -397,13 +395,9 @@ mod tests {
 
         // Complete both
         store.mark_running(&garden_job).unwrap();
-        store
-            .mark_complete(&garden_job, ToolResponse::LegacyJson(serde_json::json!({})))
-            .unwrap();
+        store.mark_complete(&garden_job, ToolResponse::ack("ok")).unwrap();
         store.mark_running(&other_job).unwrap();
-        store
-            .mark_complete(&other_job, ToolResponse::LegacyJson(serde_json::json!({})))
-            .unwrap();
+        store.mark_complete(&other_job, ToolResponse::ack("ok")).unwrap();
 
         // Backdate both jobs
         {

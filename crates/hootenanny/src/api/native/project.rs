@@ -6,12 +6,12 @@
 //! - Audio format conversions (future)
 
 use crate::api::native::types::{Encoding, OutputType, ProjectionTarget};
-use crate::api::responses::{JobSpawnResponse, JobStatus, MidiToWavResponse};
+use crate::api::responses::{JobSpawnResponse, JobStatus};
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::mcp_tools::rustysynth::{inspect_soundfont, render_midi_to_wav};
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
-use hooteproto::responses::ToolResponse;
+use hooteproto::responses::{AudioFormat, AudioGeneratedResponse, ToolResponse};
 use hooteproto::{ToolError, ToolOutput, ToolResult};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -222,7 +222,7 @@ impl EventDualityServer {
         let handle = tokio::spawn(async move {
             let _ = job_store.mark_running(&job_id_clone);
 
-            let result: anyhow::Result<MidiToWavResponse> = (async {
+            let result: anyhow::Result<ToolResponse> = (async {
                 let sample_rate = sample_rate.unwrap_or(44100);
 
                 let midi_ref = local_models.inspect_cas_content(&midi_hash).await?;
@@ -310,22 +310,20 @@ impl EventDualityServer {
                 store.put(artifact)?;
                 store.flush()?;
 
-                Ok(MidiToWavResponse {
+                Ok(ToolResponse::AudioGenerated(AudioGeneratedResponse {
                     artifact_id: artifact_id.as_str().to_string(),
                     content_hash: wav_hash,
-                    size_bytes: wav_size,
-                    duration_secs,
+                    duration_seconds: duration_secs,
                     sample_rate,
-                })
+                    format: AudioFormat::Wav,
+                    genre: None,
+                }))
             })
             .await;
 
             match result {
                 Ok(response) => {
-                    let _ = job_store.mark_complete(
-                        &job_id_clone,
-                        ToolResponse::LegacyJson(serde_json::to_value(response).unwrap()),
-                    );
+                    let _ = job_store.mark_complete(&job_id_clone, response);
                 }
                 Err(e) => {
                     let _ = job_store.mark_failed(&job_id_clone, e.to_string());

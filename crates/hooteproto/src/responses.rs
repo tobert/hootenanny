@@ -46,7 +46,11 @@ pub enum ToolResponse {
     SoundfontPresetInfo(SoundfontPresetInfoResponse),
 
     // === Orpheus MIDI Generation ===
+    OrpheusGenerated(OrpheusGeneratedResponse),
     OrpheusClassified(OrpheusClassifiedResponse),
+
+    // === Audio Generation ===
+    AudioGenerated(AudioGeneratedResponse),
 
     // === Audio Analysis ===
     BeatsAnalyzed(BeatsAnalyzedResponse),
@@ -83,11 +87,6 @@ pub enum ToolResponse {
     WeaveSession(WeaveSessionResponse),
     WeaveReset(WeaveResetResponse),
     WeaveHelp(WeaveHelpResponse),
-
-    // === Transitional (to be removed) ===
-    /// Legacy JSON escape hatch for tools not yet converted to typed responses.
-    /// TODO: Remove this variant once all tools use proper typed responses.
-    LegacyJson(serde_json::Value),
 }
 
 // =============================================================================
@@ -301,9 +300,51 @@ pub struct SoundfontRegion {
 // Orpheus Responses
 // =============================================================================
 
+/// Response from Orpheus MIDI generation (sample, extend, bridge)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OrpheusGeneratedResponse {
+    /// CAS hashes of generated MIDI files
+    pub output_hashes: Vec<String>,
+    /// Artifact IDs in the store
+    pub artifact_ids: Vec<String>,
+    /// Tokens used per variation
+    pub tokens_per_variation: Vec<u64>,
+    /// Total tokens consumed
+    pub total_tokens: u64,
+    /// Variation set grouping (if multiple variations)
+    pub variation_set_id: Option<String>,
+    /// Human-readable summary
+    pub summary: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrpheusClassifiedResponse {
     pub classifications: Vec<MidiClassification>,
+}
+
+// =============================================================================
+// Audio Generation Responses
+// =============================================================================
+
+/// Response from audio generation (MusicGen, YuE)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioGeneratedResponse {
+    pub artifact_id: String,
+    pub content_hash: String,
+    pub duration_seconds: f64,
+    pub sample_rate: u32,
+    pub format: AudioFormat,
+    /// Optional genre (for YuE)
+    pub genre: Option<String>,
+}
+
+/// Audio file format
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AudioFormat {
+    Wav,
+    Mp3,
+    Flac,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
