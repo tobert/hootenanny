@@ -14,12 +14,11 @@ name = "holler"
 path = "src/main.rs"
 
 [dependencies]
-baton = { path = "../baton" }
+rmcp = { version = "0.12", features = ["server", "transport-streamable-http-server", "transport-io"] }
 hooteconf = { path = "../hooteconf" }
 hooteproto = { path = "../hooteproto", features = ["client"] }
 capnp = "0.20"
 anyhow = "1.0"
-async-trait = "0.1"
 base64 = "0.22"
 bytes = "1.9"
 axum = "0.8"

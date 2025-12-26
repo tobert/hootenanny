@@ -1,7 +1,8 @@
 //! holler - MCP gateway and ZMQ CLI for the Hootenanny system
 //!
 //! Subcommands:
-//! - `holler serve` - Run the MCP gateway (HTTP → ZMQ bridge)
+//! - `holler serve` - Run the MCP gateway (HTTP transport, stateful)
+//! - `holler mcp` - Run MCP server over stdio (for Claude Code)
 //! - `holler ping <endpoint>` - Test connectivity to a backend
 //! - `holler send <endpoint> <json>` - Send raw hooteproto message
 //! - `holler job <endpoint> <action>` - Query job status
@@ -18,7 +19,7 @@ use clap::{Parser, Subcommand};
 use hooteconf::HootConfig;
 use std::path::PathBuf;
 
-use holler::{commands, serve, telemetry};
+use holler::{commands, serve, stdio, telemetry};
 
 /// MCP gateway and ZMQ CLI for Hootenanny
 ///
@@ -75,12 +76,18 @@ enum Commands {
         action: JobAction,
     },
 
-    /// Run the MCP gateway server
+    /// Run the MCP gateway server (HTTP transport)
     Serve {
         /// Show loaded configuration and exit
         #[arg(long)]
         show_config: bool,
     },
+
+    /// Run MCP server over stdio (for Claude Code)
+    ///
+    /// This transport is simpler than HTTP and works well with
+    /// Claude Code and other stdio-based MCP clients.
+    Mcp,
 }
 
 #[derive(Subcommand)]
@@ -125,10 +132,22 @@ enum JobAction {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // For serve command, use full OTEL; for CLI commands, use simple tracing
+    // For serve command, use full OTEL
+    // For mcp (stdio), use stderr logging (stdout is for MCP protocol)
+    // For CLI commands, use simple tracing
     let use_otel = matches!(cli.command, Commands::Serve { .. });
+    let use_stderr = matches!(cli.command, Commands::Mcp);
 
-    if !use_otel {
+    if use_stderr {
+        // Stdio transport: log to stderr to keep stdout clean for MCP
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive(tracing::Level::WARN.into()),
+            )
+            .init();
+    } else if !use_otel {
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::from_default_env()
@@ -200,6 +219,17 @@ async fn main() -> Result<()> {
                 port: config.infra.gateway.http_port,
                 hootenanny: config.infra.gateway.hootenanny,
                 hootenanny_pub: Some(config.infra.gateway.hootenanny_pub),
+                timeout_ms: config.infra.gateway.timeout_ms,
+            })
+            .await?;
+        }
+        Commands::Mcp => {
+            // Load configuration for hootenanny endpoint
+            let (config, _) = HootConfig::load_with_sources_from(cli.config.as_deref())
+                .context("Failed to load configuration")?;
+
+            stdio::run(stdio::StdioConfig {
+                hootenanny: config.infra.gateway.hootenanny,
                 timeout_ms: config.infra.gateway.timeout_ms,
             })
             .await?;

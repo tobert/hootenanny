@@ -129,7 +129,7 @@ pub async fn run(config: ServeConfig) -> Result<()> {
         LocalSessionManager::default().into(),
         StreamableHttpServerConfig {
             cancellation_token: cancel_token.child_token(),
-            stateful_mode: false, // Stateless mode for simpler client compatibility
+            stateful_mode: true, // Full MCP protocol for clients that support it
             ..Default::default()
         },
     );
