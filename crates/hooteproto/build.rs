@@ -7,6 +7,7 @@ fn main() {
         .file("schemas/jobs.capnp")
         .file("schemas/tools.capnp")
         .file("schemas/streams.capnp")
+        .file("schemas/responses.capnp")
         .file("schemas/envelope.capnp")
         .file("schemas/garden.capnp")
         .file("schemas/broadcast.capnp")

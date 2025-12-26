@@ -101,6 +101,12 @@ pub mod vibeweaver_capnp {
     include!(concat!(env!("OUT_DIR"), "/vibeweaver_capnp.rs"));
 }
 
+#[allow(clippy::all)]
+#[allow(dead_code)]
+pub mod responses_capnp {
+    include!(concat!(env!("OUT_DIR"), "/responses_capnp.rs"));
+}
+
 pub mod conversion;
 pub mod domain;
 pub mod envelope;

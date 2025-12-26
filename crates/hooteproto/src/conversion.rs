@@ -11,11 +11,11 @@ use crate::{
 };
 
 // Cap'n Proto imports for reading requests
-use crate::{common_capnp, envelope_capnp, streams_capnp, tools_capnp};
+use crate::{common_capnp, envelope_capnp, responses_capnp, streams_capnp, tools_capnp};
 
 use crate::envelope::ResponseEnvelope;
 use crate::request::*;
-use crate::responses::ToolResponse;
+use crate::responses::*;
 use crate::ToolError;
 
 /// Convert a Payload to a ToolRequest for typed dispatch.
@@ -179,9 +179,8 @@ pub fn capnp_envelope_to_payload(
         }
         envelope_capnp::payload::StreamStop(stream) => Ok(Payload::StreamStop { uri: stream?.get_uri()?.to_str()?.to_string() }),
 
-        envelope_capnp::payload::Success(success) => {
-            let result_str = success?.get_result()?.to_str()?;
-            let response = serde_json::from_str::<ToolResponse>(result_str).map_err(|e| capnp::Error::failed(format!("Unknown response: {}", e)))?;
+        envelope_capnp::payload::ToolResponse(resp) => {
+            let response = capnp_tool_response_to_response(resp?)?;
             Ok(Payload::TypedResponse(ResponseEnvelope::success(response)))
         }
         envelope_capnp::payload::Error(error) => {
@@ -281,8 +280,28 @@ pub fn payload_to_capnp_envelope(
             Payload::StreamStop { uri } => payload_builder.init_stream_stop().set_uri(uri),
 
             Payload::TypedResponse(envelope) => {
-                let result = envelope.to_json();
-                payload_builder.init_success().set_result(serde_json::to_string(&result).unwrap_or_default());
+                match envelope {
+                    ResponseEnvelope::Success { response } => {
+                        let mut resp_builder = payload_builder.init_tool_response();
+                        response_to_capnp_tool_response(&mut resp_builder, response)?;
+                    }
+                    ResponseEnvelope::Error(err) => {
+                        let mut e = payload_builder.init_error();
+                        e.set_code(err.code());
+                        e.set_message(&err.message());
+                        e.set_details("");
+                    }
+                    ResponseEnvelope::JobStarted { job_id, tool, .. } => {
+                        let resp_builder = payload_builder.init_tool_response();
+                        let mut js = resp_builder.init_job_started();
+                        js.set_job_id(job_id);
+                        js.set_tool(tool);
+                    }
+                    ResponseEnvelope::Ack { message } => {
+                        let resp_builder = payload_builder.init_tool_response();
+                        resp_builder.init_ack().set_message(message);
+                    }
+                }
             }
             Payload::Error { code, message, details } => {
                 let mut e = payload_builder.init_error();
@@ -1178,5 +1197,1132 @@ fn analysis_task_to_capnp(task: &AnalysisTask) -> common_capnp::AnalysisTask {
         AnalysisTask::Embeddings => common_capnp::AnalysisTask::Embeddings,
         AnalysisTask::Genre => common_capnp::AnalysisTask::Genre,
         AnalysisTask::Mood => common_capnp::AnalysisTask::Mood,
+    }
+}
+
+// =============================================================================
+// Response Serialization (Rust → Cap'n Proto)
+// =============================================================================
+
+fn response_to_capnp_tool_response(
+    builder: &mut responses_capnp::tool_response::Builder,
+    response: &ToolResponse,
+) -> capnp::Result<()> {
+    match response {
+        // CAS Operations
+        ToolResponse::CasStored(r) => {
+            let mut b = builder.reborrow().init_cas_stored();
+            b.set_hash(&r.hash);
+            b.set_size(r.size as u64);
+            b.set_mime_type(&r.mime_type);
+        }
+        ToolResponse::CasContent(r) => {
+            let mut b = builder.reborrow().init_cas_content();
+            b.set_hash(&r.hash);
+            b.set_size(r.size as u64);
+            b.set_data(&r.data);
+        }
+        ToolResponse::CasInspected(r) => {
+            let mut b = builder.reborrow().init_cas_inspected();
+            b.set_hash(&r.hash);
+            b.set_exists(r.exists);
+            b.set_size(r.size.unwrap_or(0) as u64);
+            b.set_preview(r.preview.as_deref().unwrap_or(""));
+        }
+
+        // Artifacts
+        ToolResponse::ArtifactCreated(r) => {
+            let mut b = builder.reborrow().init_artifact_created();
+            b.set_artifact_id(&r.artifact_id);
+            b.set_content_hash(&r.content_hash);
+            let mut tags = b.reborrow().init_tags(r.tags.len() as u32);
+            for (i, tag) in r.tags.iter().enumerate() {
+                tags.set(i as u32, tag);
+            }
+            b.set_creator(&r.creator);
+        }
+        ToolResponse::ArtifactInfo(r) => {
+            let mut b = builder.reborrow().init_artifact_info();
+            b.set_id(&r.id);
+            b.set_content_hash(&r.content_hash);
+            b.set_mime_type(&r.mime_type);
+            let mut tags = b.reborrow().init_tags(r.tags.len() as u32);
+            for (i, tag) in r.tags.iter().enumerate() {
+                tags.set(i as u32, tag);
+            }
+            b.set_creator(&r.creator);
+            b.set_created_at(r.created_at);
+            b.set_parent_id(r.parent_id.as_deref().unwrap_or(""));
+            b.set_variation_set_id(r.variation_set_id.as_deref().unwrap_or(""));
+            if let Some(ref meta) = r.metadata {
+                let mut m = b.reborrow().init_metadata();
+                m.set_duration_seconds(meta.duration_seconds.unwrap_or(0.0));
+                m.set_sample_rate(meta.sample_rate.unwrap_or(0));
+                m.set_channels(meta.channels.unwrap_or(0));
+                if let Some(ref midi) = meta.midi_info {
+                    let mut mi = m.init_midi_info();
+                    mi.set_tracks(midi.tracks);
+                    mi.set_ticks_per_quarter(midi.ticks_per_quarter);
+                    mi.set_duration_ticks(midi.duration_ticks);
+                }
+            }
+        }
+        ToolResponse::ArtifactList(r) => {
+            let mut b = builder.reborrow().init_artifact_list();
+            let mut arts = b.reborrow().init_artifacts(r.artifacts.len() as u32);
+            for (i, art) in r.artifacts.iter().enumerate() {
+                let mut a = arts.reborrow().get(i as u32);
+                a.set_id(&art.id);
+                a.set_content_hash(&art.content_hash);
+                a.set_mime_type(&art.mime_type);
+                let mut tags = a.reborrow().init_tags(art.tags.len() as u32);
+                for (j, tag) in art.tags.iter().enumerate() {
+                    tags.set(j as u32, tag);
+                }
+                a.set_creator(&art.creator);
+                a.set_created_at(art.created_at);
+                a.set_parent_id(art.parent_id.as_deref().unwrap_or(""));
+                a.set_variation_set_id(art.variation_set_id.as_deref().unwrap_or(""));
+            }
+            b.set_count(r.count as u64);
+        }
+
+        // Jobs
+        ToolResponse::JobStarted(r) => {
+            let mut b = builder.reborrow().init_job_started();
+            b.set_job_id(&r.job_id);
+            b.set_tool(&r.tool);
+        }
+        ToolResponse::JobStatus(r) => {
+            let mut b = builder.reborrow().init_job_status();
+            b.set_job_id(&r.job_id);
+            b.set_status(job_state_to_capnp(&r.status));
+            b.set_source(&r.source);
+            if let Some(ref result) = r.result {
+                let mut nested = b.reborrow().init_result();
+                response_to_capnp_tool_response(&mut nested, result)?;
+            }
+            b.set_error(r.error.as_deref().unwrap_or(""));
+            b.set_created_at(r.created_at);
+            b.set_started_at(r.started_at.unwrap_or(0));
+            b.set_completed_at(r.completed_at.unwrap_or(0));
+        }
+        ToolResponse::JobList(r) => {
+            let mut b = builder.reborrow().init_job_list();
+            let mut jobs = b.reborrow().init_jobs(r.jobs.len() as u32);
+            for (i, job) in r.jobs.iter().enumerate() {
+                let mut j = jobs.reborrow().get(i as u32);
+                j.set_job_id(&job.job_id);
+                j.set_status(job_state_to_capnp(&job.status));
+                j.set_source(&job.source);
+                j.set_error(job.error.as_deref().unwrap_or(""));
+                j.set_created_at(job.created_at);
+                j.set_started_at(job.started_at.unwrap_or(0));
+                j.set_completed_at(job.completed_at.unwrap_or(0));
+            }
+            b.set_total(r.total as u64);
+            let mut counts = b.reborrow().init_by_status();
+            counts.set_pending(r.by_status.pending as u64);
+            counts.set_running(r.by_status.running as u64);
+            counts.set_complete(r.by_status.complete as u64);
+            counts.set_failed(r.by_status.failed as u64);
+            counts.set_cancelled(r.by_status.cancelled as u64);
+        }
+        ToolResponse::JobPollResult(r) => {
+            let mut b = builder.reborrow().init_job_poll_result();
+            let mut completed = b.reborrow().init_completed(r.completed.len() as u32);
+            for (i, id) in r.completed.iter().enumerate() {
+                completed.set(i as u32, id);
+            }
+            let mut failed = b.reborrow().init_failed(r.failed.len() as u32);
+            for (i, id) in r.failed.iter().enumerate() {
+                failed.set(i as u32, id);
+            }
+            let mut pending = b.reborrow().init_pending(r.pending.len() as u32);
+            for (i, id) in r.pending.iter().enumerate() {
+                pending.set(i as u32, id);
+            }
+            b.set_timed_out(r.timed_out);
+        }
+
+        // ABC Notation
+        ToolResponse::AbcParsed(r) => {
+            let mut b = builder.reborrow().init_abc_parsed();
+            b.set_valid(r.valid);
+            b.set_title(r.title.as_deref().unwrap_or(""));
+            b.set_key(r.key.as_deref().unwrap_or(""));
+            b.set_meter(r.meter.as_deref().unwrap_or(""));
+            b.set_tempo(r.tempo.unwrap_or(0));
+            b.set_notes_count(r.notes_count as u64);
+        }
+        ToolResponse::AbcValidated(r) => {
+            let mut b = builder.reborrow().init_abc_validated();
+            b.set_valid(r.valid);
+            let mut errors = b.reborrow().init_errors(r.errors.len() as u32);
+            for (i, err) in r.errors.iter().enumerate() {
+                let mut e = errors.reborrow().get(i as u32);
+                e.set_line(err.line as u64);
+                e.set_column(err.column as u64);
+                e.set_message(&err.message);
+            }
+            let mut warnings = b.reborrow().init_warnings(r.warnings.len() as u32);
+            for (i, w) in r.warnings.iter().enumerate() {
+                warnings.set(i as u32, w);
+            }
+        }
+        ToolResponse::AbcTransposed(r) => {
+            let mut b = builder.reborrow().init_abc_transposed();
+            b.set_abc(&r.abc);
+            b.set_original_key(r.original_key.as_deref().unwrap_or(""));
+            b.set_new_key(r.new_key.as_deref().unwrap_or(""));
+            b.set_semitones(r.semitones);
+        }
+        ToolResponse::AbcConverted(r) => {
+            let mut b = builder.reborrow().init_abc_converted();
+            b.set_artifact_id(&r.artifact_id);
+            b.set_content_hash(&r.content_hash);
+            b.set_duration_seconds(r.duration_seconds);
+            b.set_notes_count(r.notes_count as u64);
+        }
+
+        // SoundFont
+        ToolResponse::SoundfontInfo(r) => {
+            let mut b = builder.reborrow().init_soundfont_info();
+            b.set_name(&r.name);
+            let mut presets = b.reborrow().init_presets(r.presets.len() as u32);
+            for (i, p) in r.presets.iter().enumerate() {
+                let mut preset = presets.reborrow().get(i as u32);
+                preset.set_bank(p.bank);
+                preset.set_program(p.program);
+                preset.set_name(&p.name);
+            }
+            b.set_preset_count(r.preset_count as u64);
+        }
+        ToolResponse::SoundfontPresetInfo(r) => {
+            let mut b = builder.reborrow().init_soundfont_preset_info();
+            b.set_bank(r.bank);
+            b.set_program(r.program);
+            b.set_name(&r.name);
+            let mut regions = b.reborrow().init_regions(r.regions.len() as u32);
+            for (i, reg) in r.regions.iter().enumerate() {
+                let mut region = regions.reborrow().get(i as u32);
+                region.set_key_low(reg.key_low);
+                region.set_key_high(reg.key_high);
+                region.set_velocity_low(reg.velocity_low);
+                region.set_velocity_high(reg.velocity_high);
+                region.set_sample_name(reg.sample_name.as_deref().unwrap_or(""));
+            }
+        }
+
+        // Orpheus MIDI Generation
+        ToolResponse::OrpheusGenerated(r) => {
+            let mut b = builder.reborrow().init_orpheus_generated();
+            let mut hashes = b.reborrow().init_output_hashes(r.output_hashes.len() as u32);
+            for (i, h) in r.output_hashes.iter().enumerate() {
+                hashes.set(i as u32, h);
+            }
+            let mut aids = b.reborrow().init_artifact_ids(r.artifact_ids.len() as u32);
+            for (i, a) in r.artifact_ids.iter().enumerate() {
+                aids.set(i as u32, a);
+            }
+            let mut tokens = b.reborrow().init_tokens_per_variation(r.tokens_per_variation.len() as u32);
+            for (i, t) in r.tokens_per_variation.iter().enumerate() {
+                tokens.set(i as u32, *t);
+            }
+            b.set_total_tokens(r.total_tokens);
+            b.set_variation_set_id(r.variation_set_id.as_deref().unwrap_or(""));
+            b.set_summary(&r.summary);
+        }
+        ToolResponse::OrpheusClassified(r) => {
+            let b = builder.reborrow().init_orpheus_classified();
+            let mut cls = b.init_classifications(r.classifications.len() as u32);
+            for (i, c) in r.classifications.iter().enumerate() {
+                let mut classification = cls.reborrow().get(i as u32);
+                classification.set_label(&c.label);
+                classification.set_confidence(c.confidence);
+            }
+        }
+
+        // Audio Generation
+        ToolResponse::AudioGenerated(r) => {
+            let mut b = builder.reborrow().init_audio_generated();
+            b.set_artifact_id(&r.artifact_id);
+            b.set_content_hash(&r.content_hash);
+            b.set_duration_seconds(r.duration_seconds);
+            b.set_sample_rate(r.sample_rate);
+            b.set_format(audio_format_to_capnp(&r.format));
+            b.set_genre(r.genre.as_deref().unwrap_or(""));
+        }
+
+        // Audio Analysis
+        ToolResponse::BeatsAnalyzed(r) => {
+            let mut b = builder.reborrow().init_beats_analyzed();
+            let mut beats = b.reborrow().init_beats(r.beats.len() as u32);
+            for (i, beat) in r.beats.iter().enumerate() {
+                beats.set(i as u32, *beat);
+            }
+            let mut downbeats = b.reborrow().init_downbeats(r.downbeats.len() as u32);
+            for (i, db) in r.downbeats.iter().enumerate() {
+                downbeats.set(i as u32, *db);
+            }
+            b.set_estimated_bpm(r.estimated_bpm);
+            b.set_confidence(r.confidence);
+        }
+        ToolResponse::ClapAnalyzed(r) => {
+            let mut b = builder.reborrow().init_clap_analyzed();
+            if let Some(ref emb) = r.embeddings {
+                let mut embeddings = b.reborrow().init_embeddings(emb.len() as u32);
+                for (i, e) in emb.iter().enumerate() {
+                    embeddings.set(i as u32, *e);
+                }
+            }
+            if let Some(ref genre) = r.genre {
+                let mut genres = b.reborrow().init_genre(genre.len() as u32);
+                for (i, g) in genre.iter().enumerate() {
+                    let mut classification = genres.reborrow().get(i as u32);
+                    classification.set_label(&g.label);
+                    classification.set_score(g.score);
+                }
+            }
+            if let Some(ref mood) = r.mood {
+                let mut moods = b.reborrow().init_mood(mood.len() as u32);
+                for (i, m) in mood.iter().enumerate() {
+                    let mut classification = moods.reborrow().get(i as u32);
+                    classification.set_label(&m.label);
+                    classification.set_score(m.score);
+                }
+            }
+            if let Some(ref zs) = r.zero_shot {
+                let mut zero_shots = b.reborrow().init_zero_shot(zs.len() as u32);
+                for (i, z) in zs.iter().enumerate() {
+                    let mut classification = zero_shots.reborrow().get(i as u32);
+                    classification.set_label(&z.label);
+                    classification.set_score(z.score);
+                }
+            }
+            b.set_similarity(r.similarity.unwrap_or(0.0));
+        }
+
+        // Garden/Transport
+        ToolResponse::GardenStatus(r) => {
+            let mut b = builder.reborrow().init_garden_status();
+            b.set_state(transport_state_to_capnp(&r.state));
+            b.set_position_beats(r.position_beats);
+            b.set_tempo_bpm(r.tempo_bpm);
+            b.set_region_count(r.region_count as u64);
+        }
+        ToolResponse::GardenRegions(r) => {
+            let mut b = builder.reborrow().init_garden_regions();
+            let mut regions = b.reborrow().init_regions(r.regions.len() as u32);
+            for (i, reg) in r.regions.iter().enumerate() {
+                let mut region = regions.reborrow().get(i as u32);
+                region.set_region_id(&reg.region_id);
+                region.set_position(reg.position);
+                region.set_duration(reg.duration);
+                region.set_behavior_type(&reg.behavior_type);
+                region.set_content_id(&reg.content_id);
+            }
+            b.set_count(r.count as u64);
+        }
+        ToolResponse::GardenRegionCreated(r) => {
+            let mut b = builder.reborrow().init_garden_region_created();
+            b.set_region_id(&r.region_id);
+            b.set_position(r.position);
+            b.set_duration(r.duration);
+        }
+        ToolResponse::GardenQueryResult(r) => {
+            let mut b = builder.reborrow().init_garden_query_result();
+            b.set_results(&serde_json::to_string(&r.results).unwrap_or_default());
+            b.set_count(r.count as u64);
+        }
+
+        // Graph
+        ToolResponse::GraphIdentity(r) => {
+            let mut b = builder.reborrow().init_graph_identity();
+            b.set_id(&r.id);
+            b.set_name(&r.name);
+            b.set_created_at(r.created_at);
+        }
+        ToolResponse::GraphIdentities(r) => {
+            let mut b = builder.reborrow().init_graph_identities();
+            let mut ids = b.reborrow().init_identities(r.identities.len() as u32);
+            for (i, id) in r.identities.iter().enumerate() {
+                let mut identity = ids.reborrow().get(i as u32);
+                identity.set_id(&id.id);
+                identity.set_name(&id.name);
+                let mut tags = identity.reborrow().init_tags(id.tags.len() as u32);
+                for (j, tag) in id.tags.iter().enumerate() {
+                    tags.set(j as u32, tag);
+                }
+            }
+            b.set_count(r.count as u64);
+        }
+        ToolResponse::GraphConnection(r) => {
+            let mut b = builder.reborrow().init_graph_connection();
+            b.set_connection_id(&r.connection_id);
+            b.set_from_identity(&r.from_identity);
+            b.set_from_port(&r.from_port);
+            b.set_to_identity(&r.to_identity);
+            b.set_to_port(&r.to_port);
+            b.set_transport(r.transport.as_deref().unwrap_or(""));
+        }
+        ToolResponse::GraphTags(r) => {
+            let mut b = builder.reborrow().init_graph_tags();
+            b.set_identity_id(&r.identity_id);
+            let mut tags = b.reborrow().init_tags(r.tags.len() as u32);
+            for (i, tag) in r.tags.iter().enumerate() {
+                let mut t = tags.reborrow().get(i as u32);
+                t.set_namespace(&tag.namespace);
+                t.set_value(&tag.value);
+            }
+        }
+        ToolResponse::GraphContext(r) => {
+            let mut b = builder.reborrow().init_graph_context();
+            b.set_context(&r.context);
+            b.set_artifact_count(r.artifact_count as u64);
+            b.set_identity_count(r.identity_count as u64);
+        }
+        ToolResponse::GraphQueryResult(r) => {
+            let mut b = builder.reborrow().init_graph_query_result();
+            b.set_results(&serde_json::to_string(&r.results).unwrap_or_default());
+            b.set_count(r.count as u64);
+        }
+
+        // Config
+        ToolResponse::ConfigValue(r) => {
+            let mut b = builder.reborrow().init_config_value();
+            b.set_section(r.section.as_deref().unwrap_or(""));
+            b.set_key(r.key.as_deref().unwrap_or(""));
+            b.set_value(&serde_json::to_string(&r.value).unwrap_or_default());
+        }
+
+        // Admin
+        ToolResponse::ToolsList(r) => {
+            let mut b = builder.reborrow().init_tools_list();
+            let mut tools = b.reborrow().init_tools(r.tools.len() as u32);
+            for (i, tool) in r.tools.iter().enumerate() {
+                let mut t = tools.reborrow().get(i as u32);
+                t.set_name(&tool.name);
+                t.set_description(&tool.description);
+                t.set_input_schema(&serde_json::to_string(&tool.input_schema).unwrap_or_default());
+            }
+            b.set_count(r.count as u64);
+        }
+
+        // Simple
+        ToolResponse::Ack(r) => {
+            builder.reborrow().init_ack().set_message(&r.message);
+        }
+        ToolResponse::AnnotationAdded(r) => {
+            let mut b = builder.reborrow().init_annotation_added();
+            b.set_artifact_id(&r.artifact_id);
+            b.set_annotation_id(&r.annotation_id);
+        }
+
+        // Vibeweaver
+        ToolResponse::WeaveEval(r) => {
+            let mut b = builder.reborrow().init_weave_eval();
+            b.set_output_type(weave_output_type_to_capnp(&r.output_type));
+            b.set_result(r.result.as_deref().unwrap_or(""));
+            b.set_stdout(r.stdout.as_deref().unwrap_or(""));
+            b.set_stderr(r.stderr.as_deref().unwrap_or(""));
+        }
+        ToolResponse::WeaveSession(r) => {
+            let mut b = builder.reborrow().init_weave_session();
+            if let Some(ref session) = r.session {
+                let mut s = b.reborrow().init_session();
+                s.set_id(&session.id);
+                s.set_name(&session.name);
+                s.set_vibe(session.vibe.as_deref().unwrap_or(""));
+            }
+            b.set_message(r.message.as_deref().unwrap_or(""));
+        }
+        ToolResponse::WeaveReset(r) => {
+            let mut b = builder.reborrow().init_weave_reset();
+            b.set_reset(r.reset);
+            b.set_message(&r.message);
+        }
+        ToolResponse::WeaveHelp(r) => {
+            let mut b = builder.reborrow().init_weave_help();
+            b.set_help(&r.help);
+            b.set_topic(r.topic.as_deref().unwrap_or(""));
+        }
+    }
+    Ok(())
+}
+
+fn job_state_to_capnp(state: &JobState) -> responses_capnp::JobState {
+    match state {
+        JobState::Pending => responses_capnp::JobState::Pending,
+        JobState::Running => responses_capnp::JobState::Running,
+        JobState::Complete => responses_capnp::JobState::Complete,
+        JobState::Failed => responses_capnp::JobState::Failed,
+        JobState::Cancelled => responses_capnp::JobState::Cancelled,
+    }
+}
+
+fn audio_format_to_capnp(format: &AudioFormat) -> responses_capnp::AudioFormat {
+    match format {
+        AudioFormat::Wav => responses_capnp::AudioFormat::Wav,
+        AudioFormat::Mp3 => responses_capnp::AudioFormat::Mp3,
+        AudioFormat::Flac => responses_capnp::AudioFormat::Flac,
+    }
+}
+
+fn transport_state_to_capnp(state: &TransportState) -> responses_capnp::TransportState {
+    match state {
+        TransportState::Stopped => responses_capnp::TransportState::Stopped,
+        TransportState::Playing => responses_capnp::TransportState::Playing,
+        TransportState::Paused => responses_capnp::TransportState::Paused,
+    }
+}
+
+fn weave_output_type_to_capnp(output_type: &WeaveOutputType) -> responses_capnp::WeaveOutputType {
+    match output_type {
+        WeaveOutputType::Expression => responses_capnp::WeaveOutputType::Expression,
+        WeaveOutputType::Statement => responses_capnp::WeaveOutputType::Statement,
+    }
+}
+
+// =============================================================================
+// Response Deserialization (Cap'n Proto → Rust)
+// =============================================================================
+
+fn capnp_tool_response_to_response(
+    reader: responses_capnp::tool_response::Reader,
+) -> capnp::Result<ToolResponse> {
+    use responses_capnp::tool_response::Which;
+
+    match reader.which()? {
+        // CAS Operations
+        Which::CasStored(r) => {
+            let r = r?;
+            Ok(ToolResponse::CasStored(CasStoredResponse {
+                hash: r.get_hash()?.to_string()?,
+                size: r.get_size() as usize,
+                mime_type: r.get_mime_type()?.to_string()?,
+            }))
+        }
+        Which::CasContent(r) => {
+            let r = r?;
+            Ok(ToolResponse::CasContent(CasContentResponse {
+                hash: r.get_hash()?.to_string()?,
+                size: r.get_size() as usize,
+                data: r.get_data()?.to_vec(),
+            }))
+        }
+        Which::CasInspected(r) => {
+            let r = r?;
+            let size = r.get_size();
+            let preview = r.get_preview()?.to_string()?;
+            Ok(ToolResponse::CasInspected(CasInspectedResponse {
+                hash: r.get_hash()?.to_string()?,
+                exists: r.get_exists(),
+                size: if size > 0 { Some(size as usize) } else { None },
+                preview: if preview.is_empty() { None } else { Some(preview) },
+            }))
+        }
+
+        // Artifacts
+        Which::ArtifactCreated(r) => {
+            let r = r?;
+            let tags: Vec<String> = r.get_tags()?.iter()
+                .filter_map(|t| t.ok().and_then(|s| s.to_string().ok()))
+                .collect();
+            Ok(ToolResponse::ArtifactCreated(ArtifactCreatedResponse {
+                artifact_id: r.get_artifact_id()?.to_string()?,
+                content_hash: r.get_content_hash()?.to_string()?,
+                tags,
+                creator: r.get_creator()?.to_string()?,
+            }))
+        }
+        Which::ArtifactInfo(r) => {
+            let r = r?;
+            let tags: Vec<String> = r.get_tags()?.iter()
+                .filter_map(|t| t.ok().and_then(|s| s.to_string().ok()))
+                .collect();
+            let parent_id = r.get_parent_id()?.to_string()?;
+            let variation_set_id = r.get_variation_set_id()?.to_string()?;
+            let metadata = if r.has_metadata() {
+                let m = r.get_metadata()?;
+                Some(ArtifactMetadata {
+                    duration_seconds: Some(m.get_duration_seconds()),
+                    sample_rate: Some(m.get_sample_rate()),
+                    channels: Some(m.get_channels()),
+                    midi_info: if m.has_midi_info() {
+                        let mi = m.get_midi_info()?;
+                        Some(MidiMetadata {
+                            tracks: mi.get_tracks(),
+                            ticks_per_quarter: mi.get_ticks_per_quarter(),
+                            duration_ticks: mi.get_duration_ticks(),
+                        })
+                    } else {
+                        None
+                    },
+                })
+            } else {
+                None
+            };
+            Ok(ToolResponse::ArtifactInfo(ArtifactInfoResponse {
+                id: r.get_id()?.to_string()?,
+                content_hash: r.get_content_hash()?.to_string()?,
+                mime_type: r.get_mime_type()?.to_string()?,
+                tags,
+                creator: r.get_creator()?.to_string()?,
+                created_at: r.get_created_at(),
+                parent_id: if parent_id.is_empty() { None } else { Some(parent_id) },
+                variation_set_id: if variation_set_id.is_empty() { None } else { Some(variation_set_id) },
+                metadata,
+            }))
+        }
+        Which::ArtifactList(r) => {
+            let r = r?;
+            let mut artifacts = Vec::new();
+            for art in r.get_artifacts()?.iter() {
+                let tags: Vec<String> = art.get_tags()?.iter()
+                    .filter_map(|t| t.ok().and_then(|s| s.to_string().ok()))
+                    .collect();
+                let parent_id = art.get_parent_id()?.to_string()?;
+                let variation_set_id = art.get_variation_set_id()?.to_string()?;
+                artifacts.push(ArtifactInfoResponse {
+                    id: art.get_id()?.to_string()?,
+                    content_hash: art.get_content_hash()?.to_string()?,
+                    mime_type: art.get_mime_type()?.to_string()?,
+                    tags,
+                    creator: art.get_creator()?.to_string()?,
+                    created_at: art.get_created_at(),
+                    parent_id: if parent_id.is_empty() { None } else { Some(parent_id) },
+                    variation_set_id: if variation_set_id.is_empty() { None } else { Some(variation_set_id) },
+                    metadata: None,
+                });
+            }
+            Ok(ToolResponse::ArtifactList(ArtifactListResponse {
+                artifacts,
+                count: r.get_count() as usize,
+            }))
+        }
+
+        // Jobs
+        Which::JobStarted(r) => {
+            let r = r?;
+            Ok(ToolResponse::JobStarted(JobStartedResponse {
+                job_id: r.get_job_id()?.to_string()?,
+                tool: r.get_tool()?.to_string()?,
+            }))
+        }
+        Which::JobStatus(r) => {
+            let r = r?;
+            let result = if r.has_result() {
+                Some(Box::new(capnp_tool_response_to_response(r.get_result()?)?))
+            } else {
+                None
+            };
+            let error = r.get_error()?.to_string()?;
+            let started_at = r.get_started_at();
+            let completed_at = r.get_completed_at();
+            Ok(ToolResponse::JobStatus(JobStatusResponse {
+                job_id: r.get_job_id()?.to_string()?,
+                status: capnp_to_job_state(r.get_status()?),
+                source: r.get_source()?.to_string()?,
+                result,
+                error: if error.is_empty() { None } else { Some(error) },
+                created_at: r.get_created_at(),
+                started_at: if started_at > 0 { Some(started_at) } else { None },
+                completed_at: if completed_at > 0 { Some(completed_at) } else { None },
+            }))
+        }
+        Which::JobList(r) => {
+            let r = r?;
+            let mut jobs = Vec::new();
+            for job in r.get_jobs()?.iter() {
+                let error = job.get_error()?.to_string()?;
+                let started_at = job.get_started_at();
+                let completed_at = job.get_completed_at();
+                jobs.push(JobStatusResponse {
+                    job_id: job.get_job_id()?.to_string()?,
+                    status: capnp_to_job_state(job.get_status()?),
+                    source: job.get_source()?.to_string()?,
+                    result: None,
+                    error: if error.is_empty() { None } else { Some(error) },
+                    created_at: job.get_created_at(),
+                    started_at: if started_at > 0 { Some(started_at) } else { None },
+                    completed_at: if completed_at > 0 { Some(completed_at) } else { None },
+                });
+            }
+            let counts = r.get_by_status()?;
+            Ok(ToolResponse::JobList(JobListResponse {
+                jobs,
+                total: r.get_total() as usize,
+                by_status: JobCounts {
+                    pending: counts.get_pending() as usize,
+                    running: counts.get_running() as usize,
+                    complete: counts.get_complete() as usize,
+                    failed: counts.get_failed() as usize,
+                    cancelled: counts.get_cancelled() as usize,
+                },
+            }))
+        }
+        Which::JobPollResult(r) => {
+            let r = r?;
+            let completed: Vec<String> = r.get_completed()?.iter()
+                .filter_map(|s| s.ok().and_then(|t| t.to_string().ok()))
+                .collect();
+            let failed: Vec<String> = r.get_failed()?.iter()
+                .filter_map(|s| s.ok().and_then(|t| t.to_string().ok()))
+                .collect();
+            let pending: Vec<String> = r.get_pending()?.iter()
+                .filter_map(|s| s.ok().and_then(|t| t.to_string().ok()))
+                .collect();
+            Ok(ToolResponse::JobPollResult(JobPollResultResponse {
+                completed,
+                failed,
+                pending,
+                timed_out: r.get_timed_out(),
+            }))
+        }
+
+        // ABC Notation
+        Which::AbcParsed(r) => {
+            let r = r?;
+            let title = r.get_title()?.to_string()?;
+            let key = r.get_key()?.to_string()?;
+            let meter = r.get_meter()?.to_string()?;
+            let tempo = r.get_tempo();
+            Ok(ToolResponse::AbcParsed(AbcParsedResponse {
+                valid: r.get_valid(),
+                title: if title.is_empty() { None } else { Some(title) },
+                key: if key.is_empty() { None } else { Some(key) },
+                meter: if meter.is_empty() { None } else { Some(meter) },
+                tempo: if tempo > 0 { Some(tempo) } else { None },
+                notes_count: r.get_notes_count() as usize,
+            }))
+        }
+        Which::AbcValidated(r) => {
+            let r = r?;
+            let mut errors = Vec::new();
+            for err in r.get_errors()?.iter() {
+                errors.push(AbcValidationError {
+                    line: err.get_line() as usize,
+                    column: err.get_column() as usize,
+                    message: err.get_message()?.to_string()?,
+                });
+            }
+            let warnings: Vec<String> = r.get_warnings()?.iter()
+                .filter_map(|s| s.ok().and_then(|t| t.to_string().ok()))
+                .collect();
+            Ok(ToolResponse::AbcValidated(AbcValidatedResponse {
+                valid: r.get_valid(),
+                errors,
+                warnings,
+            }))
+        }
+        Which::AbcTransposed(r) => {
+            let r = r?;
+            let original_key = r.get_original_key()?.to_string()?;
+            let new_key = r.get_new_key()?.to_string()?;
+            Ok(ToolResponse::AbcTransposed(AbcTransposedResponse {
+                abc: r.get_abc()?.to_string()?,
+                original_key: if original_key.is_empty() { None } else { Some(original_key) },
+                new_key: if new_key.is_empty() { None } else { Some(new_key) },
+                semitones: r.get_semitones(),
+            }))
+        }
+        Which::AbcConverted(r) => {
+            let r = r?;
+            Ok(ToolResponse::AbcConverted(AbcConvertedResponse {
+                artifact_id: r.get_artifact_id()?.to_string()?,
+                content_hash: r.get_content_hash()?.to_string()?,
+                duration_seconds: r.get_duration_seconds(),
+                notes_count: r.get_notes_count() as usize,
+            }))
+        }
+
+        // SoundFont
+        Which::SoundfontInfo(r) => {
+            let r = r?;
+            let mut presets = Vec::new();
+            for p in r.get_presets()?.iter() {
+                presets.push(SoundfontPreset {
+                    bank: p.get_bank(),
+                    program: p.get_program(),
+                    name: p.get_name()?.to_string()?,
+                });
+            }
+            Ok(ToolResponse::SoundfontInfo(SoundfontInfoResponse {
+                name: r.get_name()?.to_string()?,
+                presets,
+                preset_count: r.get_preset_count() as usize,
+            }))
+        }
+        Which::SoundfontPresetInfo(r) => {
+            let r = r?;
+            let mut regions = Vec::new();
+            for reg in r.get_regions()?.iter() {
+                let sample_name = reg.get_sample_name()?.to_string()?;
+                regions.push(SoundfontRegion {
+                    key_low: reg.get_key_low(),
+                    key_high: reg.get_key_high(),
+                    velocity_low: reg.get_velocity_low(),
+                    velocity_high: reg.get_velocity_high(),
+                    sample_name: if sample_name.is_empty() { None } else { Some(sample_name) },
+                });
+            }
+            Ok(ToolResponse::SoundfontPresetInfo(SoundfontPresetInfoResponse {
+                bank: r.get_bank(),
+                program: r.get_program(),
+                name: r.get_name()?.to_string()?,
+                regions,
+            }))
+        }
+
+        // Orpheus
+        Which::OrpheusGenerated(r) => {
+            let r = r?;
+            let output_hashes: Vec<String> = r.get_output_hashes()?.iter()
+                .filter_map(|s| s.ok().and_then(|t| t.to_string().ok()))
+                .collect();
+            let artifact_ids: Vec<String> = r.get_artifact_ids()?.iter()
+                .filter_map(|s| s.ok().and_then(|t| t.to_string().ok()))
+                .collect();
+            let tokens_per_variation: Vec<u64> = r.get_tokens_per_variation()?.iter().collect();
+            let variation_set_id = r.get_variation_set_id()?.to_string()?;
+            Ok(ToolResponse::OrpheusGenerated(OrpheusGeneratedResponse {
+                output_hashes,
+                artifact_ids,
+                tokens_per_variation,
+                total_tokens: r.get_total_tokens(),
+                variation_set_id: if variation_set_id.is_empty() { None } else { Some(variation_set_id) },
+                summary: r.get_summary()?.to_string()?,
+            }))
+        }
+        Which::OrpheusClassified(r) => {
+            let r = r?;
+            let mut classifications = Vec::new();
+            for c in r.get_classifications()?.iter() {
+                classifications.push(MidiClassification {
+                    label: c.get_label()?.to_string()?,
+                    confidence: c.get_confidence(),
+                });
+            }
+            Ok(ToolResponse::OrpheusClassified(OrpheusClassifiedResponse {
+                classifications,
+            }))
+        }
+
+        // Audio Generation
+        Which::AudioGenerated(r) => {
+            let r = r?;
+            let genre = r.get_genre()?.to_string()?;
+            Ok(ToolResponse::AudioGenerated(AudioGeneratedResponse {
+                artifact_id: r.get_artifact_id()?.to_string()?,
+                content_hash: r.get_content_hash()?.to_string()?,
+                duration_seconds: r.get_duration_seconds(),
+                sample_rate: r.get_sample_rate(),
+                format: capnp_to_audio_format(r.get_format()?),
+                genre: if genre.is_empty() { None } else { Some(genre) },
+            }))
+        }
+
+        // Audio Analysis
+        Which::BeatsAnalyzed(r) => {
+            let r = r?;
+            let beats: Vec<f64> = r.get_beats()?.iter().collect();
+            let downbeats: Vec<f64> = r.get_downbeats()?.iter().collect();
+            Ok(ToolResponse::BeatsAnalyzed(BeatsAnalyzedResponse {
+                beats,
+                downbeats,
+                estimated_bpm: r.get_estimated_bpm(),
+                confidence: r.get_confidence(),
+            }))
+        }
+        Which::ClapAnalyzed(r) => {
+            let r = r?;
+            let embeddings: Vec<f32> = r.get_embeddings()?.iter().collect();
+            let mut genre = Vec::new();
+            for g in r.get_genre()?.iter() {
+                genre.push(ClapClassification {
+                    label: g.get_label()?.to_string()?,
+                    score: g.get_score(),
+                });
+            }
+            let mut mood = Vec::new();
+            for m in r.get_mood()?.iter() {
+                mood.push(ClapClassification {
+                    label: m.get_label()?.to_string()?,
+                    score: m.get_score(),
+                });
+            }
+            let mut zero_shot = Vec::new();
+            for z in r.get_zero_shot()?.iter() {
+                zero_shot.push(ClapClassification {
+                    label: z.get_label()?.to_string()?,
+                    score: z.get_score(),
+                });
+            }
+            let similarity = r.get_similarity();
+            Ok(ToolResponse::ClapAnalyzed(ClapAnalyzedResponse {
+                embeddings: if embeddings.is_empty() { None } else { Some(embeddings) },
+                genre: if genre.is_empty() { None } else { Some(genre) },
+                mood: if mood.is_empty() { None } else { Some(mood) },
+                zero_shot: if zero_shot.is_empty() { None } else { Some(zero_shot) },
+                similarity: if similarity == 0.0 { None } else { Some(similarity) },
+            }))
+        }
+
+        // Garden/Transport
+        Which::GardenStatus(r) => {
+            let r = r?;
+            Ok(ToolResponse::GardenStatus(GardenStatusResponse {
+                state: capnp_to_transport_state(r.get_state()?),
+                position_beats: r.get_position_beats(),
+                tempo_bpm: r.get_tempo_bpm(),
+                region_count: r.get_region_count() as usize,
+            }))
+        }
+        Which::GardenRegions(r) => {
+            let r = r?;
+            let mut regions = Vec::new();
+            for reg in r.get_regions()?.iter() {
+                regions.push(GardenRegionInfo {
+                    region_id: reg.get_region_id()?.to_string()?,
+                    position: reg.get_position(),
+                    duration: reg.get_duration(),
+                    behavior_type: reg.get_behavior_type()?.to_string()?,
+                    content_id: reg.get_content_id()?.to_string()?,
+                });
+            }
+            Ok(ToolResponse::GardenRegions(GardenRegionsResponse {
+                regions,
+                count: r.get_count() as usize,
+            }))
+        }
+        Which::GardenRegionCreated(r) => {
+            let r = r?;
+            Ok(ToolResponse::GardenRegionCreated(GardenRegionCreatedResponse {
+                region_id: r.get_region_id()?.to_string()?,
+                position: r.get_position(),
+                duration: r.get_duration(),
+            }))
+        }
+        Which::GardenQueryResult(r) => {
+            let r = r?;
+            let results_str = r.get_results()?.to_string()?;
+            let results: Vec<serde_json::Value> = serde_json::from_str(&results_str).unwrap_or_default();
+            Ok(ToolResponse::GardenQueryResult(GardenQueryResultResponse {
+                results,
+                count: r.get_count() as usize,
+            }))
+        }
+
+        // Graph
+        Which::GraphIdentity(r) => {
+            let r = r?;
+            Ok(ToolResponse::GraphIdentity(GraphIdentityResponse {
+                id: r.get_id()?.to_string()?,
+                name: r.get_name()?.to_string()?,
+                created_at: r.get_created_at(),
+            }))
+        }
+        Which::GraphIdentities(r) => {
+            let r = r?;
+            let mut identities = Vec::new();
+            for id in r.get_identities()?.iter() {
+                let tags: Vec<String> = id.get_tags()?.iter()
+                    .filter_map(|t| t.ok().and_then(|s| s.to_string().ok()))
+                    .collect();
+                identities.push(GraphIdentityInfo {
+                    id: id.get_id()?.to_string()?,
+                    name: id.get_name()?.to_string()?,
+                    tags,
+                });
+            }
+            Ok(ToolResponse::GraphIdentities(GraphIdentitiesResponse {
+                identities,
+                count: r.get_count() as usize,
+            }))
+        }
+        Which::GraphConnection(r) => {
+            let r = r?;
+            let transport = r.get_transport()?.to_string()?;
+            Ok(ToolResponse::GraphConnection(GraphConnectionResponse {
+                connection_id: r.get_connection_id()?.to_string()?,
+                from_identity: r.get_from_identity()?.to_string()?,
+                from_port: r.get_from_port()?.to_string()?,
+                to_identity: r.get_to_identity()?.to_string()?,
+                to_port: r.get_to_port()?.to_string()?,
+                transport: if transport.is_empty() { None } else { Some(transport) },
+            }))
+        }
+        Which::GraphTags(r) => {
+            let r = r?;
+            let mut tags = Vec::new();
+            for t in r.get_tags()?.iter() {
+                tags.push(GraphTagInfo {
+                    namespace: t.get_namespace()?.to_string()?,
+                    value: t.get_value()?.to_string()?,
+                });
+            }
+            Ok(ToolResponse::GraphTags(GraphTagsResponse {
+                identity_id: r.get_identity_id()?.to_string()?,
+                tags,
+            }))
+        }
+        Which::GraphContext(r) => {
+            let r = r?;
+            Ok(ToolResponse::GraphContext(GraphContextResponse {
+                context: r.get_context()?.to_string()?,
+                artifact_count: r.get_artifact_count() as usize,
+                identity_count: r.get_identity_count() as usize,
+            }))
+        }
+        Which::GraphQueryResult(r) => {
+            let r = r?;
+            let results_str = r.get_results()?.to_string()?;
+            let results: Vec<serde_json::Value> = serde_json::from_str(&results_str).unwrap_or_default();
+            Ok(ToolResponse::GraphQueryResult(GraphQueryResultResponse {
+                results,
+                count: r.get_count() as usize,
+            }))
+        }
+
+        // Config
+        Which::ConfigValue(r) => {
+            let r = r?;
+            let section = r.get_section()?.to_string()?;
+            let key = r.get_key()?.to_string()?;
+            let value_str = r.get_value()?.to_string()?;
+            let value: ConfigValue = serde_json::from_str(&value_str).unwrap_or(ConfigValue::Null);
+            Ok(ToolResponse::ConfigValue(ConfigValueResponse {
+                section: if section.is_empty() { None } else { Some(section) },
+                key: if key.is_empty() { None } else { Some(key) },
+                value,
+            }))
+        }
+
+        // Admin
+        Which::ToolsList(r) => {
+            let r = r?;
+            let mut tools = Vec::new();
+            for t in r.get_tools()?.iter() {
+                let schema_str = t.get_input_schema()?.to_string()?;
+                let input_schema: serde_json::Value = serde_json::from_str(&schema_str).unwrap_or(serde_json::Value::Null);
+                tools.push(crate::ToolInfo {
+                    name: t.get_name()?.to_string()?,
+                    description: t.get_description()?.to_string()?,
+                    input_schema,
+                });
+            }
+            Ok(ToolResponse::ToolsList(ToolsListResponse {
+                tools,
+                count: r.get_count() as usize,
+            }))
+        }
+
+        // Simple
+        Which::Ack(r) => {
+            let r = r?;
+            Ok(ToolResponse::Ack(AckResponse {
+                message: r.get_message()?.to_string()?,
+            }))
+        }
+        Which::AnnotationAdded(r) => {
+            let r = r?;
+            Ok(ToolResponse::AnnotationAdded(AnnotationAddedResponse {
+                artifact_id: r.get_artifact_id()?.to_string()?,
+                annotation_id: r.get_annotation_id()?.to_string()?,
+            }))
+        }
+
+        // Vibeweaver
+        Which::WeaveEval(r) => {
+            let r = r?;
+            let result = r.get_result()?.to_string()?;
+            let stdout = r.get_stdout()?.to_string()?;
+            let stderr = r.get_stderr()?.to_string()?;
+            Ok(ToolResponse::WeaveEval(WeaveEvalResponse {
+                output_type: capnp_to_weave_output_type(r.get_output_type()?),
+                result: if result.is_empty() { None } else { Some(result) },
+                stdout: if stdout.is_empty() { None } else { Some(stdout) },
+                stderr: if stderr.is_empty() { None } else { Some(stderr) },
+            }))
+        }
+        Which::WeaveSession(r) => {
+            let r = r?;
+            let session = if r.has_session() {
+                let s = r.get_session()?;
+                let vibe = s.get_vibe()?.to_string()?;
+                Some(WeaveSessionInfo {
+                    id: s.get_id()?.to_string()?,
+                    name: s.get_name()?.to_string()?,
+                    vibe: if vibe.is_empty() { None } else { Some(vibe) },
+                })
+            } else {
+                None
+            };
+            let message = r.get_message()?.to_string()?;
+            Ok(ToolResponse::WeaveSession(WeaveSessionResponse {
+                session,
+                message: if message.is_empty() { None } else { Some(message) },
+            }))
+        }
+        Which::WeaveReset(r) => {
+            let r = r?;
+            Ok(ToolResponse::WeaveReset(WeaveResetResponse {
+                reset: r.get_reset(),
+                message: r.get_message()?.to_string()?,
+            }))
+        }
+        Which::WeaveHelp(r) => {
+            let r = r?;
+            let topic = r.get_topic()?.to_string()?;
+            Ok(ToolResponse::WeaveHelp(WeaveHelpResponse {
+                help: r.get_help()?.to_string()?,
+                topic: if topic.is_empty() { None } else { Some(topic) },
+            }))
+        }
+
+        // New response types added in responses.capnp but not yet in Rust
+        Which::GardenAudioStatus(_) |
+        Which::GardenInputStatus(_) |
+        Which::GardenMonitorStatus(_) |
+        Which::ToolHelp(_) |
+        Which::ScheduleResult(_) |
+        Which::AnalyzeResult(_) |
+        Which::CasStats(_) => {
+            Err(capnp::Error::failed("Unimplemented response type".to_string()))
+        }
+    }
+}
+
+fn capnp_to_job_state(state: responses_capnp::JobState) -> JobState {
+    match state {
+        responses_capnp::JobState::Pending => JobState::Pending,
+        responses_capnp::JobState::Running => JobState::Running,
+        responses_capnp::JobState::Complete => JobState::Complete,
+        responses_capnp::JobState::Failed => JobState::Failed,
+        responses_capnp::JobState::Cancelled => JobState::Cancelled,
+    }
+}
+
+fn capnp_to_audio_format(format: responses_capnp::AudioFormat) -> AudioFormat {
+    match format {
+        responses_capnp::AudioFormat::Wav => AudioFormat::Wav,
+        responses_capnp::AudioFormat::Mp3 => AudioFormat::Mp3,
+        responses_capnp::AudioFormat::Flac => AudioFormat::Flac,
+    }
+}
+
+fn capnp_to_transport_state(state: responses_capnp::TransportState) -> TransportState {
+    match state {
+        responses_capnp::TransportState::Stopped => TransportState::Stopped,
+        responses_capnp::TransportState::Playing => TransportState::Playing,
+        responses_capnp::TransportState::Paused => TransportState::Paused,
+    }
+}
+
+fn capnp_to_weave_output_type(output_type: responses_capnp::WeaveOutputType) -> WeaveOutputType {
+    match output_type {
+        responses_capnp::WeaveOutputType::Expression => WeaveOutputType::Expression,
+        responses_capnp::WeaveOutputType::Statement => WeaveOutputType::Statement,
     }
 }

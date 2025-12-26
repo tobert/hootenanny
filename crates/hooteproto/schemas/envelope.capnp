@@ -4,6 +4,7 @@ using Common = import "common.capnp";
 using Tools = import "tools.capnp";
 using Garden = import "garden.capnp";
 using Streams = import "streams.capnp";
+using Responses = import "responses.capnp";
 
 # Message envelope for all ZMQ communication
 struct Envelope {
@@ -50,7 +51,7 @@ struct Payload {
     timelineEvent @23 :Garden.TimelineEvent;
 
     # === Responses ===
-    success @24 :Success;
+    toolResponse @24 :Responses.ToolResponse;
     error @25 :Common.Error;
     toolList @26 :ToolList;
 
@@ -76,10 +77,6 @@ struct Pong {
 
 struct ShutdownRequest {
   reason @0 :Text;
-}
-
-struct Success {
-  result @0 :Text;  # JSON string
 }
 
 struct ToolList {
