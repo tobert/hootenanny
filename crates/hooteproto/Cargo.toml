@@ -31,9 +31,19 @@ tracing = { version = "0.1", optional = true }
 capnpc = "0.20"
 
 [dev-dependencies]
+futures = "0.3"
 pretty_assertions = "1.4"
+rzmq = { version = "0.5", features = ["ipc"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
 [[test]]
 name = "client_connect"
+required-features = ["client"]
+
+[[test]]
+name = "client_concurrency"
+required-features = ["client"]
+
+[[test]]
+name = "integration"
 required-features = ["client"]

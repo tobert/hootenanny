@@ -6,28 +6,53 @@
 //! - Retry failed requests (Lazy Pirate), don't assume connection is dead
 //! - Heartbeat = application-level ping to verify peer is responding
 //!
+//! Architecture: Reactor pattern to avoid lock contention
+//! - Socket owned by dedicated reactor task
+//! - Requests flow through mpsc channel
+//! - Responses routed via oneshot channels keyed by request_id
+//!
 //! Usage:
 //! ```ignore
-//! let client = HootClient::new(config);  // Connects immediately (non-blocking)
+//! let client = HootClient::new(config).await;  // Spawns reactor
 //! let response = client.request(payload).await?;  // Retries on timeout
 //! ```
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as AnyhowContext, Result};
 use bytes::Bytes;
-use rzmq::{Context, Msg, Socket, SocketType};
 use rzmq::socket::options::{LINGER, RECONNECT_IVL, RECONNECT_IVL_MAX, ROUTING_ID};
-use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use rzmq::{Context, Msg, Socket, SocketType};
+use tokio::sync::{mpsc, oneshot, RwLock};
+use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
 use crate::{
     capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope,
-    Command, ContentType, HootFrame, Payload, PROTOCOL_VERSION,
+    Command, ContentType, HootFrame, Payload,
 };
+
+/// Command sent to the reactor task
+enum ReactorCommand {
+    /// Send a request and return response via oneshot
+    Request {
+        frames: Vec<Bytes>,
+        request_id: Uuid,
+        timeout: Duration,
+        response_tx: oneshot::Sender<Result<Payload>>,
+    },
+    /// Shutdown the reactor gracefully
+    Shutdown,
+}
+
+/// A pending request waiting for its response
+struct PendingRequest {
+    response_tx: oneshot::Sender<Result<Payload>>,
+    deadline: Instant,
+}
 
 /// Connection state - tracks if peer is responding, not ZMQ socket state
 #[repr(u8)]
@@ -167,23 +192,159 @@ impl ClientConfig {
     }
 }
 
-/// ZMQ DEALER client following Lazy Pirate pattern.
+/// The reactor task - owns the socket, handles all I/O.
+///
+/// This task runs continuously, interleaving:
+/// - Processing commands from callers (send requests)
+/// - Receiving responses from the socket
+/// - Cleaning up timed-out requests
+async fn reactor_task(
+    socket: Socket,
+    mut cmd_rx: mpsc::Receiver<ReactorCommand>,
+    health: Arc<HealthTracker>,
+    name: String,
+) {
+    let mut pending: HashMap<Uuid, PendingRequest> = HashMap::new();
+    let mut cleanup_interval = tokio::time::interval(Duration::from_secs(1));
+    cleanup_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    debug!("{}: Reactor task started", name);
+
+    loop {
+        tokio::select! {
+            // Bias towards processing commands first to avoid starvation
+            biased;
+
+            // Process commands from callers
+            cmd = cmd_rx.recv() => {
+                match cmd {
+                    Some(ReactorCommand::Request { frames, request_id, timeout, response_tx }) => {
+                        trace!("{}: Sending request {}", name, request_id);
+
+                        // Send immediately
+                        let msgs = frames_to_msgs(&frames);
+                        if let Err(e) = socket.send_multipart(msgs).await {
+                            warn!("{}: Send failed for {}: {}", name, request_id, e);
+                            let _ = response_tx.send(Err(anyhow::anyhow!("Send failed: {}", e)));
+                            continue;
+                        }
+
+                        // Register pending request
+                        pending.insert(request_id, PendingRequest {
+                            response_tx,
+                            deadline: Instant::now() + timeout,
+                        });
+                        trace!("{}: Request {} registered, {} pending", name, request_id, pending.len());
+                    }
+                    Some(ReactorCommand::Shutdown) => {
+                        info!("{}: Reactor shutting down, failing {} pending requests", name, pending.len());
+                        for (id, req) in pending.drain() {
+                            let _ = req.response_tx.send(Err(anyhow::anyhow!("Reactor shutdown")));
+                            trace!("{}: Failed pending request {} due to shutdown", name, id);
+                        }
+                        break;
+                    }
+                    None => {
+                        info!("{}: Command channel closed, reactor exiting", name);
+                        break;
+                    }
+                }
+            }
+
+            // Receive responses from socket
+            result = socket.recv_multipart() => {
+                match result {
+                    Ok(msgs) => {
+                        let frames: Vec<Bytes> = msgs
+                            .into_iter()
+                            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+                            .collect();
+
+                        match HootFrame::from_frames(&frames) {
+                            Ok(frame) => {
+                                trace!("{}: Received response for {}", name, frame.request_id);
+
+                                if let Some(req) = pending.remove(&frame.request_id) {
+                                    // Heartbeat responses have empty body - don't parse
+                                    let payload_result = if frame.command == Command::Heartbeat {
+                                        Ok(Payload::Ping)
+                                    } else {
+                                        parse_response_payload(&frame)
+                                    };
+
+                                    if payload_result.is_ok() {
+                                        health.record_success().await;
+                                    }
+                                    let _ = req.response_tx.send(payload_result);
+                                } else {
+                                    debug!(
+                                        "{}: Discarding orphan response for {} (not in {} pending)",
+                                        name, frame.request_id, pending.len()
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                warn!("{}: Failed to parse response frame: {}", name, e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("{}: Receive error: {}", name, e);
+                        // ZMQ handles reconnection - don't panic
+                    }
+                }
+            }
+
+            // Cleanup expired requests
+            _ = cleanup_interval.tick() => {
+                let now = Instant::now();
+                let expired_ids: Vec<Uuid> = pending
+                    .iter()
+                    .filter(|(_, req)| now > req.deadline)
+                    .map(|(id, _)| *id)
+                    .collect();
+
+                for id in &expired_ids {
+                    if let Some(req) = pending.remove(id) {
+                        debug!("{}: Request {} timed out", name, id);
+                        let _ = req.response_tx.send(Err(anyhow::anyhow!("Request timed out")));
+                    }
+                }
+
+                if !expired_ids.is_empty() {
+                    debug!("{}: Expired {} requests, {} remaining", name, expired_ids.len(), pending.len());
+                }
+            }
+        }
+    }
+
+    debug!("{}: Reactor task exiting", name);
+}
+
+/// Parse response frame into Payload
+fn parse_response_payload(frame: &HootFrame) -> Result<Payload> {
+    let reader = frame.read_capnp().context("Failed to read capnp")?;
+    let envelope = reader
+        .get_root::<envelope_capnp::envelope::Reader>()
+        .context("Failed to get envelope")?;
+    capnp_envelope_to_payload(envelope).context("Failed to decode payload")
+}
+
+/// ZMQ DEALER client following Lazy Pirate pattern with reactor architecture.
 ///
 /// Key design decisions:
-/// - Socket is created and connected immediately (ZMQ connect is non-blocking)
-/// - Socket is NEVER destroyed - ZMQ handles reconnection automatically
-/// - Requests are retried on timeout (Lazy Pirate pattern)
+/// - Socket owned by background reactor task (no lock contention)
+/// - Requests sent via channel, responses via oneshot
+/// - Retries happen in caller (Lazy Pirate pattern preserved)
 /// - Health tracks if peer is RESPONDING, not if socket is connected
 pub struct HootClient {
     config: ClientConfig,
-    #[allow(dead_code)]
-    context: Context,
-    socket: RwLock<Socket>,
+    cmd_tx: mpsc::Sender<ReactorCommand>,
     pub health: Arc<HealthTracker>,
 }
 
 impl HootClient {
-    /// Create a new client and connect immediately.
+    /// Create a new client and spawn the reactor task.
     ///
     /// ZMQ's connect() is non-blocking - the peer doesn't need to exist yet.
     /// ZMQ will automatically handle reconnection if the peer appears later.
@@ -234,11 +395,21 @@ impl HootClient {
             config.name, config.endpoint
         );
 
+        // Create channel for reactor commands (256 buffer should be plenty)
+        let (cmd_tx, cmd_rx) = mpsc::channel(256);
+        let health = Arc::new(HealthTracker::new());
+
+        // Spawn reactor task (owns the socket)
+        let reactor_health = health.clone();
+        let reactor_name = config.name.clone();
+        tokio::spawn(async move {
+            reactor_task(socket, cmd_rx, reactor_health, reactor_name).await;
+        });
+
         Arc::new(Self {
-            health: Arc::new(HealthTracker::new()),
-            context,
-            socket: RwLock::new(socket),
             config,
+            cmd_tx,
+            health,
         })
     }
 
@@ -253,45 +424,34 @@ impl HootClient {
     }
 
     /// Send a request with traceparent and retries.
+    ///
+    /// Retries happen in the caller (Lazy Pirate pattern). Each retry gets a
+    /// fresh request_id for clean correlation.
     pub async fn request_with_trace(
         &self,
         payload: Payload,
         traceparent: Option<String>,
     ) -> Result<Payload> {
-        let request_id = Uuid::new_v4();
         let timeout = Duration::from_millis(self.config.timeout_ms);
-
-        // Build the HOOT01 frame once
-        let message = payload_to_capnp_envelope(request_id, &payload)
-            .context("Failed to encode payload")?;
-        let body_bytes = capnp::serialize::write_message_to_words(&message);
-
-        let frame = HootFrame {
-            command: Command::Request,
-            content_type: ContentType::CapnProto,
-            request_id,
-            service: self.config.name.clone(),
-            traceparent: traceparent.clone(),
-            body: Bytes::from(body_bytes),
-        };
-
-        let msgs = frames_to_msgs(&frame.to_frames());
-
-        // Lazy Pirate: retry on timeout
-        let mut attempts = 0;
         let max_attempts = self.config.max_retries + 1;
+        let mut attempts = 0;
 
         loop {
             attempts += 1;
+
+            // Fresh request_id for each attempt (clean correlation)
+            let request_id = Uuid::new_v4();
+
+            // Build the HOOT01 frame
+            let frames = self.build_request_frames(request_id, &payload, &traceparent)?;
 
             debug!(
                 "{}: Sending request {} (attempt {}/{})",
                 self.config.name, request_id, attempts, max_attempts
             );
 
-            match self.send_receive(&msgs, request_id, timeout).await {
+            match self.send_single_request(frames, request_id, timeout).await {
                 Ok(response) => {
-                    self.health.record_success().await;
                     return Ok(response);
                 }
                 Err(e) if attempts < max_attempts => {
@@ -299,7 +459,8 @@ impl HootClient {
                         "{}: Request {} attempt {} failed: {}, retrying...",
                         self.config.name, request_id, attempts, e
                     );
-                    // Small delay before retry
+                    self.health.record_failure();
+                    // Small delay before retry with backoff
                     tokio::time::sleep(Duration::from_millis(100 * attempts as u64)).await;
                 }
                 Err(e) => {
@@ -313,139 +474,97 @@ impl HootClient {
         }
     }
 
-    /// Internal send/receive for a single attempt.
-    async fn send_receive(
+    /// Build HOOT01 request frames from a payload.
+    fn build_request_frames(
         &self,
-        msgs: &[Msg],
+        request_id: Uuid,
+        payload: &Payload,
+        traceparent: &Option<String>,
+    ) -> Result<Vec<Bytes>> {
+        let message = payload_to_capnp_envelope(request_id, payload)
+            .context("Failed to encode payload")?;
+        let body_bytes = capnp::serialize::write_message_to_words(&message);
+
+        let frame = HootFrame {
+            command: Command::Request,
+            content_type: ContentType::CapnProto,
+            request_id,
+            service: self.config.name.clone(),
+            traceparent: traceparent.clone(),
+            body: Bytes::from(body_bytes),
+        };
+
+        Ok(frame.to_frames())
+    }
+
+    /// Send a single request to the reactor and wait for response.
+    async fn send_single_request(
+        &self,
+        frames: Vec<Bytes>,
         request_id: Uuid,
         timeout: Duration,
     ) -> Result<Payload> {
-        let socket = self.socket.write().await;
+        let (response_tx, response_rx) = oneshot::channel();
 
-        // Send multipart
-        let send_result =
-            tokio::time::timeout(timeout, socket.send_multipart(msgs.to_vec())).await;
-        match send_result {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(anyhow::anyhow!("Send failed: {}", e)),
-            Err(_) => return Err(anyhow::anyhow!("Send timeout")),
-        }
+        // Send command to reactor
+        self.cmd_tx
+            .send(ReactorCommand::Request {
+                frames,
+                request_id,
+                timeout,
+                response_tx,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Reactor channel closed"))?;
 
-        // Receive with correlation loop
-        let start = Instant::now();
-        loop {
-            let remaining = timeout.saturating_sub(start.elapsed());
-            if remaining.is_zero() {
-                return Err(anyhow::anyhow!("Receive timeout waiting for {}", request_id));
-            }
-
-            let recv_result = tokio::time::timeout(remaining, socket.recv_multipart()).await;
-            let response = match recv_result {
-                Ok(Ok(r)) => r,
-                Ok(Err(e)) => return Err(anyhow::anyhow!("Receive failed: {}", e)),
-                Err(_) => return Err(anyhow::anyhow!("Receive timeout")),
-            };
-
-            // Parse response - convert Vec<Msg> to Vec<Bytes>
-            let response_frames: Vec<Bytes> = response
-                .into_iter()
-                .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
-                .collect();
-
-            let response_frame = match HootFrame::from_frames(&response_frames) {
-                Ok(f) => f,
-                Err(e) => {
-                    // Log frame details on parse failure for debugging
-                    debug!(
-                        "{}: Parse failed - {} frames received, first bytes: {:?}",
-                        self.config.name,
-                        response_frames.len(),
-                        response_frames.first().map(|f| &f[..f.len().min(20)])
-                    );
-                    return Err(anyhow::anyhow!("Failed to parse response frame: {}", e));
-                }
-            };
-
-            // Check correlation
-            if response_frame.request_id != request_id {
-                debug!(
-                    "{}: Discarding response for {} (expected {})",
-                    self.config.name, response_frame.request_id, request_id
-                );
-                continue;
-            }
-
-            // Parse payload
-            let reader = response_frame.read_capnp().context("Failed to read capnp")?;
-            let envelope = reader
-                .get_root::<envelope_capnp::envelope::Reader>()
-                .context("Failed to get envelope")?;
-
-            return capnp_envelope_to_payload(envelope).context("Failed to decode payload");
-        }
+        // Wait for response (reactor handles timeout via deadline)
+        response_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("Reactor dropped response channel"))?
     }
 
     /// Send a heartbeat ping to verify peer is responding.
     ///
     /// This is application-level heartbeating, not ZMQ connection state.
+    /// Uses the same reactor channel as regular requests (no lock contention).
     pub async fn heartbeat(&self) -> Result<()> {
         let frame = HootFrame::heartbeat(&self.config.name);
-        let msgs = frames_to_msgs(&frame.to_frames());
+        let request_id = frame.request_id; // Use the frame's request_id for correlation
+        let frames = frame.to_frames();
         let timeout = Duration::from_secs(5);
 
-        debug!("{}: Acquiring socket lock for heartbeat...", self.config.name);
-        let socket = self.socket.write().await;
-        debug!("{}: Socket lock acquired, sending {} frame heartbeat", self.config.name, msgs.len());
+        debug!("{}: Sending heartbeat {}", self.config.name, request_id);
 
-        // Send
-        match tokio::time::timeout(timeout, socket.send_multipart(msgs)).await {
-            Ok(Ok(())) => {
-                debug!("{}: Heartbeat send completed successfully", self.config.name);
+        let (response_tx, response_rx) = oneshot::channel();
+
+        // Send heartbeat through reactor (same as regular request)
+        self.cmd_tx
+            .send(ReactorCommand::Request {
+                frames,
+                request_id,
+                timeout,
+                response_tx,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Reactor channel closed"))?;
+
+        // Wait for response
+        match response_rx.await {
+            Ok(Ok(_)) => {
+                debug!("{}: Heartbeat {} successful", self.config.name, request_id);
+                Ok(())
             }
-            Ok(Err(e)) => return Err(anyhow::anyhow!("Heartbeat send failed: {}", e)),
-            Err(_) => return Err(anyhow::anyhow!("Heartbeat send timeout")),
+            Ok(Err(e)) => {
+                debug!("{}: Heartbeat {} failed: {}", self.config.name, request_id, e);
+                Err(e)
+            }
+            Err(_) => Err(anyhow::anyhow!("Reactor dropped heartbeat channel")),
         }
+    }
 
-        // Receive
-        debug!("{}: Waiting for heartbeat response...", self.config.name);
-        let response = match tokio::time::timeout(timeout, socket.recv_multipart()).await {
-            Ok(Ok(r)) => {
-                debug!("{}: Received heartbeat response: {} frames", self.config.name, r.len());
-                r
-            }
-            Ok(Err(e)) => return Err(anyhow::anyhow!("Heartbeat receive failed: {}", e)),
-            Err(_) => return Err(anyhow::anyhow!("Heartbeat receive timeout")),
-        };
-
-        // Check for HOOT01 heartbeat response
-        let frames: Vec<Bytes> = response
-            .iter()
-            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
-            .collect();
-
-        debug!(
-            "{}: Heartbeat received {} frames, checking for HOOT01",
-            self.config.name, frames.len()
-        );
-
-        if frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
-            match HootFrame::from_frames(&frames) {
-                Ok(resp) if resp.command == Command::Heartbeat => {
-                    self.health.record_success().await;
-                    Ok(())
-                }
-                Ok(_) => {
-                    // Got different command, still alive
-                    self.health.record_success().await;
-                    Ok(())
-                }
-                Err(e) => Err(anyhow::anyhow!("Parse error: {}", e)),
-            }
-        } else {
-            // Legacy response
-            self.health.record_success().await;
-            Ok(())
-        }
+    /// Gracefully shut down the reactor task.
+    pub async fn shutdown(&self) {
+        let _ = self.cmd_tx.send(ReactorCommand::Shutdown).await;
     }
 
     /// Get config
