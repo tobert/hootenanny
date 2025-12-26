@@ -1,6 +1,6 @@
 //! MCP gateway server implementation
 //!
-//! Uses baton for MCP protocol handling, forwarding tool calls to ZMQ backends.
+//! Uses rmcp for MCP protocol handling, forwarding tool calls to ZMQ backends.
 //! Uses hooteproto's HootClient for connection management with built-in heartbeat.
 //!
 //! Startup is lazy following zguide patterns:
@@ -10,8 +10,12 @@
 
 use anyhow::{Context, Result};
 use axum::{routing::get, Router};
+use rmcp::transport::streamable_http_server::{
+    StreamableHttpServerConfig, StreamableHttpService,
+    session::local::LocalSessionManager,
+};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -110,21 +114,24 @@ pub async fn run(config: ServeConfig) -> Result<()> {
         );
     }
 
-    // Create MCP state with handler using the shared cache
-    let handler = ZmqHandler::with_shared_cache(Arc::clone(&backends), tool_cache);
-    let mcp_state = Arc::new(baton::McpState::new(
-        handler,
-        "holler",
-        env!("CARGO_PKG_VERSION"),
-    ));
-
-    // Spawn session cleanup task
+    // Create cancellation token for graceful shutdown
     let cancel_token = CancellationToken::new();
-    let _cleanup_handle = baton::spawn_cleanup_task(
-        Arc::clone(&mcp_state.sessions),
-        Duration::from_secs(60),
-        Duration::from_secs(300),
-        cancel_token.clone(),
+
+    // Create MCP service using rmcp's StreamableHttpService
+    // The service factory creates a fresh handler for each session
+    let backends_for_factory = Arc::clone(&backends);
+    let cache_for_factory = tool_cache.clone();
+    let service = StreamableHttpService::new(
+        move || Ok(ZmqHandler::with_shared_cache(
+            Arc::clone(&backends_for_factory),
+            cache_for_factory.clone(),
+        )),
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig {
+            cancellation_token: cancel_token.child_token(),
+            stateful_mode: false, // Stateless mode for simpler client compatibility
+            ..Default::default()
+        },
     );
 
     // Health check state
@@ -133,15 +140,14 @@ pub async fn run(config: ServeConfig) -> Result<()> {
         start_time: Instant::now(),
     };
 
-    // Build router - use baton's dual_router for MCP, add health endpoint
-    let mcp_router = baton::dual_router(mcp_state);
-
-    // Health endpoint needs its own router merged in
+    // Build router - nest MCP service at /mcp, add health endpoint
     let health_router = Router::new()
         .route("/health", get(handle_health))
         .with_state(health_state);
 
-    let app = Router::new().nest("/mcp", mcp_router).merge(health_router);
+    let app = Router::new()
+        .nest_service("/mcp", service)
+        .merge(health_router);
 
     // Bind and serve
     let addr = format!("0.0.0.0:{}", config.port);
@@ -151,14 +157,10 @@ pub async fn run(config: ServeConfig) -> Result<()> {
 
     info!("🎺 Holler ready!");
     info!("   MCP (Streamable): POST http://{}/mcp", addr);
-    info!(
-        "   MCP (SSE): GET http://{}/mcp/sse + POST http://{}/mcp/message",
-        addr, addr
-    );
     info!("   Health: GET http://{}/health", addr);
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal(cancel_token))
         .await
         .context("Server error")?;
 
@@ -166,7 +168,7 @@ pub async fn run(config: ServeConfig) -> Result<()> {
     Ok(())
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal(cancel_token: CancellationToken) {
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             info!("Received SIGINT, shutting down...");
@@ -186,5 +188,5 @@ async fn shutdown_signal() {
             info!("Received SIGTERM, shutting down...");
         }
     }
+    cancel_token.cancel();
 }
-
