@@ -17,16 +17,11 @@
 
 use anyhow::{Context as AnyhowContext, Result};
 use bytes::Bytes;
-use cas::ContentStore;
 use hooteproto::{
     capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope, Command, ContentType,
-    HootFrame, Payload, ResponseEnvelope, ToolInfo, PROTOCOL_VERSION,
+    HootFrame, Payload, PROTOCOL_VERSION,
 };
 use hooteproto::request::ToolRequest;
-use hooteproto::responses::{
-    ArtifactInfoResponse, ArtifactListResponse, ArtifactMetadata, CasContentResponse,
-    CasInspectedResponse, CasStoredResponse, ToolResponse, ToolsListResponse,
-};
 use hooteproto::socket_config::create_router_and_bind;
 use rzmq::{Context, Msg, MsgFlags, Socket};
 use std::sync::{Arc, RwLock};
@@ -37,7 +32,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::api::service::EventDualityServer;
-use crate::artifact_store::{self, ArtifactStore as _};
+use crate::artifact_store;
 use crate::cas::FileStore;
 use crate::telemetry;
 use crate::zmq::client_tracker::ClientTracker;
@@ -331,32 +326,12 @@ impl HooteprotoServer {
     }
 
     async fn dispatch(&self, payload: Payload) -> Payload {
-        // Handle administrative messages first
-        match &payload {
-            Payload::Ping => {
-                return Payload::Pong {
-                    worker_id: Uuid::new_v4(),
-                    uptime_secs: self.start_time.elapsed().as_secs(),
-                };
-            }
-            Payload::ToolRequest(ToolRequest::ListTools) => {
-                return self.list_tools();
-            }
-            _ => {}
-        }
-
-        // Intercept tools that HooteprotoServer handles directly
-        // This ensures they work even if dispatch_tool doesn't implement them
-        match &payload {
-            Payload::ToolRequest(ToolRequest::CasStore(req)) => {
-                return self.cas_store(req.data.clone(), Some(req.mime_type.clone())).await
-            }
-            Payload::ToolRequest(ToolRequest::CasGet(req)) => return self.cas_get(&req.hash).await,
-            Payload::ToolRequest(ToolRequest::ArtifactList(req)) => {
-                return self.artifact_list(req.tag.clone(), req.creator.clone()).await
-            }
-            Payload::ToolRequest(ToolRequest::ArtifactGet(req)) => return self.artifact_get(&req.id).await,
-            _ => {}
+        // Handle protocol-level messages
+        if let Payload::Ping = &payload {
+            return Payload::Pong {
+                worker_id: Uuid::new_v4(),
+                uptime_secs: self.start_time.elapsed().as_secs(),
+            };
         }
 
         // Route weave_* payloads to vibeweaver if connected
@@ -372,33 +347,19 @@ impl HooteprotoServer {
             }
         }
 
-        // If we have an EventDualityServer, route through it for full functionality
+        // Route everything else through TypedDispatcher
         if let Some(ref server) = self.event_server {
             return self.dispatch_via_server(server, payload).await;
         }
 
-        // Fallback to standalone mode for basic CAS/artifact operations
-        match payload {
-            Payload::ToolRequest(ToolRequest::CasStore(req)) => self.cas_store(req.data, Some(req.mime_type)).await,
-            Payload::ToolRequest(ToolRequest::CasInspect(req)) => self.cas_inspect(&req.hash).await,
-            Payload::ToolRequest(ToolRequest::CasGet(req)) => self.cas_get(&req.hash).await,
-            Payload::ToolRequest(ToolRequest::ArtifactList(req)) => self.artifact_list(req.tag, req.creator).await,
-            Payload::ToolRequest(ToolRequest::ArtifactGet(req)) => self.artifact_get(&req.id).await,
-
-            other => {
-                warn!(
-                    "Unhandled payload in standalone mode: {:?}",
-                    payload_type_name(&other)
-                );
-                Payload::Error {
-                    code: "not_implemented".to_string(),
-                    message: format!(
-                        "Tool '{}' requires EventDualityServer. Start hootenanny with full services.",
-                        payload_type_name(&other)
-                    ),
-                    details: None,
-                }
-            }
+        // No EventDualityServer configured
+        Payload::Error {
+            code: "no_server".to_string(),
+            message: format!(
+                "Tool '{}' requires EventDualityServer. Start hootenanny with full services.",
+                payload_type_name(&payload)
+            ),
+            details: None,
         }
     }
 
@@ -477,234 +438,6 @@ impl HooteprotoServer {
         }
     }
 
-    async fn cas_store(&self, data: Vec<u8>, mime_type: Option<String>) -> Payload {
-        let mime = mime_type.as_deref().unwrap_or("application/octet-stream");
-        match self.cas.store(&data, mime) {
-            Ok(hash) => Payload::TypedResponse(ResponseEnvelope::success(
-                ToolResponse::CasStored(CasStoredResponse {
-                    hash: hash.to_string(),
-                    size: data.len(),
-                    mime_type: mime.to_string(),
-                }),
-            )),
-            Err(e) => Payload::Error {
-                code: "cas_store_error".to_string(),
-                message: e.to_string(),
-                details: None,
-            },
-        }
-    }
-
-    async fn cas_inspect(&self, hash: &str) -> Payload {
-        let content_hash: cas::ContentHash = match hash.parse() {
-            Ok(h) => h,
-            Err(e) => {
-                return Payload::Error {
-                    code: "invalid_hash".to_string(),
-                    message: format!("{}", e),
-                    details: None,
-                }
-            }
-        };
-
-        match self.cas.retrieve(&content_hash) {
-            Ok(Some(data)) => {
-                let preview = if data.len() <= 100 {
-                    String::from_utf8_lossy(&data).to_string()
-                } else {
-                    format!(
-                        "{}... ({} bytes total)",
-                        String::from_utf8_lossy(&data[..100]),
-                        data.len()
-                    )
-                };
-
-                Payload::TypedResponse(ResponseEnvelope::success(
-                    ToolResponse::CasInspected(CasInspectedResponse {
-                        hash: hash.to_string(),
-                        exists: true,
-                        size: Some(data.len()),
-                        preview: Some(preview),
-                    }),
-                ))
-            }
-            Ok(None) => Payload::TypedResponse(ResponseEnvelope::success(
-                ToolResponse::CasInspected(CasInspectedResponse {
-                    hash: hash.to_string(),
-                    exists: false,
-                    size: None,
-                    preview: None,
-                }),
-            )),
-            Err(e) => Payload::Error {
-                code: "cas_inspect_error".to_string(),
-                message: e.to_string(),
-                details: None,
-            },
-        }
-    }
-
-    async fn cas_get(&self, hash: &str) -> Payload {
-        let content_hash: cas::ContentHash = match hash.parse() {
-            Ok(h) => h,
-            Err(e) => {
-                return Payload::Error {
-                    code: "invalid_hash".to_string(),
-                    message: format!("{}", e),
-                    details: None,
-                }
-            }
-        };
-
-        match self.cas.retrieve(&content_hash) {
-            Ok(Some(data)) => Payload::TypedResponse(ResponseEnvelope::success(
-                ToolResponse::CasContent(CasContentResponse {
-                    hash: hash.to_string(),
-                    size: data.len(),
-                    data,
-                }),
-            )),
-            Ok(None) => Payload::Error {
-                code: "not_found".to_string(),
-                message: format!("Hash not found: {}", hash),
-                details: None,
-            },
-            Err(e) => Payload::Error {
-                code: "cas_get_error".to_string(),
-                message: e.to_string(),
-                details: None,
-            },
-        }
-    }
-
-    async fn artifact_list(&self, tag: Option<String>, creator: Option<String>) -> Payload {
-        let store = self.artifacts.read().unwrap();
-        match store.all() {
-            Ok(all_artifacts) => {
-                let artifacts: Vec<_> = all_artifacts
-                    .into_iter()
-                    .filter(|a| {
-                        let tag_match =
-                            tag.as_ref().is_none_or(|t| a.tags.iter().any(|at| at == t));
-                        let creator_match =
-                            creator.as_ref().is_none_or(|c| a.creator.as_str() == c);
-                        tag_match && creator_match
-                    })
-                    .map(artifact_to_info)
-                    .collect();
-                let count = artifacts.len();
-
-                Payload::TypedResponse(ResponseEnvelope::success(
-                    ToolResponse::ArtifactList(ArtifactListResponse { artifacts, count }),
-                ))
-            }
-            Err(e) => Payload::Error {
-                code: "artifact_list_error".to_string(),
-                message: e.to_string(),
-                details: None,
-            },
-        }
-    }
-
-    async fn artifact_get(&self, id: &str) -> Payload {
-        let store = self.artifacts.read().unwrap();
-        match store.get(id) {
-            Ok(Some(artifact)) => Payload::TypedResponse(ResponseEnvelope::success(
-                ToolResponse::ArtifactInfo(artifact_to_info(artifact)),
-            )),
-            Ok(None) => Payload::Error {
-                code: "not_found".to_string(),
-                message: format!("Artifact not found: {}", id),
-                details: None,
-            },
-            Err(e) => Payload::Error {
-                code: "artifact_get_error".to_string(),
-                message: e.to_string(),
-                details: None,
-            },
-        }
-    }
-
-    fn list_tools(&self) -> Payload {
-        // Start with tools from dispatch if available
-        let mut tools = if self.event_server.is_some() {
-            crate::api::tools_registry::list_tools()
-        } else {
-            vec![]
-        };
-
-        // Define basic tools that HooteprotoServer handles directly
-        let basic_tools = vec![
-            ToolInfo {
-                name: "cas_store".to_string(),
-                description: "Store content in CAS".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "data": {"type": "string", "description": "Base64 encoded data"},
-                        "mime_type": {"type": "string"}
-                    },
-                    "required": ["data"]
-                }),
-            },
-            ToolInfo {
-                name: "cas_inspect".to_string(),
-                description: "Inspect content in CAS".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "hash": {"type": "string"}
-                    },
-                    "required": ["hash"]
-                }),
-            },
-            ToolInfo {
-                name: "cas_get".to_string(),
-                description: "Get content from CAS".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "hash": {"type": "string"}
-                    },
-                    "required": ["hash"]
-                }),
-            },
-            ToolInfo {
-                name: "artifact_list".to_string(),
-                description: "List artifacts".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "tag": {"type": "string"},
-                        "creator": {"type": "string"}
-                    }
-                }),
-            },
-            ToolInfo {
-                name: "artifact_get".to_string(),
-                description: "Get artifact by ID".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "string"}
-                    },
-                    "required": ["id"]
-                }),
-            },
-        ];
-
-        // Merge basic tools, avoiding duplicates (prefer dispatch schemas if present)
-        for tool in basic_tools {
-            if !tools.iter().any(|t| t.name == tool.name) {
-                tools.push(tool);
-            }
-        }
-
-        let count = tools.len();
-        Payload::TypedResponse(ResponseEnvelope::success(
-            ToolResponse::ToolsList(ToolsListResponse { tools, count }),
-        ))
-    }
 }
 
 /// Get a human-readable name for a payload type (for span naming)
@@ -729,75 +462,6 @@ fn payload_type_name(payload: &Payload) -> &'static str {
         Payload::TimelineAddMarker { .. } => "timeline_add_marker",
         Payload::TimelineEvent { .. } => "timeline_event",
     }
-}
-
-/// Convert an artifact to ArtifactInfoResponse
-fn artifact_to_info(artifact: artifact_store::Artifact) -> ArtifactInfoResponse {
-    use hooteproto::responses::MidiMetadata;
-
-    // Extract metadata fields from JSON Value
-    let metadata = if artifact.metadata.is_null() {
-        None
-    } else {
-        // Extract MIDI info if present
-        let midi_info = artifact.metadata.get("midi_info").and_then(|m| {
-            Some(MidiMetadata {
-                tracks: m.get("tracks")?.as_u64()? as u16,
-                ticks_per_quarter: m.get("ticks_per_quarter")?.as_u64()? as u16,
-                duration_ticks: m.get("duration_ticks")?.as_u64()?,
-            })
-        });
-
-        Some(ArtifactMetadata {
-            duration_seconds: artifact.metadata.get("duration_seconds").and_then(|v| v.as_f64()),
-            sample_rate: artifact.metadata.get("sample_rate").and_then(|v| v.as_u64()).map(|v| v as u32),
-            channels: artifact.metadata.get("channels").and_then(|v| v.as_u64()).map(|v| v as u8),
-            midi_info,
-        })
-    };
-
-    // Try to get mime_type from metadata, fall back to detecting from tags
-    let mime_type = artifact.metadata
-        .get("mime_type")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            // Infer from tags
-            if artifact.tags.iter().any(|t| t.contains("midi")) {
-                "audio/midi".to_string()
-            } else if artifact.tags.iter().any(|t| t.contains("wav") || t.contains("audio")) {
-                "audio/wav".to_string()
-            } else {
-                "application/octet-stream".to_string()
-            }
-        });
-
-    ArtifactInfoResponse {
-        id: artifact.id.to_string(),
-        content_hash: artifact.content_hash.to_string(),
-        mime_type,
-        tags: artifact.tags,
-        creator: artifact.creator,
-        created_at: artifact.created_at.timestamp() as u64,
-        parent_id: artifact.parent_id.map(|id| id.to_string()),
-        variation_set_id: artifact.variation_set_id.map(|id| id.to_string()),
-        metadata,
-    }
-}
-
-/// Convert a hooteproto Payload to a tool name and JSON arguments
-fn payload_to_tool_args(payload: Payload) -> anyhow::Result<(String, serde_json::Value)> {
-    // Serialize the payload to JSON, then extract the tool-specific fields
-    let json = serde_json::to_value(&payload)?;
-    let tool_name = payload_type_name(&payload).to_string();
-
-    // The payload is tagged, so we need to extract the inner object
-    // After serialization: {"type":"cas_store","data":"...","mime_type":"..."}
-    // We want just: {"data":"...","mime_type":"..."}
-    let mut args = json.as_object().cloned().unwrap_or_default();
-    args.remove("type"); // Remove the discriminator tag
-
-    Ok((tool_name, serde_json::Value::Object(args)))
 }
 
 /// Convert a Vec<Bytes> to Vec<Msg> for rzmq multipart

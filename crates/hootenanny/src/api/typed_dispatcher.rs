@@ -252,21 +252,39 @@ impl TypedDispatcher {
         }
     }
 
-    /// Dispatch async tools - returns error for tools not yet migrated
+    /// Dispatch async tools - handles short/medium async operations
     ///
-    /// Async tools must be implemented via dispatch_sync or native API modules.
-    /// This function returns an error for tools that haven't been migrated yet.
+    /// AsyncShort tools (CAS, artifact I/O) execute and wait for completion.
     async fn dispatch_async(&self, request: ToolRequest) -> ResponseEnvelope {
-        let tool_name = request.name();
-        tracing::warn!(
-            tool = tool_name,
-            "Async tool not yet implemented in typed dispatcher"
-        );
-        ResponseEnvelope::error(ToolError::internal(format!(
-            "Tool '{}' not yet implemented in typed dispatcher. \
-             Use native API or add typed implementation.",
-            tool_name
-        )))
+        match request {
+            ToolRequest::CasStore(req) => {
+                match self.server.cas_store_typed(&req.data, &req.mime_type).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::CasStored(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::CasGet(req) => match self.server.cas_get_typed(&req.hash).await {
+                Ok(resp) => ResponseEnvelope::success(ToolResponse::CasContent(resp)),
+                Err(e) => ResponseEnvelope::error(e),
+            },
+            ToolRequest::CasStats => match self.server.cas_stats_typed().await {
+                Ok(resp) => ResponseEnvelope::success(ToolResponse::CasStats(resp)),
+                Err(e) => ResponseEnvelope::error(e),
+            },
+
+            other => {
+                let tool_name = other.name();
+                tracing::warn!(
+                    tool = tool_name,
+                    "Async tool not yet implemented in typed dispatcher"
+                );
+                ResponseEnvelope::error(ToolError::internal(format!(
+                    "Tool '{}' not yet implemented in typed dispatcher. \
+                     Use native API or add typed implementation.",
+                    tool_name
+                )))
+            }
+        }
     }
 
     /// Dispatch long-running async tools - return job_id immediately

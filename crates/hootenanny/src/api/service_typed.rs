@@ -752,7 +752,15 @@ impl EventDualityServer {
                 ),
                 (
                     "socket_dir".to_string(),
-                    ConfigValue::String(config.infra.paths.socket_dir.display().to_string()),
+                    ConfigValue::String(
+                        config
+                            .infra
+                            .paths
+                            .socket_dir
+                            .as_ref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|| "<not configured>".to_string()),
+                    ),
                 ),
             ])),
             (Some("paths"), Some("cas_dir")) => {
@@ -780,6 +788,51 @@ impl EventDualityServer {
     // CAS - Typed (Phase 1)
     // =========================================================================
 
+    /// Store content in CAS - typed response
+    pub async fn cas_store_typed(
+        &self,
+        data: &[u8],
+        mime_type: &str,
+    ) -> Result<hooteproto::responses::CasStoredResponse, ToolError> {
+        let hash = self
+            .local_models
+            .store_cas_content(data, mime_type)
+            .await
+            .map_err(|e| ToolError::internal(format!("Failed to store in CAS: {}", e)))?;
+
+        Ok(hooteproto::responses::CasStoredResponse {
+            hash: hash.to_string(),
+            size: data.len(),
+            mime_type: mime_type.to_string(),
+        })
+    }
+
+    /// Get content from CAS - typed response
+    pub async fn cas_get_typed(
+        &self,
+        hash: &str,
+    ) -> Result<hooteproto::responses::CasContentResponse, ToolError> {
+        let cas_ref = self
+            .local_models
+            .inspect_cas_content(hash)
+            .await
+            .map_err(|e| ToolError::internal(format!("Failed to get CAS content: {}", e)))?;
+
+        let local_path = cas_ref
+            .local_path
+            .ok_or_else(|| ToolError::not_found("cas_content", hash))?;
+
+        let data = tokio::fs::read(&local_path)
+            .await
+            .map_err(|e| ToolError::internal(format!("Failed to read CAS file: {}", e)))?;
+
+        Ok(hooteproto::responses::CasContentResponse {
+            hash: hash.to_string(),
+            size: data.len(),
+            data,
+        })
+    }
+
     /// Inspect CAS content - typed response
     pub async fn cas_inspect_typed(
         &self,
@@ -796,6 +849,39 @@ impl EventDualityServer {
             exists: true,
             size: Some(cas_ref.size_bytes as usize),
             preview: None, // Could add preview logic if needed
+        })
+    }
+
+    /// Get CAS storage statistics - typed response
+    pub async fn cas_stats_typed(&self) -> Result<hooteproto::responses::CasStatsResponse, ToolError> {
+        let cas_dir = self.local_models.cas_base_path();
+        let metadata_dir = cas_dir.join("metadata");
+
+        let mut total_items = 0u64;
+        let mut total_bytes = 0u64;
+
+        if metadata_dir.exists() {
+            for entry in walkdir::WalkDir::new(&metadata_dir)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.file_type().is_file() && e.path().extension().is_some_and(|ext| ext == "json")
+                })
+            {
+                if let Ok(contents) = std::fs::read_to_string(entry.path()) {
+                    if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&contents) {
+                        let size = meta.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+                        total_items += 1;
+                        total_bytes += size;
+                    }
+                }
+            }
+        }
+
+        Ok(hooteproto::responses::CasStatsResponse {
+            total_items,
+            total_bytes,
+            cas_dir: cas_dir.display().to_string(),
         })
     }
 
