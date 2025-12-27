@@ -1,14 +1,23 @@
 //! MCP Handler implementation for ZMQ backend forwarding
-//! 
-//! Implements baton::Handler to bridge MCP protocol to ZMQ backends. 
-//! Tools are dynamically discovered from backends and calls are routed based on prefix. 
+//!
+//! Implements rmcp::ServerHandler to bridge MCP protocol to ZMQ backends.
+//! Tools are dynamically discovered from backends and calls are routed based on prefix.
 //! Tool lists are cached and refreshed when backends recover from failures.
 
-use async_trait::async_trait;
-use baton::{CallToolResult, Content, ErrorData, Handler, Implementation, Tool, ToolSchema};
 use hooteproto::{Payload, ToolInfo};
 use hooteproto::request::ToolRequest;
-use serde_json::Value;
+use hooteproto::responses::ToolResponse;
+use hooteproto::envelope::ResponseEnvelope;
+use rmcp::{
+    ErrorData as McpError,
+    ServerHandler,
+    model::{
+        CallToolRequestParam, CallToolResult, Content, Implementation,
+        ListToolsResult, PaginatedRequestParam, ServerCapabilities, ServerInfo, Tool,
+    },
+    service::RequestContext,
+    RoleServer,
+};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -18,8 +27,7 @@ use crate::dispatch;
 
 /// Shared tool cache for dynamic refresh across handler instances.
 ///
-/// This allows multiple ZmqHandler instances (one for initial refresh,
-/// one owned by baton's McpState) to share the same cached tool list.
+/// This allows multiple ZmqHandler instances to share the same cached tool list.
 pub type ToolCache = Arc<RwLock<Vec<Tool>>>;
 
 /// Create a new empty tool cache.
@@ -46,6 +54,7 @@ pub async fn refresh_tools_into(cache: &ToolCache, backends: &BackendPool) -> us
 ///
 /// Maintains a cached list of tools that can be refreshed dynamically
 /// when backends recover from failure (Dead → Ready transition).
+#[derive(Clone)]
 pub struct ZmqHandler {
     backends: Arc<BackendPool>,
     /// Cached tool list - shared across handler instances
@@ -85,97 +94,96 @@ impl ZmqHandler {
     }
 }
 
-#[async_trait]
-impl Handler for ZmqHandler {
-    fn tools(&self) -> Vec<Tool> {
-        // Return cached tools synchronously.
-        //
-        // The cache is populated:
-        // 1. On server startup via refresh_tools()
-        // 2. When backend recovers from Dead → Ready
-        //
-        // This avoids the blocking spawn hack and provides consistent tool lists.
-        let cached_tools = Arc::clone(&self.cached_tools);
-
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            std::thread::spawn(move || handle.block_on(async { cached_tools.read().await.clone() }))
-                .join()
-                .unwrap_or_default()
-        } else {
-            vec![]
+impl ServerHandler for ZmqHandler {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo {
+            protocol_version: Default::default(),
+            capabilities: ServerCapabilities::builder()
+                .enable_tools()
+                .build(),
+            server_info: Implementation::from_build_env(),
+            instructions: Some("Holler MCP gateway - forwards tool calls to hootenanny ZMQ backends".to_string()),
         }
     }
 
-    async fn call_tool(&self, name: &str, arguments: Value) -> Result<CallToolResult, ErrorData> {
-        self.call_tool_with_context(name, arguments, baton::ToolContext {
-            session_id: String::new(),
-            progress_token: None,
-            progress_sender: None,
-            sampler: None,
-            logger: baton::transport::McpLogger::new(Arc::new(baton::InMemorySessionStore::new()))
-        }).await
-    }
-
-    async fn call_tool_with_context(
+    fn list_tools(
         &self,
-        name: &str,
-        arguments: Value,
-        context: baton::ToolContext,
-    ) -> Result<CallToolResult, ErrorData> {
-        info!(tool = %name, session = %context.session_id, "Tool call via ZMQ");
-
-        let backend = match self.backends.route_tool(name) {
-            Some(b) => b,
-            None => {
-                return Err(ErrorData::invalid_params(format!(
-                    "No backend available for tool: {}",
-                    name
-                )));
-            }
-        };
-
-        // Convert JSON args to typed Payload (JSON boundary is here in holler)
-        let payload = match dispatch::json_to_payload(name, arguments) {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(ErrorData::invalid_params(format!(
-                    "Failed to parse arguments for {}: {}",
-                    name, e
-                )));
-            }
-        };
-
-        // TODO: Extract traceparent from context if available
-        match backend.request(payload).await {
-            Ok(Payload::TypedResponse(envelope)) => {
-                let result = envelope.to_json();
-                let text = serde_json::to_string_pretty(&result).unwrap_or_default();
-                Ok(CallToolResult::success(vec![Content::text(text)]))
-            }
-            Ok(Payload::Error { code, message, details }) => {
-                let error_text = if let Some(d) = details {
-                    format!(
-                        "{}: {}
-{}",
-                        code,
-                        message,
-                        serde_json::to_string_pretty(&d).unwrap_or_default()
-                    )
-                } else {
-                    format!("{}: {}", code, message)
-                };
-                Ok(CallToolResult::error(error_text))
-            }
-            Ok(other) => Err(ErrorData::internal_error(format!(
-                "Unexpected response: {:?}",
-                other
-            ))),
-            Err(e) => Err(ErrorData::internal_error(format!("Backend error: {}", e))),
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
+        async move {
+            let tools = self.cached_tools.read().await.clone();
+            Ok(ListToolsResult {
+                tools,
+                next_cursor: None,
+                meta: None,
+            })
         }
     }
 
-    fn server_info(&self) -> Implementation {
-        Implementation::new("holler", env!("CARGO_PKG_VERSION"))
+    fn call_tool(
+        &self,
+        request: CallToolRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
+        async move {
+            let name = &request.name;
+            let arguments = request.arguments
+                .map(serde_json::Value::Object)
+                .unwrap_or(serde_json::Value::Null);
+
+            info!(tool = %name, "Tool call via ZMQ");
+
+            let backend = match self.backends.route_tool(name) {
+                Some(b) => b,
+                None => {
+                    return Err(McpError::invalid_params(
+                        format!("No backend available for tool: {}", name),
+                        None,
+                    ));
+                }
+            };
+
+            // Convert JSON args to typed Payload (JSON boundary is here in holler)
+            let payload = match dispatch::json_to_payload(name, arguments) {
+                Ok(p) => p,
+                Err(e) => {
+                    return Err(McpError::invalid_params(
+                        format!("Failed to parse arguments for {}: {}", name, e),
+                        None,
+                    ));
+                }
+            };
+
+            match backend.request(payload).await {
+                Ok(Payload::TypedResponse(envelope)) => {
+                    let result = envelope.to_json();
+                    let text = serde_json::to_string_pretty(&result).unwrap_or_default();
+                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                }
+                Ok(Payload::Error { code, message, details }) => {
+                    let error_text = if let Some(d) = details {
+                        format!(
+                            "{}: {}\n{}",
+                            code,
+                            message,
+                            serde_json::to_string_pretty(&d).unwrap_or_default()
+                        )
+                    } else {
+                        format!("{}: {}", code, message)
+                    };
+                    Ok(CallToolResult::error(vec![Content::text(error_text)]))
+                }
+                Ok(other) => Err(McpError::internal_error(
+                    format!("Unexpected response: {:?}", other),
+                    None,
+                )),
+                Err(e) => Err(McpError::internal_error(
+                    format!("Backend error: {}", e),
+                    None,
+                )),
+            }
+        }
     }
 }
 
@@ -186,12 +194,16 @@ async fn collect_tools_async(backends: &BackendPool) -> Vec<Tool> {
     // Query hootenanny for all tools (it proxies to vibeweaver and chaosgarden)
     if let Some(ref backend) = backends.hootenanny {
         match backend.request(Payload::ToolRequest(ToolRequest::ListTools)).await {
-            Ok(Payload::ToolList { tools }) => {
-                debug!("Got {} tools from hootenanny", tools.len());
-                all_tools.extend(tools.into_iter().map(tool_info_to_baton));
+            Ok(Payload::TypedResponse(ResponseEnvelope::Success { response, .. })) => {
+                if let ToolResponse::ToolsList(list) = response {
+                    debug!("Got {} tools from hootenanny", list.tools.len());
+                    all_tools.extend(list.tools.into_iter().map(tool_info_to_rmcp));
+                } else {
+                    debug!("hootenanny returned non-ToolsList response: {:?}", response);
+                }
             }
             Ok(other) => {
-                debug!("hootenanny returned non-tool response to ListTools: {:?}", other);
+                debug!("hootenanny returned unexpected response to ListTools: {:?}", other);
             }
             Err(e) => {
                 warn!("Failed to get tools from hootenanny: {}", e);
@@ -202,8 +214,11 @@ async fn collect_tools_async(backends: &BackendPool) -> Vec<Tool> {
     all_tools
 }
 
-/// Convert hooteproto ToolInfo to baton Tool.
-fn tool_info_to_baton(info: ToolInfo) -> Tool {
-    Tool::new(&info.name, &info.description)
-        .with_input_schema(ToolSchema::from_value(info.input_schema))
+/// Convert hooteproto ToolInfo to rmcp Tool.
+fn tool_info_to_rmcp(info: ToolInfo) -> Tool {
+    // rmcp Tool::new takes (name, description, input_schema)
+    let schema = info.input_schema.as_object()
+        .cloned()
+        .unwrap_or_default();
+    Tool::new(info.name, info.description, Arc::new(schema))
 }

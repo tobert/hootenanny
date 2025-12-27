@@ -100,6 +100,20 @@ pub async fn run(config: ServeConfig) -> Result<()> {
     // Spawn health task for hootenanny with connect callback
     backends.spawn_health_task(shutdown_tx.subscribe(), Some(on_connected));
 
+    // Also do an immediate tool refresh (in case backend is already up)
+    {
+        let cache = tool_cache.clone();
+        let backends = Arc::clone(&backends);
+        tokio::spawn(async move {
+            // Small delay to let ZMQ connection establish
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let count = refresh_tools_into(&cache, &backends).await;
+            if count > 0 {
+                info!("🔧 Initial tool refresh: {} tools loaded", count);
+            }
+        });
+    }
+
     // Spawn ZMQ SUB subscriber for hootenanny broadcasts
     if let Some(ref hootenanny_pub) = config.hootenanny_pub {
         info!(

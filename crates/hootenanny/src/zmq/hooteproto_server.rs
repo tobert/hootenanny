@@ -25,7 +25,7 @@ use hooteproto::{
 use hooteproto::request::ToolRequest;
 use hooteproto::responses::{
     ArtifactInfoResponse, ArtifactListResponse, ArtifactMetadata, CasContentResponse,
-    CasInspectedResponse, CasStoredResponse, ToolResponse,
+    CasInspectedResponse, CasStoredResponse, ToolResponse, ToolsListResponse,
 };
 use hooteproto::socket_config::create_router_and_bind;
 use rzmq::{Context, Msg, MsgFlags, Socket};
@@ -700,7 +700,10 @@ impl HooteprotoServer {
             }
         }
 
-        Payload::ToolList { tools }
+        let count = tools.len();
+        Payload::TypedResponse(ResponseEnvelope::success(
+            ToolResponse::ToolsList(ToolsListResponse { tools, count }),
+        ))
     }
 }
 
