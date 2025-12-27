@@ -123,7 +123,13 @@ pub mod timing;
 pub mod client;
 
 #[cfg(feature = "client")]
+pub mod lazy_pirate;
+
+#[cfg(feature = "client")]
 pub use client::{ClientConfig, ConnectionState, HealthTracker, HootClient, spawn_health_task};
+
+#[cfg(feature = "client")]
+pub use lazy_pirate::{AttemptResult, LazyPirateClient, LazyPirateConfig};
 
 pub use conversion::{
     capnp_envelope_to_payload, envelope_to_payload, payload_to_capnp_envelope,

@@ -7,7 +7,7 @@ license = "MIT"
 
 [features]
 default = []
-client = ["rzmq", "tokio", "tracing"]
+client = ["rzmq", "tokio", "tracing", "async-trait"]
 
 [dependencies]
 anyhow = "1.0"
@@ -23,6 +23,7 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Optional dependencies for client feature
+async-trait = { version = "0.1", optional = true }
 rzmq = { version = "0.5", features = ["ipc"], optional = true }
 tokio = { version = "1", features = ["sync", "time", "rt"], optional = true }
 tracing = { version = "0.1", optional = true }
