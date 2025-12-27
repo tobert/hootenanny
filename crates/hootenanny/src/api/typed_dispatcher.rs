@@ -14,7 +14,7 @@
 use crate::api::service::EventDualityServer;
 use hooteproto::{
     envelope::ResponseEnvelope, request::ToolRequest, responses::ToolResponse, timing::ToolTiming,
-    ToolError,
+    Payload, ToolError,
 };
 use std::sync::Arc;
 
@@ -38,9 +38,8 @@ impl TypedDispatcher {
         tracing::debug!(tool = name, ?timing, "Dispatching typed request");
 
         match timing {
-            ToolTiming::Sync => self.dispatch_sync(request).await,
+            // All short/medium operations go through dispatch_async
             ToolTiming::AsyncShort | ToolTiming::AsyncMedium => {
-                // For now, execute directly. Job creation comes later.
                 self.dispatch_async(request).await
             }
             ToolTiming::AsyncLong => {
@@ -51,8 +50,8 @@ impl TypedDispatcher {
         }
     }
 
-    /// Dispatch synchronous tools - immediate execution, no job
-    async fn dispatch_sync(&self, request: ToolRequest) -> ResponseEnvelope {
+    /// Dispatch all tools - unified handler for all timing classes except FireAndForget/AsyncLong
+    async fn dispatch_async(&self, request: ToolRequest) -> ResponseEnvelope {
         match request {
             // === ABC Notation ===
             ToolRequest::AbcParse(req) => match self.server.abc_parse_typed(&req.abc).await {
@@ -96,7 +95,7 @@ impl TypedDispatcher {
                 }
             }
 
-            // === Garden Status/Query ===
+            // === Garden Status/Query (ZMQ to chaosgarden) ===
             ToolRequest::GardenStatus => match self.server.garden_status_typed().await {
                 Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenStatus(resp)),
                 Err(e) => ResponseEnvelope::error(e),
@@ -111,8 +110,18 @@ impl TypedDispatcher {
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
+            ToolRequest::GardenQuery(req) => {
+                match self
+                    .server
+                    .garden_query_typed(&req.query, req.variables.as_ref())
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenQueryResult(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
 
-            // === Jobs (status queries are sync) ===
+            // === Jobs ===
             ToolRequest::JobStatus(req) => match self.server.job_status_typed(&req.job_id).await {
                 Ok(resp) => ResponseEnvelope::success(ToolResponse::JobStatus(resp)),
                 Err(e) => ResponseEnvelope::error(e),
@@ -143,6 +152,20 @@ impl TypedDispatcher {
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
+            ToolRequest::CasStore(req) => {
+                match self.server.cas_store_typed(&req.data, &req.mime_type).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::CasStored(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::CasGet(req) => match self.server.cas_get_typed(&req.hash).await {
+                Ok(resp) => ResponseEnvelope::success(ToolResponse::CasContent(resp)),
+                Err(e) => ResponseEnvelope::error(e),
+            },
+            ToolRequest::CasStats => match self.server.cas_stats_typed().await {
+                Ok(resp) => ResponseEnvelope::success(ToolResponse::CasStats(resp)),
+                Err(e) => ResponseEnvelope::error(e),
+            },
 
             // === Artifacts ===
             ToolRequest::ArtifactGet(req) => {
@@ -206,18 +229,6 @@ impl TypedDispatcher {
                 }
             }
 
-            // === Garden Query ===
-            ToolRequest::GardenQuery(req) => {
-                match self
-                    .server
-                    .garden_query_typed(&req.query, req.variables.as_ref())
-                    .await
-                {
-                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenQueryResult(resp)),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
-
             // === Orpheus Classify ===
             ToolRequest::OrpheusClassify(req) => {
                 match self.server.orpheus_classify_typed(&req.midi_hash).await {
@@ -225,6 +236,12 @@ impl TypedDispatcher {
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
+
+            // === Vibeweaver (Python kernel proxy) ===
+            ToolRequest::WeaveEval(_)
+            | ToolRequest::WeaveSession
+            | ToolRequest::WeaveReset(_)
+            | ToolRequest::WeaveHelp(_) => self.dispatch_vibeweaver(request).await,
 
             // === Admin ===
             ToolRequest::Ping => ResponseEnvelope::ack("pong"),
@@ -238,50 +255,56 @@ impl TypedDispatcher {
                 }))
             }
 
-            // Fallback for tools that should be sync but aren't implemented yet
+            // Fallback for tools not yet implemented
             other => {
+                let tool_name = other.name();
                 tracing::warn!(
-                    tool = other.name(),
-                    "Sync tool not yet implemented in typed dispatcher"
+                    tool = tool_name,
+                    "Tool not yet implemented in typed dispatcher"
                 );
                 ResponseEnvelope::error(ToolError::internal(format!(
-                    "Tool {} not yet implemented in typed dispatcher",
-                    other.name()
+                    "Tool '{}' not yet implemented in typed dispatcher",
+                    tool_name
                 )))
             }
         }
     }
 
-    /// Dispatch async tools - handles short/medium async operations
-    ///
-    /// AsyncShort tools (CAS, artifact I/O) execute and wait for completion.
-    async fn dispatch_async(&self, request: ToolRequest) -> ResponseEnvelope {
-        match request {
-            ToolRequest::CasStore(req) => {
-                match self.server.cas_store_typed(&req.data, &req.mime_type).await {
-                    Ok(resp) => ResponseEnvelope::success(ToolResponse::CasStored(resp)),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
+    /// Dispatch vibeweaver tools - proxy to Python kernel
+    async fn dispatch_vibeweaver(&self, request: ToolRequest) -> ResponseEnvelope {
+        let vibeweaver = match &self.server.vibeweaver {
+            Some(v) => v,
+            None => {
+                return ResponseEnvelope::error(ToolError::internal(
+                    "Python kernel requires vibeweaver connection. \
+                     Configure bootstrap.connections.vibeweaver in config.",
+                ));
             }
-            ToolRequest::CasGet(req) => match self.server.cas_get_typed(&req.hash).await {
-                Ok(resp) => ResponseEnvelope::success(ToolResponse::CasContent(resp)),
-                Err(e) => ResponseEnvelope::error(e),
-            },
-            ToolRequest::CasStats => match self.server.cas_stats_typed().await {
-                Ok(resp) => ResponseEnvelope::success(ToolResponse::CasStats(resp)),
-                Err(e) => ResponseEnvelope::error(e),
-            },
+        };
 
-            other => {
-                let tool_name = other.name();
-                tracing::warn!(
-                    tool = tool_name,
-                    "Async tool not yet implemented in typed dispatcher"
-                );
+        let tool_name = request.name();
+        tracing::debug!(tool = tool_name, "Proxying to vibeweaver");
+
+        // Convert to Payload for ZMQ transport
+        let payload = Payload::ToolRequest(request);
+
+        match vibeweaver.request(payload).await {
+            Ok(Payload::TypedResponse(envelope)) => {
+                // Pass through the envelope from vibeweaver
+                envelope
+            }
+            Ok(Payload::Error { code, message, .. }) => {
+                ResponseEnvelope::error(ToolError::internal(format!("{}: {}", code, message)))
+            }
+            Ok(other) => ResponseEnvelope::error(ToolError::internal(format!(
+                "Unexpected response from vibeweaver: {:?}",
+                std::mem::discriminant(&other)
+            ))),
+            Err(e) => {
+                tracing::warn!(tool = tool_name, error = %e, "Vibeweaver proxy error");
                 ResponseEnvelope::error(ToolError::internal(format!(
-                    "Tool '{}' not yet implemented in typed dispatcher. \
-                     Use native API or add typed implementation.",
-                    tool_name
+                    "Vibeweaver proxy error: {}",
+                    e
                 )))
             }
         }
@@ -449,13 +472,13 @@ mod tests {
         let parse = ToolRequest::AbcParse(AbcParseRequest {
             abc: "X:1\nT:Test\nK:C\nCDEF".to_string(),
         });
-        assert_eq!(parse.timing(), ToolTiming::Sync);
+        assert_eq!(parse.timing(), ToolTiming::AsyncShort);
 
         let config = ToolRequest::ConfigGet(ConfigGetRequest {
             section: None,
             key: None,
         });
-        assert_eq!(config.timing(), ToolTiming::Sync);
+        assert_eq!(config.timing(), ToolTiming::AsyncShort);
 
         let play = ToolRequest::GardenPlay;
         assert_eq!(play.timing(), ToolTiming::FireAndForget);

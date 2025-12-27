@@ -2,14 +2,12 @@
 //!
 //! This module defines how tools should be dispatched based on their
 //! execution characteristics. The dispatch layer uses this to decide:
-//! - Whether to create a job or return immediately
 //! - What timeout to use for gateway polling
 //! - Whether to return job_id to client for long operations
 //!
 //! # Categories
 //!
-//! - **Sync**: Pure compute or in-memory queries. No job created.
-//! - **AsyncShort**: IO-bound, moderate timeouts. Gateway polls internally.
+//! - **AsyncShort**: Fast operations or IO-bound. Gateway polls with ~30s timeout.
 //! - **AsyncMedium**: GPU inference, ~2 minute timeout. Gateway polls internally.
 //! - **AsyncLong**: Long-running (10+ minutes). Gateway returns job_id.
 //! - **FireAndForget**: Control commands. Returns ack, errors go to logs.
@@ -21,11 +19,7 @@ use std::time::Duration;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolTiming {
-    /// Pure compute or in-memory query.
-    /// No job created, immediate return.
-    Sync,
-
-    /// IO-bound operation (file read/write).
+    /// Fast operations or IO-bound (file read/write, ZMQ calls).
     /// Job created, gateway polls with ~30s timeout.
     AsyncShort,
 
@@ -46,10 +40,9 @@ pub enum ToolTiming {
 
 impl ToolTiming {
     /// Get the timeout duration for gateway polling.
-    /// Returns None for Sync, FireAndForget, and AsyncLong.
+    /// Returns None for FireAndForget and AsyncLong.
     pub fn gateway_timeout(&self) -> Option<Duration> {
         match self {
-            ToolTiming::Sync => None,
             ToolTiming::AsyncShort => Some(Duration::from_secs(30)),
             ToolTiming::AsyncMedium => Some(Duration::from_secs(120)),
             ToolTiming::AsyncLong => None, // Client manages
@@ -76,18 +69,16 @@ impl ToolTiming {
 /// This is the source of truth for tool timing behavior.
 pub fn tool_timing(name: &str) -> ToolTiming {
     match name {
-        // === Sync: Pure compute, in-memory queries ===
-        "abc_parse" | "abc_validate" | "abc_transpose" => ToolTiming::Sync,
-        "soundfont_inspect" | "soundfont_preset_inspect" => ToolTiming::Sync,
-        "orpheus_classify" => ToolTiming::Sync,
-        "garden_status" | "garden_get_regions" | "garden_query" => ToolTiming::Sync,
-        "job_status" | "job_list" => ToolTiming::Sync,
-        "config_get" => ToolTiming::Sync,
-        "graph_find" | "graph_context" | "graph_query" => ToolTiming::Sync,
-        "artifact_get" | "artifact_list" => ToolTiming::Sync,
-        "cas_inspect" => ToolTiming::Sync,
-
-        // === AsyncShort: IO-bound, ~30s ===
+        // === AsyncShort: Fast operations, I/O bound, or ZMQ calls (~30s timeout) ===
+        "abc_parse" | "abc_validate" | "abc_transpose" => ToolTiming::AsyncShort,
+        "soundfont_inspect" | "soundfont_preset_inspect" => ToolTiming::AsyncShort,
+        "orpheus_classify" => ToolTiming::AsyncShort,
+        "garden_status" | "garden_get_regions" | "garden_query" => ToolTiming::AsyncShort,
+        "job_status" | "job_list" => ToolTiming::AsyncShort,
+        "config_get" => ToolTiming::AsyncShort,
+        "graph_find" | "graph_context" | "graph_query" => ToolTiming::AsyncShort,
+        "artifact_get" | "artifact_list" => ToolTiming::AsyncShort,
+        "cas_inspect" => ToolTiming::AsyncShort,
         "cas_store" | "cas_upload_file" | "cas_get" => ToolTiming::AsyncShort,
         "artifact_upload" => ToolTiming::AsyncShort,
         "abc_to_midi" => ToolTiming::AsyncShort, // Creates artifact (IO)
@@ -114,8 +105,8 @@ pub fn tool_timing(name: &str) -> ToolTiming {
         }
 
         // === Utility tools ===
-        "job_poll" => ToolTiming::Sync, // Already handles its own timeout
-        "job_cancel" => ToolTiming::Sync,
+        "job_poll" => ToolTiming::AsyncShort, // Already handles its own timeout
+        "job_cancel" => ToolTiming::AsyncShort,
         "job_sleep" => ToolTiming::AsyncShort, // Bounded by input
 
         // Default: treat unknown as async medium (safer)
@@ -128,18 +119,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sync_tools_have_no_timeout() {
-        assert_eq!(tool_timing("abc_parse").gateway_timeout(), None);
-        assert_eq!(tool_timing("garden_status").gateway_timeout(), None);
-        assert!(!tool_timing("abc_parse").creates_job());
-    }
-
-    #[test]
     fn async_short_has_30s_timeout() {
+        assert_eq!(
+            tool_timing("abc_parse").gateway_timeout(),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(
+            tool_timing("garden_status").gateway_timeout(),
+            Some(Duration::from_secs(30))
+        );
         assert_eq!(
             tool_timing("cas_store").gateway_timeout(),
             Some(Duration::from_secs(30))
         );
+        assert!(tool_timing("abc_parse").creates_job());
         assert!(tool_timing("cas_store").creates_job());
     }
 

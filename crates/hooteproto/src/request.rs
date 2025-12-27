@@ -21,6 +21,8 @@ pub enum ToolRequest {
     CasGet(CasGetRequest),
     /// Upload file from filesystem to CAS
     CasUploadFile(CasUploadFileRequest),
+    /// Get CAS storage statistics
+    CasStats,
 
     // ==========================================================================
     // Artifacts
@@ -219,36 +221,33 @@ impl ToolRequest {
     /// Get the timing classification for this request
     pub fn timing(&self) -> ToolTiming {
         match self {
-            // Sync - pure compute, in-memory
-            Self::AbcParse(_) | Self::AbcValidate(_) | Self::AbcTranspose(_) => ToolTiming::Sync,
-            Self::OrpheusClassify(_) => ToolTiming::Sync,
-            Self::SoundfontInspect(_) | Self::SoundfontPresetInspect(_) => ToolTiming::Sync,
-            Self::GardenStatus | Self::GardenGetRegions(_) | Self::GardenQuery(_) => {
-                ToolTiming::Sync
-            }
-            Self::JobStatus(_) | Self::JobList(_) => ToolTiming::Sync,
-            Self::ConfigGet(_) => ToolTiming::Sync,
-            Self::GraphFind(_) | Self::GraphContext(_) | Self::GraphQuery(_) => ToolTiming::Sync,
-            Self::ArtifactGet(_) | Self::ArtifactList(_) | Self::ArtifactCreate(_) => ToolTiming::Sync,
-            Self::CasInspect(_) => ToolTiming::Sync,
-            Self::Ping | Self::ListTools | Self::ListResources => ToolTiming::Sync,
-            Self::ReadResource(_) => ToolTiming::Sync,
-            Self::WeaveHelp(_) => ToolTiming::Sync,
-
-            // AsyncShort - IO bound, ~30s
-            Self::CasStore(_) | Self::CasGet(_) | Self::CasUploadFile(_) => ToolTiming::AsyncShort,
+            // AsyncShort - fast operations, I/O bound, or ZMQ calls (~30s timeout)
+            // Note: We don't use Sync because it creates footguns when tools are
+            // misclassified. The async overhead is negligible for fast operations.
+            Self::AbcParse(_) | Self::AbcValidate(_) | Self::AbcTranspose(_) => ToolTiming::AsyncShort,
+            Self::OrpheusClassify(_) => ToolTiming::AsyncShort,
+            Self::SoundfontInspect(_) | Self::SoundfontPresetInspect(_) => ToolTiming::AsyncShort,
+            Self::GardenStatus | Self::GardenGetRegions(_) | Self::GardenQuery(_) => ToolTiming::AsyncShort,
+            Self::JobStatus(_) | Self::JobList(_) => ToolTiming::AsyncShort,
+            Self::ConfigGet(_) => ToolTiming::AsyncShort,
+            Self::GraphFind(_) | Self::GraphContext(_) | Self::GraphQuery(_) => ToolTiming::AsyncShort,
+            Self::ArtifactGet(_) | Self::ArtifactList(_) | Self::ArtifactCreate(_) => ToolTiming::AsyncShort,
+            Self::CasInspect(_) => ToolTiming::AsyncShort,
+            Self::Ping | Self::ListTools | Self::ListResources => ToolTiming::AsyncShort,
+            Self::ReadResource(_) => ToolTiming::AsyncShort,
+            Self::CasStore(_) | Self::CasGet(_) | Self::CasUploadFile(_) | Self::CasStats => ToolTiming::AsyncShort,
             Self::ArtifactUpload(_) => ToolTiming::AsyncShort,
             Self::AbcToMidi(_) => ToolTiming::AsyncShort,
             Self::GraphBind(_) | Self::GraphTag(_) | Self::GraphConnect(_) => ToolTiming::AsyncShort,
             Self::AddAnnotation(_) => ToolTiming::AsyncShort,
             Self::JobPoll(_) | Self::JobCancel(_) | Self::JobSleep(_) => ToolTiming::AsyncShort,
-            Self::WeaveEval(_) | Self::WeaveSession | Self::WeaveReset(_) => ToolTiming::AsyncShort,
+            Self::WeaveEval(_) | Self::WeaveSession | Self::WeaveReset(_) | Self::WeaveHelp(_) => ToolTiming::AsyncShort,
             Self::Complete(_) | Self::SampleLlm(_) => ToolTiming::AsyncShort,
             Self::Schedule(_) => ToolTiming::AsyncShort,
             Self::GardenAttachAudio(_) | Self::GardenDetachAudio | Self::GardenAudioStatus => ToolTiming::AsyncShort,
             Self::GardenAttachInput(_) | Self::GardenDetachInput | Self::GardenInputStatus => ToolTiming::AsyncShort,
             Self::GardenSetMonitor(_) => ToolTiming::AsyncShort,
-            Self::GetToolHelp(_) => ToolTiming::Sync,
+            Self::GetToolHelp(_) => ToolTiming::AsyncShort,
 
             // AsyncMedium - GPU inference, ~120s
             Self::MidiToWav(_) => ToolTiming::AsyncMedium,
@@ -285,6 +284,7 @@ impl ToolRequest {
             Self::CasInspect(_) => "cas_inspect",
             Self::CasGet(_) => "cas_get",
             Self::CasUploadFile(_) => "cas_upload_file",
+            Self::CasStats => "cas_stats",
             Self::ArtifactUpload(_) => "artifact_upload",
             Self::ArtifactGet(_) => "artifact_get",
             Self::ArtifactList(_) => "artifact_list",
