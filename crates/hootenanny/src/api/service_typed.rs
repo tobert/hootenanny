@@ -1776,7 +1776,7 @@ impl EventDualityServer {
 
         let client = reqwest::Client::new();
         let response = client
-            .post("http://localhost:2001/generate")
+            .post("http://localhost:2000/generate")
             .json(&serde_json::json!({
                 "max_tokens": max_tokens.unwrap_or(512),
                 "num_variations": num_variations.unwrap_or(1),
@@ -2281,7 +2281,7 @@ impl EventDualityServer {
         }
 
         let response = client
-            .post("http://localhost:2001/generate")
+            .post("http://localhost:2000/generate")
             .json(&request_body)
             .send()
             .await
