@@ -189,6 +189,68 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Schedule content on timeline".to_string(),
             input_schema: schema_for::<super::native::ScheduleRequest>(),
         },
+        // AsyncLong Tools (return job_id immediately)
+        ToolInfo {
+            name: "musicgen_generate".to_string(),
+            description: "Generate audio from text prompt using MusicGen".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "prompt": { "type": "string", "description": "Text prompt for generation" },
+                    "duration": { "type": "number", "description": "Duration in seconds" },
+                    "temperature": { "type": "number" },
+                    "top_k": { "type": "integer" },
+                    "top_p": { "type": "number" },
+                    "guidance_scale": { "type": "number" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "creator": { "type": "string" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "yue_generate".to_string(),
+            description: "Generate song from lyrics using YuE".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["lyrics"],
+                "properties": {
+                    "lyrics": { "type": "string", "description": "Song lyrics" },
+                    "genre": { "type": "string" },
+                    "max_new_tokens": { "type": "integer" },
+                    "run_n_segments": { "type": "integer" },
+                    "seed": { "type": "integer" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "creator": { "type": "string" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "beatthis_analyze".to_string(),
+            description: "Analyze audio for beat detection".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "audio_hash": { "type": "string", "description": "CAS hash of audio" },
+                    "audio_path": { "type": "string", "description": "Path to audio file" },
+                    "include_frames": { "type": "boolean" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "clap_analyze".to_string(),
+            description: "Analyze audio with CLAP model".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["audio_hash"],
+                "properties": {
+                    "audio_hash": { "type": "string", "description": "CAS hash of audio" },
+                    "audio_b_hash": { "type": "string", "description": "Optional second audio for comparison" },
+                    "tasks": { "type": "array", "items": { "type": "string" } },
+                    "text_candidates": { "type": "array", "items": { "type": "string" } },
+                    "creator": { "type": "string" }
+                }
+            }),
+        },
         // Vibeweaver Tools (Python Kernel)
         ToolInfo {
             name: "weave_eval".to_string(),

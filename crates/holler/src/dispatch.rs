@@ -276,6 +276,57 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             Ok(Payload::ToolRequest(ToolRequest::OrpheusClassify(request::OrpheusClassifyRequest { midi_hash: p.midi_hash })))
         }
 
+        // === AsyncLong Tools (return job_id immediately) ===
+        "musicgen_generate" => {
+            let p: MusicgenGenerateArgs = serde_json::from_value(args).context("Invalid musicgen_generate arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::MusicgenGenerate(request::MusicgenGenerateRequest {
+                prompt: p.prompt,
+                duration: p.duration,
+                temperature: p.temperature,
+                top_k: p.top_k,
+                top_p: p.top_p,
+                guidance_scale: p.guidance_scale,
+                do_sample: p.do_sample,
+                tags: p.tags.unwrap_or_default(),
+                creator: p.creator,
+                parent_id: p.parent_id,
+                variation_set_id: p.variation_set_id,
+            })))
+        }
+        "yue_generate" => {
+            let p: YueGenerateArgs = serde_json::from_value(args).context("Invalid yue_generate arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::YueGenerate(request::YueGenerateRequest {
+                lyrics: p.lyrics,
+                genre: p.genre,
+                max_new_tokens: p.max_new_tokens,
+                run_n_segments: p.run_n_segments,
+                seed: p.seed,
+                tags: p.tags.unwrap_or_default(),
+                creator: p.creator,
+                parent_id: p.parent_id,
+                variation_set_id: p.variation_set_id,
+            })))
+        }
+        "beatthis_analyze" => {
+            let p: BeatthisAnalyzeArgs = serde_json::from_value(args).context("Invalid beatthis_analyze arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::BeatthisAnalyze(request::BeatthisAnalyzeRequest {
+                audio_hash: p.audio_hash,
+                audio_path: p.audio_path,
+                include_frames: p.include_frames.unwrap_or(false),
+            })))
+        }
+        "clap_analyze" => {
+            let p: ClapAnalyzeArgs = serde_json::from_value(args).context("Invalid clap_analyze arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::ClapAnalyze(request::ClapAnalyzeRequest {
+                audio_hash: p.audio_hash,
+                audio_b_hash: p.audio_b_hash,
+                tasks: p.tasks.unwrap_or_else(|| vec!["classification".to_string()]),
+                text_candidates: p.text_candidates.unwrap_or_default(),
+                creator: p.creator,
+                parent_id: p.parent_id,
+            })))
+        }
+
         // === Artifact Tools ===
         "artifact_upload" => {
             let p: ArtifactUploadArgs = serde_json::from_value(args).context("Invalid artifact_upload arguments")?;
@@ -654,6 +705,51 @@ struct OrpheusLoopsArgs {
 #[derive(Debug, Deserialize)]
 struct OrpheusClassifyArgs {
     midi_hash: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MusicgenGenerateArgs {
+    prompt: Option<String>,
+    duration: Option<f32>,
+    temperature: Option<f32>,
+    top_k: Option<u32>,
+    top_p: Option<f32>,
+    guidance_scale: Option<f32>,
+    do_sample: Option<bool>,
+    tags: Option<Vec<String>>,
+    creator: Option<String>,
+    parent_id: Option<String>,
+    variation_set_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct YueGenerateArgs {
+    lyrics: String,
+    genre: Option<String>,
+    max_new_tokens: Option<u32>,
+    run_n_segments: Option<u32>,
+    seed: Option<u64>,
+    tags: Option<Vec<String>>,
+    creator: Option<String>,
+    parent_id: Option<String>,
+    variation_set_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct BeatthisAnalyzeArgs {
+    audio_hash: Option<String>,
+    audio_path: Option<String>,
+    include_frames: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClapAnalyzeArgs {
+    audio_hash: String,
+    audio_b_hash: Option<String>,
+    tasks: Option<Vec<String>>,
+    text_candidates: Option<Vec<String>>,
+    creator: Option<String>,
+    parent_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
