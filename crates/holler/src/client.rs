@@ -1,11 +1,10 @@
 //! ZMQ DEALER client for communicating with Hootenanny backends
 
 use anyhow::{Context as AnyhowContext, Result};
+use hooteproto::socket_config::configure_dealer;
 use hooteproto::{Envelope, Payload};
 use rzmq::{Context, Msg, Socket, SocketType};
-use rzmq::socket::options::{LINGER, RECONNECT_IVL, ROUTING_ID};
 use std::time::Duration;
-use tracing::warn;
 
 /// A simple ZMQ DEALER client for request/reply communication
 pub struct Client {
@@ -20,19 +19,11 @@ impl Client {
     pub async fn connect(endpoint: &str, timeout_ms: u64) -> Result<Self> {
         let context = Context::new()
             .with_context(|| "Failed to create ZMQ context")?;
-        let socket = context.socket(SocketType::Dealer)
+        let socket = context
+            .socket(SocketType::Dealer)
             .with_context(|| "Failed to create DEALER socket")?;
 
-        // Set socket options
-        if let Err(e) = socket.set_option_raw(ROUTING_ID, b"holler-client").await {
-            warn!("Failed to set ROUTING_ID: {}", e);
-        }
-        if let Err(e) = socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await {
-            warn!("Failed to set LINGER: {}", e);
-        }
-        if let Err(e) = socket.set_option_raw(RECONNECT_IVL, &1000i32.to_ne_bytes()).await {
-            warn!("Failed to set RECONNECT_IVL: {}", e);
-        }
+        configure_dealer(&socket, "holler-client", b"holler-client").await?;
 
         socket
             .connect(endpoint)

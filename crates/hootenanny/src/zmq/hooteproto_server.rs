@@ -27,8 +27,8 @@ use hooteproto::responses::{
     ArtifactInfoResponse, ArtifactListResponse, ArtifactMetadata, CasContentResponse,
     CasInspectedResponse, CasStoredResponse, ToolResponse,
 };
-use rzmq::{Context, Msg, MsgFlags, Socket, SocketType};
-use rzmq::socket::options::{LINGER, ROUTER_MANDATORY};
+use hooteproto::socket_config::create_router_and_bind;
+use rzmq::{Context, Msg, MsgFlags, Socket};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -117,24 +117,9 @@ impl HooteprotoServer {
     pub async fn run(self, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
         let context = Context::new()
             .with_context(|| "Failed to create ZMQ context")?;
-        let socket = context
-            .socket(SocketType::Router)
-            .with_context(|| "Failed to create ROUTER socket")?;
 
-        // Set LINGER to 0 for immediate close
-        if let Err(e) = socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await {
-            warn!("Failed to set LINGER: {}", e);
-        }
-
-        // Enable ROUTER_MANDATORY for proper error reporting (don't silently drop messages)
-        if let Err(e) = socket.set_option_raw(ROUTER_MANDATORY, &1i32.to_ne_bytes()).await {
-            warn!("Failed to set ROUTER_MANDATORY: {}", e);
-        }
-
-        socket
-            .bind(&self.bind_address)
-            .await
-            .with_context(|| format!("Failed to bind to {}", self.bind_address))?;
+        let socket =
+            create_router_and_bind(&context, &self.bind_address, "hooteproto-server").await?;
 
         info!("Hootenanny ZMQ server listening on {}", self.bind_address);
 

@@ -17,6 +17,7 @@ use anyhow::Result;
 use chaosgarden::{GardenDaemon, DaemonConfig};
 use chaosgarden::ipc::{capnp_server::CapnpGardenServer, GardenEndpoints};
 use chaosgarden::nodes::FileCasClient;
+use hooteconf::HootConfig;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -29,21 +30,40 @@ async fn main() -> Result<()> {
 
     info!("chaosgarden {} starting (Cap'n Proto)", env!("CARGO_PKG_VERSION"));
 
-    let endpoints = GardenEndpoints::local();
+    // Load configuration
+    let hoote_config = HootConfig::load()?;
+
+    // IPC is default. TCP only if [services.chaosgarden] zmq_router starts with "tcp://"
+    // and differs from the placeholder default
+    let zmq_router = &hoote_config.infra.services.chaosgarden.zmq_router;
+    let socket_dir = hoote_config.infra.paths.socket_dir.to_string_lossy();
+    let endpoints = if zmq_router.starts_with("tcp://") && zmq_router != "tcp://0.0.0.0:5585" {
+        if let Some(port_str) = zmq_router.rsplit(':').next() {
+            if let Ok(port) = port_str.parse::<u16>() {
+                info!("Using TCP mode on port {} (from config)", port);
+                GardenEndpoints::tcp("0.0.0.0", port)
+            } else {
+                info!("Using IPC mode in {} (from config)", socket_dir);
+                GardenEndpoints::from_socket_dir(&socket_dir)
+            }
+        } else {
+            info!("Using IPC mode in {} (from config)", socket_dir);
+            GardenEndpoints::from_socket_dir(&socket_dir)
+        }
+    } else {
+        info!("Using IPC mode in {} (from config)", socket_dir);
+        GardenEndpoints::from_socket_dir(&socket_dir)
+    };
     info!("binding to endpoints: {:?}", endpoints);
 
     let server = CapnpGardenServer::new(endpoints);
 
     // Create real daemon with state management
-    let config = DaemonConfig::default();
-    let mut daemon = GardenDaemon::with_config(config);
+    let daemon_config = DaemonConfig::default();
+    let mut daemon = GardenDaemon::with_config(daemon_config);
 
     // Initialize content resolver for timeline playback (loads audio from CAS)
-    let cas_path = std::env::var("HOOTENANNY_CAS_DIR")
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-            format!("{}/.hootenanny/cas", home)
-        });
+    let cas_path = hoote_config.infra.paths.cas_dir.to_string_lossy().to_string();
     match FileCasClient::new(&cas_path) {
         Ok(client) => {
             daemon.set_content_resolver(Arc::new(client));

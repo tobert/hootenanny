@@ -26,14 +26,26 @@ pub struct GardenEndpoints {
 }
 
 impl GardenEndpoints {
-    /// Default IPC endpoints for local daemon
+    /// Default IPC endpoints for local daemon (uses /tmp)
     pub fn local() -> Self {
+        Self::from_socket_dir("/tmp")
+    }
+
+    /// IPC endpoints in a specific directory
+    ///
+    /// Use this with `paths.socket_dir` from HootConfig:
+    /// ```ignore
+    /// let endpoints = GardenEndpoints::from_socket_dir(
+    ///     &config.infra.paths.socket_dir.to_string_lossy()
+    /// );
+    /// ```
+    pub fn from_socket_dir(dir: &str) -> Self {
         Self {
-            control: "ipc:///tmp/chaosgarden-control".into(),
-            shell: "ipc:///tmp/chaosgarden-shell".into(),
-            iopub: "ipc:///tmp/chaosgarden-iopub".into(),
-            heartbeat: "ipc:///tmp/chaosgarden-hb".into(),
-            query: "ipc:///tmp/chaosgarden-query".into(),
+            control: format!("ipc://{}/chaosgarden-control", dir),
+            shell: format!("ipc://{}/chaosgarden-shell", dir),
+            iopub: format!("ipc://{}/chaosgarden-iopub", dir),
+            heartbeat: format!("ipc://{}/chaosgarden-hb", dir),
+            query: format!("ipc://{}/chaosgarden-query", dir),
         }
     }
 

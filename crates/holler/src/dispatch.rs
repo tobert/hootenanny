@@ -107,6 +107,7 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 mime_type: p.mime_type,
             })))
         }
+        "cas_stats" => Ok(Payload::ToolRequest(ToolRequest::CasStats)),
 
         // === Garden Tools ===
         "garden_status" => Ok(Payload::ToolRequest(ToolRequest::GardenStatus)),
@@ -396,6 +397,29 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             Ok(Payload::ToolRequest(ToolRequest::ConfigGet(request::ConfigGetRequest {
                 section: p.section,
                 key: p.key,
+            })))
+        }
+
+        // === Vibeweaver Tools ===
+        "weave_eval" => {
+            let p: WeaveEvalArgs = serde_json::from_value(args).context("Invalid weave_eval arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::WeaveEval(request::WeaveEvalRequest {
+                code: p.code,
+            })))
+        }
+        "weave_session" => {
+            Ok(Payload::ToolRequest(ToolRequest::WeaveSession))
+        }
+        "weave_reset" => {
+            let p: WeaveResetArgs = serde_json::from_value(args).unwrap_or_default();
+            Ok(Payload::ToolRequest(ToolRequest::WeaveReset(request::WeaveResetRequest {
+                clear_session: p.clear_session,
+            })))
+        }
+        "weave_help" => {
+            let p: WeaveHelpArgs = serde_json::from_value(args).unwrap_or_default();
+            Ok(Payload::ToolRequest(ToolRequest::WeaveHelp(request::WeaveHelpRequest {
+                topic: p.topic,
             })))
         }
 
@@ -768,4 +792,20 @@ struct ScheduleArgs {
 struct AnalyzeArgs {
     encoding: hooteproto::Encoding,
     tasks: Vec<hooteproto::AnalysisTask>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WeaveEvalArgs {
+    code: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct WeaveResetArgs {
+    #[serde(default)]
+    clear_session: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct WeaveHelpArgs {
+    topic: Option<String>,
 }

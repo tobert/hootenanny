@@ -189,5 +189,26 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Schedule content on timeline".to_string(),
             input_schema: schema_for::<super::native::ScheduleRequest>(),
         },
+        // Vibeweaver Tools (Python Kernel)
+        ToolInfo {
+            name: "weave_eval".to_string(),
+            description: "Execute Python code in vibeweaver kernel".to_string(),
+            input_schema: schema_for::<WeaveEvalRequest>(),
+        },
+        ToolInfo {
+            name: "weave_session".to_string(),
+            description: "Get current vibeweaver session state".to_string(),
+            input_schema: schema_for::<WeaveSessionRequest>(),
+        },
+        ToolInfo {
+            name: "weave_reset".to_string(),
+            description: "Reset vibeweaver kernel".to_string(),
+            input_schema: schema_for::<WeaveResetRequest>(),
+        },
+        ToolInfo {
+            name: "weave_help".to_string(),
+            description: "Get vibeweaver help documentation".to_string(),
+            input_schema: schema_for::<WeaveHelpRequest>(),
+        },
     ]
 }

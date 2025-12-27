@@ -4,8 +4,9 @@
 
 use anyhow::Result;
 use bytes::Bytes;
+use hooteproto::socket_config::configure_socket;
+use rzmq::socket::options::SUBSCRIBE;
 use rzmq::{Context, Socket, SocketType};
-use rzmq::socket::options::{LINGER, RECONNECT_IVL, SUBSCRIBE};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::warn;
@@ -70,16 +71,14 @@ impl BroadcastReceiver {
     pub async fn connect(endpoint: &str) -> Result<Self> {
         let context = Context::new()
             .map_err(|e| anyhow::anyhow!("Failed to create ZMQ context: {}", e))?;
-        let sub = context.socket(SocketType::Sub)
+        let sub = context
+            .socket(SocketType::Sub)
             .map_err(|e| anyhow::anyhow!("Failed to create SUB socket: {}", e))?;
 
-        // Set socket options
-        if let Err(e) = sub.set_option_raw(LINGER, &0i32.to_ne_bytes()).await {
-            warn!("Failed to set LINGER: {}", e);
-        }
-        if let Err(e) = sub.set_option_raw(RECONNECT_IVL, &1000i32.to_ne_bytes()).await {
-            warn!("Failed to set RECONNECT_IVL: {}", e);
-        }
+        // Configure socket with standard options (LINGER, RECONNECT_*, HEARTBEAT_*)
+        configure_socket(&sub, "vibeweaver-broadcast-sub")
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to configure SUB socket: {}", e))?;
 
         // Subscribe to relevant topics
         for topic in &["job.", "artifact.", "transport.", "beat.", "marker."] {

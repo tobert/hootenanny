@@ -4,9 +4,9 @@
 //! Messages are serialized using Cap'n Proto for cross-language compatibility.
 
 use anyhow::{Context as AnyhowContext, Result};
+use hooteproto::socket_config::create_and_bind;
 use hooteproto::{broadcast_capnp, Broadcast};
 use rzmq::{Context, Msg, SocketType};
-use rzmq::socket::options::LINGER;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -115,19 +115,9 @@ impl PublisherServer {
     pub async fn run(mut self) -> Result<()> {
         let context = Context::new()
             .with_context(|| "Failed to create ZMQ context")?;
-        let socket = context
-            .socket(SocketType::Pub)
-            .with_context(|| "Failed to create PUB socket")?;
 
-        // Set LINGER to 0 for immediate close
-        if let Err(e) = socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await {
-            warn!("Failed to set LINGER: {}", e);
-        }
-
-        socket
-            .bind(&self.bind_address)
-            .await
-            .with_context(|| format!("Failed to bind PUB socket to {}", self.bind_address))?;
+        let socket =
+            create_and_bind(&context, SocketType::Pub, &self.bind_address, "publisher").await?;
 
         info!("Hootenanny PUB socket listening on {}", self.bind_address);
 

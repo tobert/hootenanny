@@ -53,9 +53,21 @@ impl GardenManager {
         }
     }
 
-    /// Create with local IPC endpoints
+    /// Create with local IPC endpoints (uses /tmp)
     pub fn local() -> Self {
         Self::new(GardenEndpoints::local())
+    }
+
+    /// Create with IPC endpoints in a specific directory
+    ///
+    /// Use this with `paths.socket_dir` from HootConfig:
+    /// ```ignore
+    /// let manager = GardenManager::from_socket_dir(
+    ///     &config.infra.paths.socket_dir.to_string_lossy()
+    /// );
+    /// ```
+    pub fn from_socket_dir(dir: &str) -> Self {
+        Self::new(GardenEndpoints::from_socket_dir(dir))
     }
 
     /// Create with TCP endpoints

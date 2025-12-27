@@ -178,11 +178,13 @@ async fn main() -> Result<()> {
 
     // --- Chaosgarden Connection (non-blocking) ---
     let chaosgarden_endpoint = &config.bootstrap.connections.chaosgarden;
+    let socket_dir = config.infra.paths.socket_dir.to_string_lossy();
     let garden_manager: Option<Arc<zmq::GardenManager>> = {
         info!("🌱 Connecting to chaosgarden ({})...", chaosgarden_endpoint);
 
         let manager: Option<zmq::GardenManager> = if chaosgarden_endpoint == "local" {
-            Some(zmq::GardenManager::local())
+            info!("   Using IPC sockets in {}", socket_dir);
+            Some(zmq::GardenManager::from_socket_dir(&socket_dir))
         } else if chaosgarden_endpoint.starts_with("tcp://") {
             let parts: Vec<&str> = chaosgarden_endpoint
                 .trim_start_matches("tcp://")
