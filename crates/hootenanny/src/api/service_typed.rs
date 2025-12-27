@@ -5,6 +5,7 @@
 
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::ArtifactStore;
+use std::sync::Arc;
 use hooteproto::{
     responses::{
         AbcParsedResponse, AbcTransposedResponse, AbcValidatedResponse, AbcValidationError,
@@ -1235,5 +1236,1607 @@ impl EventDualityServer {
             .unwrap_or_default();
 
         Ok(hooteproto::responses::OrpheusClassifiedResponse { classifications })
+    }
+
+    // ============================================================
+    // Job Tools (Poll, Cancel, Sleep)
+    // ============================================================
+
+    /// Poll for job completion - typed response
+    pub async fn job_poll_typed(
+        &self,
+        job_ids: Vec<String>,
+        timeout_ms: u64,
+        mode: Option<String>,
+    ) -> Result<hooteproto::responses::JobPollResponse, ToolError> {
+        use hooteproto::JobStatus;
+        use std::time::{Duration, Instant};
+
+        let timeout_ms = timeout_ms.min(30000); // Cap at 30s
+        let timeout = Duration::from_millis(timeout_ms);
+        let mode = mode.as_deref().unwrap_or("any");
+
+        if mode != "any" && mode != "all" {
+            return Err(ToolError::validation(
+                "invalid_params",
+                format!("mode must be 'any' or 'all', got '{}'", mode),
+            ));
+        }
+
+        let job_ids: Vec<hooteproto::JobId> =
+            job_ids.into_iter().map(hooteproto::JobId::from).collect();
+
+        let start = Instant::now();
+        let poll_interval = Duration::from_millis(500);
+
+        loop {
+            let mut completed = Vec::new();
+            let mut pending = Vec::new();
+            let mut failed = Vec::new();
+
+            for job_id in &job_ids {
+                match self.job_store.get_job(job_id) {
+                    Ok(job_info) => match job_info.status {
+                        JobStatus::Complete => completed.push(job_id.as_str().to_string()),
+                        JobStatus::Failed | JobStatus::Cancelled => {
+                            failed.push(job_id.as_str().to_string())
+                        }
+                        JobStatus::Pending | JobStatus::Running => {
+                            pending.push(job_id.as_str().to_string())
+                        }
+                    },
+                    Err(_) => {
+                        failed.push(job_id.as_str().to_string());
+                    }
+                }
+            }
+
+            let elapsed = start.elapsed();
+            let elapsed_ms = elapsed.as_millis() as u64;
+
+            let should_return = if job_ids.is_empty() {
+                elapsed >= timeout
+            } else if mode == "any" {
+                !completed.is_empty() || !failed.is_empty()
+            } else {
+                pending.is_empty()
+            };
+
+            let timed_out = elapsed >= timeout;
+
+            if should_return || timed_out {
+                let reason = if !completed.is_empty() || !failed.is_empty() {
+                    "job_complete".to_string()
+                } else {
+                    "timeout".to_string()
+                };
+
+                return Ok(hooteproto::responses::JobPollResponse {
+                    completed,
+                    failed,
+                    pending,
+                    reason,
+                    elapsed_ms,
+                });
+            }
+
+            tokio::time::sleep(poll_interval).await;
+        }
+    }
+
+    /// Cancel a job - typed response
+    pub async fn job_cancel_typed(
+        &self,
+        job_id: &str,
+    ) -> Result<hooteproto::responses::JobCancelResponse, ToolError> {
+        let job_id = hooteproto::JobId::from(job_id.to_string());
+
+        self.job_store
+            .cancel_job(&job_id)
+            .map_err(|e| ToolError::internal(e.to_string()))?;
+
+        Ok(hooteproto::responses::JobCancelResponse {
+            job_id: job_id.as_str().to_string(),
+            cancelled: true,
+        })
+    }
+
+    /// Sleep for specified duration - typed response
+    pub async fn job_sleep_typed(
+        &self,
+        milliseconds: u64,
+    ) -> Result<hooteproto::responses::JobSleepResponse, ToolError> {
+        let ms = milliseconds.min(30000); // Cap at 30s
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+
+        Ok(hooteproto::responses::JobSleepResponse { slept_ms: ms })
+    }
+
+    // ============================================================
+    // CAS Upload Tools
+    // ============================================================
+
+    /// Upload file to CAS - typed response
+    pub async fn cas_upload_file_typed(
+        &self,
+        file_path: &str,
+        mime_type: &str,
+    ) -> Result<hooteproto::responses::CasStoredResponse, ToolError> {
+        let path = std::path::Path::new(file_path);
+
+        if !path.exists() {
+            return Err(ToolError::not_found("file", file_path));
+        }
+
+        let data = std::fs::read(path)
+            .map_err(|e| ToolError::internal(format!("Failed to read file: {}", e)))?;
+
+        self.cas_store_typed(&data, mime_type).await
+    }
+
+    // ============================================================
+    // Graph Mutation Tools (Bind, Tag, Connect)
+    // ============================================================
+
+    /// Bind an identity to a device - typed response
+    pub async fn graph_bind_typed(
+        &self,
+        id: &str,
+        name: &str,
+        hints: Vec<hooteproto::request::GraphHint>,
+    ) -> Result<hooteproto::responses::GraphBindResponse, ToolError> {
+        use audio_graph_mcp::{graph_bind, HintKind};
+
+        let db = self.graph_adapter.db();
+
+        let device_hints: Vec<(HintKind, String, f64)> = hints
+            .into_iter()
+            .map(|h| {
+                let kind = match h.kind.as_str() {
+                    "usb_device_id" => HintKind::UsbDeviceId,
+                    "usb_serial" => HintKind::UsbSerial,
+                    "usb_path" => HintKind::UsbPath,
+                    "midi_name" => HintKind::MidiName,
+                    "alsa_card" => HintKind::AlsaCard,
+                    "alsa_hw" => HintKind::AlsaHw,
+                    "pipewire_name" => HintKind::PipewireName,
+                    "pipewire_alsa_path" => HintKind::PipewireAlsaPath,
+                    _ => HintKind::MidiName, // Default
+                };
+                (kind, h.value, h.confidence)
+            })
+            .collect();
+
+        let hints_count = device_hints.len();
+        let identity = graph_bind(db, id, name, device_hints)
+            .map_err(|e| ToolError::internal(e))?;
+
+        Ok(hooteproto::responses::GraphBindResponse {
+            identity_id: identity.id.0,
+            name: identity.name,
+            hints_count,
+        })
+    }
+
+    /// Tag an identity - typed response
+    pub async fn graph_tag_typed(
+        &self,
+        identity_id: &str,
+        namespace: &str,
+        value: &str,
+    ) -> Result<hooteproto::responses::GraphTagResponse, ToolError> {
+        use audio_graph_mcp::graph_tag;
+
+        let db = self.graph_adapter.db();
+
+        // Add the single tag
+        let _tags = graph_tag(db, identity_id, vec![(namespace.to_string(), value.to_string())], vec![])
+            .map_err(|e| ToolError::internal(e))?;
+
+        Ok(hooteproto::responses::GraphTagResponse {
+            identity_id: identity_id.to_string(),
+            tag: format!("{}:{}", namespace, value),
+        })
+    }
+
+    /// Connect two identities - typed response
+    pub async fn graph_connect_typed(
+        &self,
+        from_identity: &str,
+        from_port: &str,
+        to_identity: &str,
+        to_port: &str,
+        transport: Option<String>,
+    ) -> Result<hooteproto::responses::GraphConnectResponse, ToolError> {
+        use audio_graph_mcp::graph_connect;
+
+        let db = self.graph_adapter.db();
+
+        let _conn = graph_connect(db, from_identity, from_port, to_identity, to_port, transport.as_deref())
+            .map_err(|e| ToolError::internal(e))?;
+
+        Ok(hooteproto::responses::GraphConnectResponse {
+            from_identity: from_identity.to_string(),
+            from_port: from_port.to_string(),
+            to_identity: to_identity.to_string(),
+            to_port: to_port.to_string(),
+        })
+    }
+
+    // ============================================================
+    // ABC to MIDI Conversion
+    // ============================================================
+
+    /// Convert ABC notation to MIDI - typed response
+    pub async fn abc_to_midi_typed(
+        &self,
+        abc: &str,
+        tempo_override: Option<u16>,
+        transpose: Option<i8>,
+        velocity: Option<u8>,
+        channel: Option<u8>,
+        tags: Vec<String>,
+        creator: Option<String>,
+    ) -> Result<hooteproto::responses::AbcToMidiResponse, ToolError> {
+        use crate::artifact_store::{Artifact, ArtifactStore};
+        use crate::types::{ArtifactId, ContentHash};
+
+        // Parse ABC notation
+        let mut result = abc::parse(abc);
+        if result.has_errors() {
+            let errors: Vec<String> = result.feedback.iter()
+                .filter(|f| matches!(f.level, abc::FeedbackLevel::Error))
+                .map(|f| f.message.clone())
+                .collect();
+            return Err(ToolError::validation("abc_parse_error", errors.join("; ")));
+        }
+
+        // Apply transpose if requested
+        if let Some(semitones) = transpose {
+            result.value = abc::transpose(&result.value, semitones);
+        }
+
+        // Build MIDI params
+        let params = abc::MidiParams {
+            velocity: velocity.unwrap_or(80),
+            ticks_per_beat: 480,
+            channel: channel.unwrap_or(0),
+        };
+
+        // Generate MIDI bytes
+        let midi_bytes = abc::to_midi(&result.value, &params);
+
+        // Store in CAS
+        let cas_result = self.cas_store_typed(&midi_bytes, "audio/midi").await?;
+
+        // Create artifact
+        let content_hash = ContentHash::new(&cas_result.hash);
+        let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+
+        let mut artifact_tags = tags;
+        artifact_tags.push("type:midi".to_string());
+        artifact_tags.push("source:abc".to_string());
+
+        let metadata = serde_json::json!({
+            "mime_type": "audio/midi",
+            "source": "abc",
+            "tempo_override": tempo_override,
+            "transpose": transpose,
+        });
+
+        let artifact = Artifact::new(
+            artifact_id.clone(),
+            content_hash.clone(),
+            creator.unwrap_or_else(|| "mcp".to_string()),
+            metadata,
+        ).with_tags(artifact_tags);
+
+        {
+            let mut store = self.artifact_store.write().map_err(|e| {
+                ToolError::internal(format!("Failed to lock artifact store: {}", e))
+            })?;
+            store.put(artifact).map_err(|e| {
+                ToolError::internal(format!("Failed to store artifact: {}", e))
+            })?;
+        }
+
+        Ok(hooteproto::responses::AbcToMidiResponse {
+            artifact_id: artifact_id.as_str().to_string(),
+            content_hash: content_hash.as_str().to_string(),
+        })
+    }
+
+    // ============================================================
+    // Artifact Upload
+    // ============================================================
+
+    /// Upload file and create artifact - typed response
+    pub async fn artifact_upload_typed(
+        &self,
+        file_path: &str,
+        mime_type: &str,
+        tags: Vec<String>,
+        creator: Option<String>,
+        parent_id: Option<String>,
+        variation_set_id: Option<String>,
+    ) -> Result<hooteproto::responses::ArtifactCreatedResponse, ToolError> {
+        use crate::artifact_store::{Artifact, ArtifactStore};
+        use crate::types::{ArtifactId, ContentHash, VariationSetId};
+
+        // First upload to CAS
+        let cas_result = self.cas_upload_file_typed(file_path, mime_type).await?;
+
+        // Create artifact
+        let content_hash = ContentHash::new(&cas_result.hash);
+        let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+        let creator_str = creator.clone().unwrap_or_else(|| "mcp".to_string());
+
+        let metadata = serde_json::json!({
+            "mime_type": mime_type,
+            "source_path": file_path,
+        });
+
+        let mut artifact = Artifact::new(
+            artifact_id.clone(),
+            content_hash.clone(),
+            &creator_str,
+            metadata,
+        ).with_tags(tags.clone());
+
+        // Set optional parent and variation set
+        if let Some(ref parent) = parent_id {
+            artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
+        }
+        if let Some(ref var_set) = variation_set_id {
+            artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
+        }
+
+        {
+            let mut store = self.artifact_store.write().map_err(|e| {
+                ToolError::internal(format!("Failed to lock artifact store: {}", e))
+            })?;
+            store.put(artifact).map_err(|e| {
+                ToolError::internal(format!("Failed to store artifact: {}", e))
+            })?;
+        }
+
+        Ok(hooteproto::responses::ArtifactCreatedResponse {
+            artifact_id: artifact_id.as_str().to_string(),
+            content_hash: content_hash.as_str().to_string(),
+            tags,
+            creator: creator_str,
+        })
+    }
+
+    // ============================================================
+    // Annotations
+    // ============================================================
+
+    /// Add annotation to artifact - typed response
+    pub async fn add_annotation_typed(
+        &self,
+        artifact_id: &str,
+        message: &str,
+        source: Option<String>,
+        vibe: Option<String>,
+    ) -> Result<hooteproto::responses::AnnotationAddedResponse, ToolError> {
+        use audio_graph_mcp::sources::{ArtifactSource, AnnotationData};
+
+        // Create annotation
+        let annotation = AnnotationData::new(
+            artifact_id.to_string(),
+            message.to_string(),
+            vibe,
+            source.unwrap_or_else(|| "mcp".to_string()),
+        );
+        let annotation_id = annotation.id.clone();
+
+        // Add to store
+        {
+            let store = self.artifact_store.read().map_err(|e| {
+                ToolError::internal(format!("Failed to lock artifact store: {}", e))
+            })?;
+            store.add_annotation(annotation).map_err(|e| {
+                ToolError::internal(format!("Failed to add annotation: {}", e))
+            })?;
+        }
+
+        Ok(hooteproto::responses::AnnotationAddedResponse {
+            artifact_id: artifact_id.to_string(),
+            annotation_id,
+        })
+    }
+
+    // ============================================================
+    // MIDI to WAV Conversion
+    // ============================================================
+
+    /// Convert MIDI to WAV using rustysynth - typed response
+    pub async fn midi_to_wav_typed(
+        &self,
+        input_hash: &str,
+        soundfont_hash: &str,
+        sample_rate: Option<u32>,
+        tags: Vec<String>,
+        creator: Option<String>,
+        parent_id: Option<String>,
+        variation_set_id: Option<String>,
+    ) -> Result<hooteproto::responses::MidiToWavResponse, ToolError> {
+        use crate::artifact_store::{Artifact, ArtifactStore};
+        use crate::mcp_tools::rustysynth::render_midi_to_wav;
+        use crate::types::{ArtifactId, ContentHash, VariationSetId};
+
+        let sample_rate = sample_rate.unwrap_or(44100);
+
+        // Get MIDI content from CAS
+        let midi_cas = self
+            .local_models
+            .inspect_cas_content(input_hash)
+            .await
+            .map_err(|e| ToolError::not_found("midi", e.to_string()))?;
+
+        let midi_path = midi_cas
+            .local_path
+            .ok_or_else(|| ToolError::not_found("midi", input_hash))?;
+
+        let midi_bytes = std::fs::read(&midi_path)
+            .map_err(|e| ToolError::internal(format!("Failed to read MIDI: {}", e)))?;
+
+        // Get SoundFont content from CAS
+        let sf_cas = self
+            .local_models
+            .inspect_cas_content(soundfont_hash)
+            .await
+            .map_err(|e| ToolError::not_found("soundfont", e.to_string()))?;
+
+        let sf_path = sf_cas
+            .local_path
+            .ok_or_else(|| ToolError::not_found("soundfont", soundfont_hash))?;
+
+        let sf_bytes = std::fs::read(&sf_path)
+            .map_err(|e| ToolError::internal(format!("Failed to read soundfont: {}", e)))?;
+
+        // Render MIDI to WAV
+        let wav_bytes = render_midi_to_wav(&midi_bytes, &sf_bytes, sample_rate)
+            .map_err(|e| ToolError::internal(format!("Render failed: {}", e)))?;
+
+        // Calculate duration
+        let duration_secs = Some((wav_bytes.len() as f64) / (sample_rate as f64 * 2.0 * 2.0)); // stereo, 16-bit
+
+        // Store WAV in CAS
+        let cas_result = self.cas_store_typed(&wav_bytes, "audio/wav").await?;
+
+        // Create artifact
+        let content_hash = ContentHash::new(&cas_result.hash);
+        let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+        let creator_str = creator.clone().unwrap_or_else(|| "mcp".to_string());
+
+        let mut artifact_tags = tags;
+        artifact_tags.push("type:audio".to_string());
+        artifact_tags.push("source:render".to_string());
+
+        let metadata = serde_json::json!({
+            "mime_type": "audio/wav",
+            "source": "midi_render",
+            "sample_rate": sample_rate,
+            "midi_hash": input_hash,
+            "soundfont_hash": soundfont_hash,
+        });
+
+        let mut artifact = Artifact::new(
+            artifact_id.clone(),
+            content_hash.clone(),
+            &creator_str,
+            metadata,
+        ).with_tags(artifact_tags);
+
+        if let Some(ref parent) = parent_id {
+            artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
+        }
+        if let Some(ref var_set) = variation_set_id {
+            artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
+        }
+
+        {
+            let mut store = self.artifact_store.write().map_err(|e| {
+                ToolError::internal(format!("Failed to lock artifact store: {}", e))
+            })?;
+            store.put(artifact).map_err(|e| {
+                ToolError::internal(format!("Failed to store artifact: {}", e))
+            })?;
+        }
+
+        Ok(hooteproto::responses::MidiToWavResponse {
+            artifact_id: artifact_id.as_str().to_string(),
+            content_hash: content_hash.as_str().to_string(),
+            sample_rate,
+            duration_secs,
+        })
+    }
+
+    // ============================================================
+    // Orpheus Generation Tools
+    // ============================================================
+
+    /// Generate MIDI from scratch using Orpheus - typed response
+    pub async fn orpheus_generate_typed(
+        &self,
+        max_tokens: Option<u32>,
+        num_variations: Option<u32>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        model: Option<String>,
+        tags: Vec<String>,
+        creator: Option<String>,
+        parent_id: Option<String>,
+        variation_set_id: Option<String>,
+    ) -> Result<hooteproto::responses::OrpheusGeneratedResponse, ToolError> {
+        use crate::artifact_store::{Artifact, ArtifactStore};
+        use crate::types::{ArtifactId, ContentHash, VariationSetId};
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post("http://localhost:2001/generate")
+            .json(&serde_json::json!({
+                "max_tokens": max_tokens.unwrap_or(512),
+                "num_variations": num_variations.unwrap_or(1),
+                "temperature": temperature.unwrap_or(1.0),
+                "top_p": top_p.unwrap_or(0.95),
+                "model": model,
+            }))
+            .send()
+            .await
+            .map_err(|e| ToolError::service("orpheus", "request_failed", e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(ToolError::service(
+                "orpheus",
+                "generate_failed",
+                format!("HTTP {}", response.status()),
+            ));
+        }
+
+        let result: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| ToolError::service("orpheus", "parse_failed", e.to_string()))?;
+
+        // Extract generated MIDI paths
+        let output_paths: Vec<String> = result
+            .get("output_paths")
+            .and_then(|p| p.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        let tokens_per_variation: Vec<u64> = result
+            .get("tokens_per_variation")
+            .and_then(|t| t.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
+            .unwrap_or_default();
+
+        let total_tokens = result.get("total_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+
+        // Generate variation set ID if multiple variations
+        let var_set_id = if output_paths.len() > 1 {
+            variation_set_id.clone().or_else(|| Some(VariationSetId::new(uuid::Uuid::new_v4().to_string()).as_str().to_string()))
+        } else {
+            variation_set_id.clone()
+        };
+
+        // Store each output as artifact
+        let mut output_hashes = Vec::new();
+        let mut artifact_ids = Vec::new();
+        let creator_str = creator.clone().unwrap_or_else(|| "orpheus".to_string());
+
+        for (idx, path) in output_paths.iter().enumerate() {
+            // Read the generated MIDI
+            let midi_bytes = std::fs::read(path)
+                .map_err(|e| ToolError::internal(format!("Failed to read generated MIDI: {}", e)))?;
+
+            // Store in CAS
+            let cas_result = self.cas_store_typed(&midi_bytes, "audio/midi").await?;
+            let content_hash = ContentHash::new(&cas_result.hash);
+            let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+
+            output_hashes.push(cas_result.hash.clone());
+            artifact_ids.push(artifact_id.as_str().to_string());
+
+            // Create artifact
+            let mut artifact_tags = tags.clone();
+            artifact_tags.push("type:midi".to_string());
+            artifact_tags.push("source:orpheus".to_string());
+
+            let metadata = serde_json::json!({
+                "mime_type": "audio/midi",
+                "source": "orpheus_generate",
+                "variation_index": idx,
+                "tokens": tokens_per_variation.get(idx).copied().unwrap_or(0),
+            });
+
+            let mut artifact = Artifact::new(
+                artifact_id.clone(),
+                content_hash,
+                &creator_str,
+                metadata,
+            ).with_tags(artifact_tags);
+
+            if let Some(ref parent) = parent_id {
+                artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
+            }
+            if let Some(ref var_set) = var_set_id {
+                artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
+                artifact.variation_index = Some(idx as u32);
+            }
+
+            let mut store = self.artifact_store.write().map_err(|e| {
+                ToolError::internal(format!("Failed to lock artifact store: {}", e))
+            })?;
+            store.put(artifact).map_err(|e| {
+                ToolError::internal(format!("Failed to store artifact: {}", e))
+            })?;
+        }
+
+        let summary = format!(
+            "Generated {} MIDI variation(s), {} total tokens",
+            artifact_ids.len(),
+            total_tokens
+        );
+
+        Ok(hooteproto::responses::OrpheusGeneratedResponse {
+            output_hashes,
+            artifact_ids,
+            tokens_per_variation,
+            total_tokens,
+            variation_set_id: var_set_id,
+            summary,
+        })
+    }
+
+    /// Generate MIDI from seed using Orpheus - typed response
+    pub async fn orpheus_generate_seeded_typed(
+        &self,
+        seed_hash: &str,
+        max_tokens: Option<u32>,
+        num_variations: Option<u32>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        model: Option<String>,
+        tags: Vec<String>,
+        creator: Option<String>,
+        parent_id: Option<String>,
+        variation_set_id: Option<String>,
+    ) -> Result<hooteproto::responses::OrpheusGeneratedResponse, ToolError> {
+        // Get seed MIDI from CAS
+        let seed_cas = self
+            .local_models
+            .inspect_cas_content(seed_hash)
+            .await
+            .map_err(|e| ToolError::not_found("seed_midi", e.to_string()))?;
+
+        let seed_path = seed_cas
+            .local_path
+            .ok_or_else(|| ToolError::not_found("seed_midi", seed_hash))?;
+
+        // Same as orpheus_generate but with seed
+        self.call_orpheus_generate_service(
+            Some(&seed_path),
+            None, // No continuation
+            max_tokens,
+            num_variations,
+            temperature,
+            top_p,
+            model,
+            tags,
+            creator,
+            parent_id.or(Some(seed_hash.to_string())),
+            variation_set_id,
+        ).await
+    }
+
+    /// Continue existing MIDI using Orpheus - typed response
+    pub async fn orpheus_continue_typed(
+        &self,
+        input_hash: &str,
+        max_tokens: Option<u32>,
+        num_variations: Option<u32>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        model: Option<String>,
+        tags: Vec<String>,
+        creator: Option<String>,
+        parent_id: Option<String>,
+        variation_set_id: Option<String>,
+    ) -> Result<hooteproto::responses::OrpheusGeneratedResponse, ToolError> {
+        // Get input MIDI from CAS
+        let input_cas = self
+            .local_models
+            .inspect_cas_content(input_hash)
+            .await
+            .map_err(|e| ToolError::not_found("input_midi", e.to_string()))?;
+
+        let input_path = input_cas
+            .local_path
+            .ok_or_else(|| ToolError::not_found("input_midi", input_hash))?;
+
+        // Continue from input
+        self.call_orpheus_generate_service(
+            None,
+            Some(&input_path), // Continuation
+            max_tokens,
+            num_variations,
+            temperature,
+            top_p,
+            model,
+            tags,
+            creator,
+            parent_id.or(Some(input_hash.to_string())),
+            variation_set_id,
+        ).await
+    }
+
+    /// Generate bridge between sections using Orpheus - typed response
+    pub async fn orpheus_bridge_typed(
+        &self,
+        section_a_hash: &str,
+        section_b_hash: Option<String>,
+        max_tokens: Option<u32>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        model: Option<String>,
+        tags: Vec<String>,
+        creator: Option<String>,
+        parent_id: Option<String>,
+        variation_set_id: Option<String>,
+    ) -> Result<hooteproto::responses::OrpheusGeneratedResponse, ToolError> {
+        use crate::artifact_store::{Artifact, ArtifactStore};
+        use crate::types::{ArtifactId, ContentHash, VariationSetId};
+
+        // Get section A from CAS
+        let section_a_cas = self
+            .local_models
+            .inspect_cas_content(section_a_hash)
+            .await
+            .map_err(|e| ToolError::not_found("section_a", e.to_string()))?;
+
+        let section_a_path = section_a_cas
+            .local_path
+            .ok_or_else(|| ToolError::not_found("section_a", section_a_hash))?;
+
+        // Get section B if provided
+        let section_b_path = if let Some(ref hash) = section_b_hash {
+            let cas = self.local_models.inspect_cas_content(hash).await
+                .map_err(|e| ToolError::not_found("section_b", e.to_string()))?;
+            cas.local_path
+        } else {
+            None
+        };
+
+        // Call bridge service
+        let client = reqwest::Client::new();
+        let response = client
+            .post("http://localhost:2002/bridge")
+            .json(&serde_json::json!({
+                "section_a_path": section_a_path,
+                "section_b_path": section_b_path,
+                "max_tokens": max_tokens.unwrap_or(256),
+                "temperature": temperature.unwrap_or(1.0),
+                "top_p": top_p.unwrap_or(0.95),
+                "model": model,
+            }))
+            .send()
+            .await
+            .map_err(|e| ToolError::service("orpheus_bridge", "request_failed", e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(ToolError::service(
+                "orpheus_bridge",
+                "bridge_failed",
+                format!("HTTP {}", response.status()),
+            ));
+        }
+
+        let result: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| ToolError::service("orpheus_bridge", "parse_failed", e.to_string()))?;
+
+        // Extract output path
+        let output_path = result
+            .get("output_path")
+            .and_then(|p| p.as_str())
+            .ok_or_else(|| ToolError::internal("No output_path in bridge response"))?;
+
+        let tokens = result.get("tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+
+        // Store as artifact
+        let midi_bytes = std::fs::read(output_path)
+            .map_err(|e| ToolError::internal(format!("Failed to read bridge MIDI: {}", e)))?;
+
+        let cas_result = self.cas_store_typed(&midi_bytes, "audio/midi").await?;
+        let content_hash = ContentHash::new(&cas_result.hash);
+        let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+
+        let creator_str = creator.unwrap_or_else(|| "orpheus_bridge".to_string());
+        let mut artifact_tags = tags;
+        artifact_tags.push("type:midi".to_string());
+        artifact_tags.push("source:orpheus_bridge".to_string());
+
+        let metadata = serde_json::json!({
+            "mime_type": "audio/midi",
+            "source": "orpheus_bridge",
+            "section_a_hash": section_a_hash,
+            "section_b_hash": section_b_hash,
+            "tokens": tokens,
+        });
+
+        let mut artifact = Artifact::new(
+            artifact_id.clone(),
+            content_hash.clone(),
+            &creator_str,
+            metadata,
+        ).with_tags(artifact_tags);
+
+        if let Some(ref parent) = parent_id {
+            artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
+        }
+        if let Some(ref var_set) = variation_set_id {
+            artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
+        }
+
+        {
+            let mut store = self.artifact_store.write().map_err(|e| {
+                ToolError::internal(format!("Failed to lock artifact store: {}", e))
+            })?;
+            store.put(artifact).map_err(|e| {
+                ToolError::internal(format!("Failed to store artifact: {}", e))
+            })?;
+        }
+
+        let summary = format!("Generated bridge MIDI, {} tokens", tokens);
+
+        Ok(hooteproto::responses::OrpheusGeneratedResponse {
+            output_hashes: vec![cas_result.hash],
+            artifact_ids: vec![artifact_id.as_str().to_string()],
+            tokens_per_variation: vec![tokens],
+            total_tokens: tokens,
+            variation_set_id,
+            summary,
+        })
+    }
+
+    /// Generate loopable MIDI using Orpheus loops model - typed response
+    pub async fn orpheus_loops_typed(
+        &self,
+        seed_hash: Option<String>,
+        max_tokens: Option<u32>,
+        num_variations: Option<u32>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        tags: Vec<String>,
+        creator: Option<String>,
+        parent_id: Option<String>,
+        variation_set_id: Option<String>,
+    ) -> Result<hooteproto::responses::OrpheusGeneratedResponse, ToolError> {
+        use crate::artifact_store::{Artifact, ArtifactStore};
+        use crate::types::{ArtifactId, ContentHash, VariationSetId};
+
+        // Get seed path if provided
+        let seed_path = if let Some(ref hash) = seed_hash {
+            let cas = self.local_models.inspect_cas_content(hash).await
+                .map_err(|e| ToolError::not_found("seed", e.to_string()))?;
+            cas.local_path
+        } else {
+            None
+        };
+
+        // Call loops service
+        let client = reqwest::Client::new();
+        let response = client
+            .post("http://localhost:2003/generate")
+            .json(&serde_json::json!({
+                "seed_path": seed_path,
+                "max_tokens": max_tokens.unwrap_or(512),
+                "num_variations": num_variations.unwrap_or(1),
+                "temperature": temperature.unwrap_or(1.0),
+                "top_p": top_p.unwrap_or(0.95),
+            }))
+            .send()
+            .await
+            .map_err(|e| ToolError::service("orpheus_loops", "request_failed", e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(ToolError::service(
+                "orpheus_loops",
+                "loops_failed",
+                format!("HTTP {}", response.status()),
+            ));
+        }
+
+        let result: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| ToolError::service("orpheus_loops", "parse_failed", e.to_string()))?;
+
+        // Extract generated MIDI paths
+        let output_paths: Vec<String> = result
+            .get("output_paths")
+            .and_then(|p| p.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        let tokens_per_variation: Vec<u64> = result
+            .get("tokens_per_variation")
+            .and_then(|t| t.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
+            .unwrap_or_default();
+
+        let total_tokens = result.get("total_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+
+        // Generate variation set ID if multiple variations
+        let var_set_id = if output_paths.len() > 1 {
+            variation_set_id.clone().or_else(|| Some(VariationSetId::new(uuid::Uuid::new_v4().to_string()).as_str().to_string()))
+        } else {
+            variation_set_id.clone()
+        };
+
+        // Store each output as artifact
+        let mut output_hashes = Vec::new();
+        let mut artifact_ids = Vec::new();
+        let creator_str = creator.clone().unwrap_or_else(|| "orpheus_loops".to_string());
+
+        for (idx, path) in output_paths.iter().enumerate() {
+            let midi_bytes = std::fs::read(path)
+                .map_err(|e| ToolError::internal(format!("Failed to read generated loop: {}", e)))?;
+
+            let cas_result = self.cas_store_typed(&midi_bytes, "audio/midi").await?;
+            let content_hash = ContentHash::new(&cas_result.hash);
+            let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+
+            output_hashes.push(cas_result.hash.clone());
+            artifact_ids.push(artifact_id.as_str().to_string());
+
+            let mut artifact_tags = tags.clone();
+            artifact_tags.push("type:midi".to_string());
+            artifact_tags.push("source:orpheus_loops".to_string());
+            artifact_tags.push("loopable:true".to_string());
+
+            let metadata = serde_json::json!({
+                "mime_type": "audio/midi",
+                "source": "orpheus_loops",
+                "variation_index": idx,
+                "tokens": tokens_per_variation.get(idx).copied().unwrap_or(0),
+            });
+
+            let mut artifact = Artifact::new(
+                artifact_id.clone(),
+                content_hash,
+                &creator_str,
+                metadata,
+            ).with_tags(artifact_tags);
+
+            if let Some(ref parent) = parent_id.clone().or(seed_hash.clone()) {
+                artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
+            }
+            if let Some(ref var_set) = var_set_id {
+                artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
+                artifact.variation_index = Some(idx as u32);
+            }
+
+            let mut store = self.artifact_store.write().map_err(|e| {
+                ToolError::internal(format!("Failed to lock artifact store: {}", e))
+            })?;
+            store.put(artifact).map_err(|e| {
+                ToolError::internal(format!("Failed to store artifact: {}", e))
+            })?;
+        }
+
+        let summary = format!(
+            "Generated {} loopable MIDI variation(s), {} total tokens",
+            artifact_ids.len(),
+            total_tokens
+        );
+
+        Ok(hooteproto::responses::OrpheusGeneratedResponse {
+            output_hashes,
+            artifact_ids,
+            tokens_per_variation,
+            total_tokens,
+            variation_set_id: var_set_id,
+            summary,
+        })
+    }
+
+    // Helper for seeded/continue generation
+    async fn call_orpheus_generate_service(
+        &self,
+        seed_path: Option<&str>,
+        continue_path: Option<&str>,
+        max_tokens: Option<u32>,
+        num_variations: Option<u32>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        model: Option<String>,
+        tags: Vec<String>,
+        creator: Option<String>,
+        parent_id: Option<String>,
+        variation_set_id: Option<String>,
+    ) -> Result<hooteproto::responses::OrpheusGeneratedResponse, ToolError> {
+        use crate::artifact_store::{Artifact, ArtifactStore};
+        use crate::types::{ArtifactId, ContentHash, VariationSetId};
+
+        let client = reqwest::Client::new();
+        let mut request_body = serde_json::json!({
+            "max_tokens": max_tokens.unwrap_or(512),
+            "num_variations": num_variations.unwrap_or(1),
+            "temperature": temperature.unwrap_or(1.0),
+            "top_p": top_p.unwrap_or(0.95),
+            "model": model,
+        });
+
+        if let Some(path) = seed_path {
+            request_body["seed_path"] = serde_json::json!(path);
+        }
+        if let Some(path) = continue_path {
+            request_body["continue_path"] = serde_json::json!(path);
+        }
+
+        let response = client
+            .post("http://localhost:2001/generate")
+            .json(&request_body)
+            .send()
+            .await
+            .map_err(|e| ToolError::service("orpheus", "request_failed", e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(ToolError::service(
+                "orpheus",
+                "generate_failed",
+                format!("HTTP {}", response.status()),
+            ));
+        }
+
+        let result: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| ToolError::service("orpheus", "parse_failed", e.to_string()))?;
+
+        let output_paths: Vec<String> = result
+            .get("output_paths")
+            .and_then(|p| p.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        let tokens_per_variation: Vec<u64> = result
+            .get("tokens_per_variation")
+            .and_then(|t| t.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
+            .unwrap_or_default();
+
+        let total_tokens = result.get("total_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+
+        let var_set_id = if output_paths.len() > 1 {
+            variation_set_id.clone().or_else(|| Some(VariationSetId::new(uuid::Uuid::new_v4().to_string()).as_str().to_string()))
+        } else {
+            variation_set_id.clone()
+        };
+
+        let mut output_hashes = Vec::new();
+        let mut artifact_ids = Vec::new();
+        let creator_str = creator.clone().unwrap_or_else(|| "orpheus".to_string());
+
+        for (idx, path) in output_paths.iter().enumerate() {
+            let midi_bytes = std::fs::read(path)
+                .map_err(|e| ToolError::internal(format!("Failed to read generated MIDI: {}", e)))?;
+
+            let cas_result = self.cas_store_typed(&midi_bytes, "audio/midi").await?;
+            let content_hash = ContentHash::new(&cas_result.hash);
+            let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+
+            output_hashes.push(cas_result.hash.clone());
+            artifact_ids.push(artifact_id.as_str().to_string());
+
+            let mut artifact_tags = tags.clone();
+            artifact_tags.push("type:midi".to_string());
+            artifact_tags.push("source:orpheus".to_string());
+
+            let metadata = serde_json::json!({
+                "mime_type": "audio/midi",
+                "source": if continue_path.is_some() { "orpheus_continue" } else { "orpheus_seeded" },
+                "variation_index": idx,
+                "tokens": tokens_per_variation.get(idx).copied().unwrap_or(0),
+            });
+
+            let mut artifact = Artifact::new(
+                artifact_id.clone(),
+                content_hash,
+                &creator_str,
+                metadata,
+            ).with_tags(artifact_tags);
+
+            if let Some(ref parent) = parent_id {
+                artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
+            }
+            if let Some(ref var_set) = var_set_id {
+                artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
+                artifact.variation_index = Some(idx as u32);
+            }
+
+            let mut store = self.artifact_store.write().map_err(|e| {
+                ToolError::internal(format!("Failed to lock artifact store: {}", e))
+            })?;
+            store.put(artifact).map_err(|e| {
+                ToolError::internal(format!("Failed to store artifact: {}", e))
+            })?;
+        }
+
+        let summary = format!(
+            "Generated {} MIDI variation(s), {} total tokens",
+            artifact_ids.len(),
+            total_tokens
+        );
+
+        Ok(hooteproto::responses::OrpheusGeneratedResponse {
+            output_hashes,
+            artifact_ids,
+            tokens_per_variation,
+            total_tokens,
+            variation_set_id: var_set_id,
+            summary,
+        })
+    }
+
+    // ============================================================
+    // AsyncLong Tools - Background job spawning
+    // ============================================================
+
+    /// Generate audio with MusicGen - spawns background job
+    pub async fn musicgen_generate_typed(
+        &self,
+        prompt: Option<String>,
+        duration: Option<f32>,
+        temperature: Option<f32>,
+        top_k: Option<u32>,
+        top_p: Option<f32>,
+        guidance_scale: Option<f32>,
+        do_sample: Option<bool>,
+        tags: Vec<String>,
+        creator: Option<String>,
+        parent_id: Option<String>,
+        variation_set_id: Option<String>,
+    ) -> Result<hooteproto::responses::JobStartedResponse, ToolError> {
+        use crate::artifact_store::{Artifact, ArtifactStore};
+        use crate::types::{ArtifactId, ContentHash, VariationSetId};
+
+        let job_id = self.job_store.create_job("musicgen_generate".to_string());
+        let _ = self.job_store.mark_running(&job_id);
+
+        let local_models = Arc::clone(&self.local_models);
+        let artifact_store = Arc::clone(&self.artifact_store);
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
+
+        let prompt_str = prompt.unwrap_or_else(|| "ambient electronic music".to_string());
+        let duration_val = duration.unwrap_or(8.0);
+        let temperature_val = temperature.unwrap_or(1.0);
+        let top_k_val = top_k.unwrap_or(250);
+        let top_p_val = top_p.unwrap_or(0.0);
+        let guidance_scale_val = guidance_scale.unwrap_or(3.0);
+        let do_sample_val = do_sample.unwrap_or(true);
+
+        tokio::spawn(async move {
+            let result: anyhow::Result<hooteproto::responses::ToolResponse> = (async {
+                let response = local_models
+                    .run_musicgen_generate(
+                        prompt_str.clone(),
+                        duration_val,
+                        temperature_val,
+                        top_k_val,
+                        top_p_val,
+                        guidance_scale_val,
+                        do_sample_val,
+                        Some(job_id_clone.as_str().to_string()),
+                    )
+                    .await?;
+
+                // Extract output path from response
+                let output_path = response
+                    .get("output_path")
+                    .and_then(|p| p.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("No output_path in MusicGen response"))?;
+
+                let sample_rate = response.get("sample_rate").and_then(|s| s.as_u64()).unwrap_or(32000) as u32;
+                let duration_seconds = response.get("duration").and_then(|d| d.as_f64()).unwrap_or(duration_val as f64);
+
+                // Read and store in CAS
+                let audio_bytes = tokio::fs::read(output_path).await?;
+                let hash = local_models.store_cas_content(&audio_bytes, "audio/wav").await?;
+                let content_hash = ContentHash::new(&hash);
+                let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+
+                let creator_str = creator.unwrap_or_else(|| "musicgen".to_string());
+                let mut artifact_tags = tags;
+                artifact_tags.push("type:audio".to_string());
+                artifact_tags.push("source:musicgen".to_string());
+
+                let metadata = serde_json::json!({
+                    "mime_type": "audio/wav",
+                    "source": "musicgen",
+                    "prompt": prompt_str,
+                    "duration_seconds": duration_seconds,
+                    "sample_rate": sample_rate,
+                });
+
+                let mut artifact = Artifact::new(
+                    artifact_id.clone(),
+                    content_hash,
+                    &creator_str,
+                    metadata,
+                ).with_tags(artifact_tags);
+
+                if let Some(ref parent) = parent_id {
+                    artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
+                }
+                if let Some(ref var_set) = variation_set_id {
+                    artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
+                }
+
+                let mut store = artifact_store.write().map_err(|_| anyhow::anyhow!("Artifact store lock poisoned"))?;
+                store.put(artifact)?;
+
+                Ok(hooteproto::responses::ToolResponse::AudioGenerated(
+                    hooteproto::responses::AudioGeneratedResponse {
+                        artifact_id: artifact_id.as_str().to_string(),
+                        content_hash: hash,
+                        duration_seconds,
+                        sample_rate,
+                        format: hooteproto::responses::AudioFormat::Wav,
+                        genre: None,
+                    },
+                ))
+            })
+            .await;
+
+            match result {
+                Ok(response) => {
+                    let _ = job_store.mark_complete(&job_id_clone, response);
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "MusicGen generation failed");
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
+        });
+
+        Ok(hooteproto::responses::JobStartedResponse {
+            job_id: job_id.as_str().to_string(),
+            tool: "musicgen_generate".to_string(),
+        })
+    }
+
+    /// Generate song with YuE - spawns background job
+    pub async fn yue_generate_typed(
+        &self,
+        lyrics: String,
+        genre: Option<String>,
+        max_new_tokens: Option<u32>,
+        run_n_segments: Option<u32>,
+        seed: Option<u64>,
+        tags: Vec<String>,
+        creator: Option<String>,
+        parent_id: Option<String>,
+        variation_set_id: Option<String>,
+    ) -> Result<hooteproto::responses::JobStartedResponse, ToolError> {
+        use crate::artifact_store::{Artifact, ArtifactStore};
+        use crate::types::{ArtifactId, ContentHash, VariationSetId};
+
+        let job_id = self.job_store.create_job("yue_generate".to_string());
+        let _ = self.job_store.mark_running(&job_id);
+
+        let local_models = Arc::clone(&self.local_models);
+        let artifact_store = Arc::clone(&self.artifact_store);
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
+
+        let genre_str = genre.clone().unwrap_or_else(|| "pop".to_string());
+        let max_tokens = max_new_tokens.unwrap_or(3000);
+        let segments = run_n_segments.unwrap_or(2);
+        let seed_val = seed.unwrap_or(0);
+
+        tokio::spawn(async move {
+            let result: anyhow::Result<hooteproto::responses::ToolResponse> = (async {
+                let response = local_models
+                    .run_yue_generate(
+                        lyrics.clone(),
+                        genre_str.clone(),
+                        max_tokens,
+                        segments,
+                        seed_val,
+                        Some(job_id_clone.as_str().to_string()),
+                    )
+                    .await?;
+
+                // Extract output path from response
+                let output_path = response
+                    .get("output_path")
+                    .and_then(|p| p.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("No output_path in YuE response"))?;
+
+                let sample_rate = response.get("sample_rate").and_then(|s| s.as_u64()).unwrap_or(44100) as u32;
+                let duration_seconds = response.get("duration").and_then(|d| d.as_f64()).unwrap_or(60.0);
+
+                // Read and store in CAS
+                let audio_bytes = tokio::fs::read(output_path).await?;
+                let hash = local_models.store_cas_content(&audio_bytes, "audio/wav").await?;
+                let content_hash = ContentHash::new(&hash);
+                let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+
+                let creator_str = creator.unwrap_or_else(|| "yue".to_string());
+                let mut artifact_tags = tags;
+                artifact_tags.push("type:audio".to_string());
+                artifact_tags.push("source:yue".to_string());
+                artifact_tags.push(format!("genre:{}", genre_str));
+
+                let metadata = serde_json::json!({
+                    "mime_type": "audio/wav",
+                    "source": "yue",
+                    "lyrics": lyrics,
+                    "genre": genre_str,
+                    "duration_seconds": duration_seconds,
+                    "sample_rate": sample_rate,
+                });
+
+                let mut artifact = Artifact::new(
+                    artifact_id.clone(),
+                    content_hash,
+                    &creator_str,
+                    metadata,
+                ).with_tags(artifact_tags);
+
+                if let Some(ref parent) = parent_id {
+                    artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
+                }
+                if let Some(ref var_set) = variation_set_id {
+                    artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
+                }
+
+                let mut store = artifact_store.write().map_err(|_| anyhow::anyhow!("Artifact store lock poisoned"))?;
+                store.put(artifact)?;
+
+                Ok(hooteproto::responses::ToolResponse::AudioGenerated(
+                    hooteproto::responses::AudioGeneratedResponse {
+                        artifact_id: artifact_id.as_str().to_string(),
+                        content_hash: hash,
+                        duration_seconds,
+                        sample_rate,
+                        format: hooteproto::responses::AudioFormat::Wav,
+                        genre: Some(genre_str),
+                    },
+                ))
+            })
+            .await;
+
+            match result {
+                Ok(response) => {
+                    let _ = job_store.mark_complete(&job_id_clone, response);
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "YuE generation failed");
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
+        });
+
+        Ok(hooteproto::responses::JobStartedResponse {
+            job_id: job_id.as_str().to_string(),
+            tool: "yue_generate".to_string(),
+        })
+    }
+
+    /// Analyze audio with BeatThis - spawns background job
+    pub async fn beatthis_analyze_typed(
+        &self,
+        audio_hash: Option<String>,
+        audio_path: Option<String>,
+        _include_frames: bool,
+    ) -> Result<hooteproto::responses::JobStartedResponse, ToolError> {
+        use crate::api::schema::BeatThisServiceRequest;
+        use crate::api::tools::beat_this::prepare_audio_for_beatthis;
+
+        let job_id = self.job_store.create_job("beatthis_analyze".to_string());
+        let _ = self.job_store.mark_running(&job_id);
+
+        let local_models = Arc::clone(&self.local_models);
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
+
+        // Get audio bytes - need to do this before spawn since we need async local_models
+        let audio_bytes = if let Some(ref hash) = audio_hash {
+            let content = self.local_models
+                .inspect_cas_content(hash)
+                .await
+                .map_err(|e| ToolError::not_found("audio", e.to_string()))?;
+            let path = content.local_path.ok_or_else(|| ToolError::not_found("audio", hash.clone()))?;
+            std::fs::read(&path).map_err(|e| ToolError::internal(format!("Failed to read audio: {}", e)))?
+        } else if let Some(ref path) = audio_path {
+            std::fs::read(path).map_err(|e| ToolError::internal(format!("Failed to read audio: {}", e)))?
+        } else {
+            return Err(ToolError::validation("invalid_params", "Either audio_hash or audio_path required"));
+        };
+
+        tokio::spawn(async move {
+            let result: anyhow::Result<hooteproto::responses::ToolResponse> = (async {
+                // Prepare audio for BeatThis (mono 22050 Hz)
+                let prepared_audio = prepare_audio_for_beatthis(&audio_bytes)
+                    .map_err(|e| anyhow::anyhow!("Audio preparation failed: {}", e.message()))?;
+
+                // Encode as base64
+                use base64::Engine;
+                let audio_base64 = base64::engine::general_purpose::STANDARD.encode(&prepared_audio);
+
+                let service_request = BeatThisServiceRequest {
+                    audio: audio_base64,
+                    client_job_id: Some(job_id_clone.as_str().to_string()),
+                };
+
+                let response = reqwest::Client::new()
+                    .post("http://127.0.0.1:2005/predict")
+                    .json(&service_request)
+                    .timeout(std::time::Duration::from_secs(120))
+                    .send()
+                    .await?;
+
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let error = response.text().await.unwrap_or_default();
+                    anyhow::bail!("BeatThis error {}: {}", status, error);
+                }
+
+                let beat_response: crate::api::schema::BeatThisServiceResponse = response.json().await?;
+
+                // Compute confidence from detection ratio (heuristic)
+                let confidence = if beat_response.duration > 0.0 {
+                    let expected_beats = beat_response.duration * beat_response.bpm / 60.0;
+                    let ratio = beat_response.num_beats as f64 / expected_beats;
+                    (1.0 - (ratio - 1.0).abs().min(1.0)) as f32
+                } else {
+                    0.5
+                };
+
+                Ok(hooteproto::responses::ToolResponse::BeatsAnalyzed(
+                    hooteproto::responses::BeatsAnalyzedResponse {
+                        beats: beat_response.beats,
+                        downbeats: beat_response.downbeats,
+                        estimated_bpm: beat_response.bpm,
+                        confidence,
+                    },
+                ))
+            })
+            .await;
+
+            match result {
+                Ok(response) => {
+                    let _ = job_store.mark_complete(&job_id_clone, response);
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "BeatThis analysis failed");
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
+        });
+
+        Ok(hooteproto::responses::JobStartedResponse {
+            job_id: job_id.as_str().to_string(),
+            tool: "beatthis_analyze".to_string(),
+        })
+    }
+
+    /// Analyze audio with CLAP - spawns background job
+    pub async fn clap_analyze_typed(
+        &self,
+        audio_hash: String,
+        audio_b_hash: Option<String>,
+        tasks: Vec<String>,
+        text_candidates: Vec<String>,
+        _creator: Option<String>,
+        _parent_id: Option<String>,
+    ) -> Result<hooteproto::responses::JobStartedResponse, ToolError> {
+        use base64::Engine;
+
+        let job_id = self.job_store.create_job("clap_analyze".to_string());
+        let _ = self.job_store.mark_running(&job_id);
+
+        let local_models = Arc::clone(&self.local_models);
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
+
+        // Get audio content and encode as base64 before spawn
+        let content = self.local_models
+            .inspect_cas_content(&audio_hash)
+            .await
+            .map_err(|e| ToolError::not_found("audio", e.to_string()))?;
+        let path = content.local_path.ok_or_else(|| ToolError::not_found("audio", audio_hash.clone()))?;
+        let audio_bytes = std::fs::read(&path).map_err(|e| ToolError::internal(format!("Failed to read audio: {}", e)))?;
+        let audio_base64 = base64::engine::general_purpose::STANDARD.encode(&audio_bytes);
+
+        // Optionally get audio_b content
+        let audio_b_base64 = if let Some(ref hash) = audio_b_hash {
+            let content_b = self.local_models
+                .inspect_cas_content(hash)
+                .await
+                .map_err(|e| ToolError::not_found("audio_b", e.to_string()))?;
+            if let Some(path_b) = content_b.local_path {
+                let bytes_b = std::fs::read(&path_b).map_err(|e| ToolError::internal(format!("Failed to read audio_b: {}", e)))?;
+                Some(base64::engine::general_purpose::STANDARD.encode(&bytes_b))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let text_cands = if text_candidates.is_empty() { None } else { Some(text_candidates) };
+
+        tokio::spawn(async move {
+            let result: anyhow::Result<hooteproto::responses::ToolResponse> = (async {
+                let response = local_models
+                    .run_clap_analyze(
+                        audio_base64,
+                        tasks,
+                        audio_b_base64,
+                        text_cands,
+                        Some(job_id_clone.as_str().to_string()),
+                    )
+                    .await?;
+
+                // Parse CLAP response
+                let embeddings = response
+                    .get("embeddings")
+                    .and_then(|e| e.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect());
+
+                let genre = response
+                    .get("genre")
+                    .and_then(|g| serde_json::from_value(g.clone()).ok());
+
+                let mood = response
+                    .get("mood")
+                    .and_then(|m| serde_json::from_value(m.clone()).ok());
+
+                let zero_shot = response
+                    .get("zero_shot")
+                    .and_then(|z| serde_json::from_value(z.clone()).ok());
+
+                let similarity = response
+                    .get("similarity")
+                    .and_then(|s| s.as_f64())
+                    .map(|f| f as f32);
+
+                Ok(hooteproto::responses::ToolResponse::ClapAnalyzed(
+                    hooteproto::responses::ClapAnalyzedResponse {
+                        embeddings,
+                        genre,
+                        mood,
+                        zero_shot,
+                        similarity,
+                    },
+                ))
+            })
+            .await;
+
+            match result {
+                Ok(response) => {
+                    let _ = job_store.mark_complete(&job_id_clone, response);
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "CLAP analysis failed");
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
+        });
+
+        Ok(hooteproto::responses::JobStartedResponse {
+            job_id: job_id.as_str().to_string(),
+            tool: "clap_analyze".to_string(),
+        })
     }
 }

@@ -72,6 +72,24 @@ impl TypedDispatcher {
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
+            ToolRequest::AbcToMidi(req) => {
+                match self
+                    .server
+                    .abc_to_midi_typed(
+                        &req.abc,
+                        req.tempo_override,
+                        req.transpose,
+                        req.velocity,
+                        req.channel,
+                        req.tags,
+                        req.creator,
+                    )
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::AbcToMidi(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
 
             // === SoundFont ===
             ToolRequest::SoundfontInspect(req) => {
@@ -132,6 +150,28 @@ impl TypedDispatcher {
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
+            ToolRequest::JobPoll(req) => {
+                match self
+                    .server
+                    .job_poll_typed(req.job_ids, req.timeout_ms, req.mode)
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::JobPoll(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::JobCancel(req) => {
+                match self.server.job_cancel_typed(&req.job_id).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::JobCancel(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::JobSleep(req) => {
+                match self.server.job_sleep_typed(req.milliseconds).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::JobSleep(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
 
             // === Config ===
             ToolRequest::ConfigGet(req) => {
@@ -166,6 +206,16 @@ impl TypedDispatcher {
                 Ok(resp) => ResponseEnvelope::success(ToolResponse::CasStats(resp)),
                 Err(e) => ResponseEnvelope::error(e),
             },
+            ToolRequest::CasUploadFile(req) => {
+                match self
+                    .server
+                    .cas_upload_file_typed(&req.file_path, &req.mime_type)
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::CasStored(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
 
             // === Artifacts ===
             ToolRequest::ArtifactGet(req) => {
@@ -181,6 +231,23 @@ impl TypedDispatcher {
                     .await
                 {
                     Ok(resp) => ResponseEnvelope::success(ToolResponse::ArtifactList(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::ArtifactUpload(req) => {
+                match self
+                    .server
+                    .artifact_upload_typed(
+                        &req.file_path,
+                        &req.mime_type,
+                        req.tags,
+                        req.creator,
+                        req.parent_id,
+                        req.variation_set_id,
+                    )
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::ArtifactCreated(resp)),
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
@@ -228,11 +295,255 @@ impl TypedDispatcher {
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
+            ToolRequest::GraphBind(req) => {
+                match self
+                    .server
+                    .graph_bind_typed(&req.id, &req.name, req.hints)
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GraphBind(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::GraphTag(req) => {
+                match self
+                    .server
+                    .graph_tag_typed(&req.identity_id, &req.namespace, &req.value)
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GraphTag(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::GraphConnect(req) => {
+                match self
+                    .server
+                    .graph_connect_typed(
+                        &req.from_identity,
+                        &req.from_port,
+                        &req.to_identity,
+                        &req.to_port,
+                        req.transport,
+                    )
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GraphConnect(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+
+            // === Annotations ===
+            ToolRequest::AddAnnotation(req) => {
+                match self
+                    .server
+                    .add_annotation_typed(&req.artifact_id, &req.message, req.source, req.vibe)
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::AnnotationAdded(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+
+            // === MIDI to WAV ===
+            ToolRequest::MidiToWav(req) => {
+                match self
+                    .server
+                    .midi_to_wav_typed(
+                        &req.input_hash,
+                        &req.soundfont_hash,
+                        req.sample_rate,
+                        req.tags,
+                        req.creator,
+                        req.parent_id,
+                        req.variation_set_id,
+                    )
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::MidiToWav(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
 
             // === Orpheus Classify ===
             ToolRequest::OrpheusClassify(req) => {
                 match self.server.orpheus_classify_typed(&req.midi_hash).await {
                     Ok(resp) => ResponseEnvelope::success(ToolResponse::OrpheusClassified(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+
+            // === Orpheus Generation ===
+            ToolRequest::OrpheusGenerate(req) => {
+                match self
+                    .server
+                    .orpheus_generate_typed(
+                        req.max_tokens,
+                        req.num_variations,
+                        req.temperature,
+                        req.top_p,
+                        req.model,
+                        req.tags,
+                        req.creator,
+                        req.parent_id,
+                        req.variation_set_id,
+                    )
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::OrpheusGenerated(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::OrpheusGenerateSeeded(req) => {
+                match self
+                    .server
+                    .orpheus_generate_seeded_typed(
+                        &req.seed_hash,
+                        req.max_tokens,
+                        req.num_variations,
+                        req.temperature,
+                        req.top_p,
+                        req.model,
+                        req.tags,
+                        req.creator,
+                        req.parent_id,
+                        req.variation_set_id,
+                    )
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::OrpheusGenerated(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::OrpheusContinue(req) => {
+                match self
+                    .server
+                    .orpheus_continue_typed(
+                        &req.input_hash,
+                        req.max_tokens,
+                        req.num_variations,
+                        req.temperature,
+                        req.top_p,
+                        req.model,
+                        req.tags,
+                        req.creator,
+                        req.parent_id,
+                        req.variation_set_id,
+                    )
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::OrpheusGenerated(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::OrpheusBridge(req) => {
+                match self
+                    .server
+                    .orpheus_bridge_typed(
+                        &req.section_a_hash,
+                        req.section_b_hash,
+                        req.max_tokens,
+                        req.temperature,
+                        req.top_p,
+                        req.model,
+                        req.tags,
+                        req.creator,
+                        req.parent_id,
+                        req.variation_set_id,
+                    )
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::OrpheusGenerated(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::OrpheusLoops(req) => {
+                match self
+                    .server
+                    .orpheus_loops_typed(
+                        req.seed_hash,
+                        req.max_tokens,
+                        req.num_variations,
+                        req.temperature,
+                        req.top_p,
+                        req.tags,
+                        req.creator,
+                        req.parent_id,
+                        req.variation_set_id,
+                    )
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::OrpheusGenerated(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+
+            // === AsyncLong Tools (return job_id immediately) ===
+            ToolRequest::MusicgenGenerate(req) => {
+                match self
+                    .server
+                    .musicgen_generate_typed(
+                        req.prompt,
+                        req.duration,
+                        req.temperature,
+                        req.top_k,
+                        req.top_p,
+                        req.guidance_scale,
+                        req.do_sample,
+                        req.tags,
+                        req.creator,
+                        req.parent_id,
+                        req.variation_set_id,
+                    )
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::JobStarted(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::YueGenerate(req) => {
+                match self
+                    .server
+                    .yue_generate_typed(
+                        req.lyrics,
+                        req.genre,
+                        req.max_new_tokens,
+                        req.run_n_segments,
+                        req.seed,
+                        req.tags,
+                        req.creator,
+                        req.parent_id,
+                        req.variation_set_id,
+                    )
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::JobStarted(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::BeatthisAnalyze(req) => {
+                match self
+                    .server
+                    .beatthis_analyze_typed(req.audio_hash, req.audio_path, req.include_frames)
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::JobStarted(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::ClapAnalyze(req) => {
+                match self
+                    .server
+                    .clap_analyze_typed(
+                        req.audio_hash,
+                        req.audio_b_hash,
+                        req.tasks,
+                        req.text_candidates,
+                        req.creator,
+                        req.parent_id,
+                    )
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::JobStarted(resp)),
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
