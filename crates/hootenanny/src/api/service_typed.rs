@@ -1776,7 +1776,7 @@ impl EventDualityServer {
 
         let client = reqwest::Client::new();
         let response = client
-            .post("http://localhost:2000/generate")
+            .post("http://localhost:2000/predict")
             .json(&serde_json::json!({
                 "max_tokens": max_tokens.unwrap_or(512),
                 "num_variations": num_variations.unwrap_or(1),
@@ -1801,37 +1801,44 @@ impl EventDualityServer {
             .await
             .map_err(|e| ToolError::service("orpheus", "parse_failed", e.to_string()))?;
 
-        // Extract generated MIDI paths
-        let output_paths: Vec<String> = result
-            .get("output_paths")
-            .and_then(|p| p.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default();
-
-        let tokens_per_variation: Vec<u64> = result
-            .get("tokens_per_variation")
-            .and_then(|t| t.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
-            .unwrap_or_default();
-
-        let total_tokens = result.get("total_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+        // Parse variations array from response
+        let variations = result
+            .get("variations")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| ToolError::service("orpheus", "invalid_response", "Missing variations array"))?;
 
         // Generate variation set ID if multiple variations
-        let var_set_id = if output_paths.len() > 1 {
+        let var_set_id = if variations.len() > 1 {
             variation_set_id.clone().or_else(|| Some(VariationSetId::new(uuid::Uuid::new_v4().to_string()).as_str().to_string()))
         } else {
             variation_set_id.clone()
         };
 
-        // Store each output as artifact
+        // Store each variation as artifact
         let mut output_hashes = Vec::new();
         let mut artifact_ids = Vec::new();
+        let mut tokens_per_variation = Vec::new();
+        let mut total_tokens: u64 = 0;
         let creator_str = creator.clone().unwrap_or_else(|| "orpheus".to_string());
 
-        for (idx, path) in output_paths.iter().enumerate() {
-            // Read the generated MIDI
-            let midi_bytes = std::fs::read(path)
-                .map_err(|e| ToolError::internal(format!("Failed to read generated MIDI: {}", e)))?;
+        for (idx, variation) in variations.iter().enumerate() {
+            // Decode base64 MIDI
+            let midi_base64 = variation
+                .get("midi_base64")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| ToolError::service("orpheus", "invalid_response", "Missing midi_base64"))?;
+
+            use base64::Engine;
+            let midi_bytes = base64::engine::general_purpose::STANDARD
+                .decode(midi_base64)
+                .map_err(|e| ToolError::service("orpheus", "decode_failed", e.to_string()))?;
+
+            let num_tokens = variation
+                .get("num_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            tokens_per_variation.push(num_tokens);
+            total_tokens += num_tokens;
 
             // Store in CAS
             let cas_result = self.cas_store_typed(&midi_bytes, "audio/midi").await?;
@@ -1850,7 +1857,7 @@ impl EventDualityServer {
                 "mime_type": "audio/midi",
                 "source": "orpheus_generate",
                 "variation_index": idx,
-                "tokens": tokens_per_variation.get(idx).copied().unwrap_or(0),
+                "tokens": num_tokens,
             });
 
             let mut artifact = Artifact::new(
@@ -1917,10 +1924,10 @@ impl EventDualityServer {
             .local_path
             .ok_or_else(|| ToolError::not_found("seed_midi", seed_hash))?;
 
-        // Same as orpheus_generate but with seed
+        // Generate from seed
         self.call_orpheus_generate_service(
-            Some(&seed_path),
-            None, // No continuation
+            "generate_seeded",
+            &seed_path,
             max_tokens,
             num_variations,
             temperature,
@@ -1960,8 +1967,8 @@ impl EventDualityServer {
 
         // Continue from input
         self.call_orpheus_generate_service(
-            None,
-            Some(&input_path), // Continuation
+            "continue",
+            &input_path,
             max_tokens,
             num_variations,
             temperature,
@@ -1982,7 +1989,7 @@ impl EventDualityServer {
         max_tokens: Option<u32>,
         temperature: Option<f32>,
         top_p: Option<f32>,
-        model: Option<String>,
+        _model: Option<String>,
         tags: Vec<String>,
         creator: Option<String>,
         parent_id: Option<String>,
@@ -1990,8 +1997,9 @@ impl EventDualityServer {
     ) -> Result<hooteproto::responses::OrpheusGeneratedResponse, ToolError> {
         use crate::artifact_store::{Artifact, ArtifactStore};
         use crate::types::{ArtifactId, ContentHash, VariationSetId};
+        use base64::Engine;
 
-        // Get section A from CAS
+        // Get section A from CAS and encode as base64
         let section_a_cas = self
             .local_models
             .inspect_cas_content(section_a_hash)
@@ -2002,26 +2010,35 @@ impl EventDualityServer {
             .local_path
             .ok_or_else(|| ToolError::not_found("section_a", section_a_hash))?;
 
+        let section_a_bytes = std::fs::read(&section_a_path)
+            .map_err(|e| ToolError::internal(format!("Failed to read section_a: {}", e)))?;
+        let section_a_base64 = base64::engine::general_purpose::STANDARD.encode(&section_a_bytes);
+
         // Get section B if provided
-        let section_b_path = if let Some(ref hash) = section_b_hash {
+        let section_b_base64 = if let Some(ref hash) = section_b_hash {
             let cas = self.local_models.inspect_cas_content(hash).await
                 .map_err(|e| ToolError::not_found("section_b", e.to_string()))?;
-            cas.local_path
+            if let Some(path) = cas.local_path {
+                let bytes = std::fs::read(&path)
+                    .map_err(|e| ToolError::internal(format!("Failed to read section_b: {}", e)))?;
+                Some(base64::engine::general_purpose::STANDARD.encode(&bytes))
+            } else {
+                None
+            }
         } else {
             None
         };
 
-        // Call bridge service
+        // Call bridge service with base64 data
         let client = reqwest::Client::new();
         let response = client
-            .post("http://localhost:2002/bridge")
+            .post("http://localhost:2002/predict")
             .json(&serde_json::json!({
-                "section_a_path": section_a_path,
-                "section_b_path": section_b_path,
+                "section_a": section_a_base64,
+                "section_b": section_b_base64,
                 "max_tokens": max_tokens.unwrap_or(256),
                 "temperature": temperature.unwrap_or(1.0),
                 "top_p": top_p.unwrap_or(0.95),
-                "model": model,
             }))
             .send()
             .await
@@ -2040,50 +2057,70 @@ impl EventDualityServer {
             .await
             .map_err(|e| ToolError::service("orpheus_bridge", "parse_failed", e.to_string()))?;
 
-        // Extract output path
-        let output_path = result
-            .get("output_path")
-            .and_then(|p| p.as_str())
-            .ok_or_else(|| ToolError::internal("No output_path in bridge response"))?;
+        // Parse variations array
+        let variations = result
+            .get("variations")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| ToolError::service("orpheus_bridge", "invalid_response", "Missing variations array"))?;
 
-        let tokens = result.get("tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-
-        // Store as artifact
-        let midi_bytes = std::fs::read(output_path)
-            .map_err(|e| ToolError::internal(format!("Failed to read bridge MIDI: {}", e)))?;
-
-        let cas_result = self.cas_store_typed(&midi_bytes, "audio/midi").await?;
-        let content_hash = ContentHash::new(&cas_result.hash);
-        let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
-
+        let mut output_hashes = Vec::new();
+        let mut artifact_ids = Vec::new();
+        let mut tokens_per_variation = Vec::new();
+        let mut total_tokens: u64 = 0;
         let creator_str = creator.unwrap_or_else(|| "orpheus_bridge".to_string());
-        let mut artifact_tags = tags;
-        artifact_tags.push("type:midi".to_string());
-        artifact_tags.push("source:orpheus_bridge".to_string());
 
-        let metadata = serde_json::json!({
-            "mime_type": "audio/midi",
-            "source": "orpheus_bridge",
-            "section_a_hash": section_a_hash,
-            "section_b_hash": section_b_hash,
-            "tokens": tokens,
-        });
+        for (idx, variation) in variations.iter().enumerate() {
+            let midi_base64 = variation
+                .get("midi_base64")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| ToolError::service("orpheus_bridge", "invalid_response", "Missing midi_base64"))?;
 
-        let mut artifact = Artifact::new(
-            artifact_id.clone(),
-            content_hash.clone(),
-            &creator_str,
-            metadata,
-        ).with_tags(artifact_tags);
+            let midi_bytes = base64::engine::general_purpose::STANDARD
+                .decode(midi_base64)
+                .map_err(|e| ToolError::service("orpheus_bridge", "decode_failed", e.to_string()))?;
 
-        if let Some(ref parent) = parent_id {
-            artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
-        }
-        if let Some(ref var_set) = variation_set_id {
-            artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
-        }
+            let num_tokens = variation
+                .get("num_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            tokens_per_variation.push(num_tokens);
+            total_tokens += num_tokens;
 
-        {
+            let cas_result = self.cas_store_typed(&midi_bytes, "audio/midi").await?;
+            let content_hash = ContentHash::new(&cas_result.hash);
+            let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+
+            output_hashes.push(cas_result.hash.clone());
+            artifact_ids.push(artifact_id.as_str().to_string());
+
+            let mut artifact_tags = tags.clone();
+            artifact_tags.push("type:midi".to_string());
+            artifact_tags.push("source:orpheus_bridge".to_string());
+
+            let metadata = serde_json::json!({
+                "mime_type": "audio/midi",
+                "source": "orpheus_bridge",
+                "section_a_hash": section_a_hash,
+                "section_b_hash": section_b_hash,
+                "tokens": num_tokens,
+                "variation_index": idx,
+            });
+
+            let mut artifact = Artifact::new(
+                artifact_id.clone(),
+                content_hash,
+                &creator_str,
+                metadata,
+            ).with_tags(artifact_tags);
+
+            if let Some(ref parent) = parent_id {
+                artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
+            }
+            if let Some(ref var_set) = variation_set_id {
+                artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
+                artifact.variation_index = Some(idx as u32);
+            }
+
             let mut store = self.artifact_store.write().map_err(|e| {
                 ToolError::internal(format!("Failed to lock artifact store: {}", e))
             })?;
@@ -2092,13 +2129,13 @@ impl EventDualityServer {
             })?;
         }
 
-        let summary = format!("Generated bridge MIDI, {} tokens", tokens);
+        let summary = format!("Generated {} bridge variation(s), {} total tokens", artifact_ids.len(), total_tokens);
 
         Ok(hooteproto::responses::OrpheusGeneratedResponse {
-            output_hashes: vec![cas_result.hash],
-            artifact_ids: vec![artifact_id.as_str().to_string()],
-            tokens_per_variation: vec![tokens],
-            total_tokens: tokens,
+            output_hashes,
+            artifact_ids,
+            tokens_per_variation,
+            total_tokens,
             variation_set_id,
             summary,
         })
@@ -2119,22 +2156,29 @@ impl EventDualityServer {
     ) -> Result<hooteproto::responses::OrpheusGeneratedResponse, ToolError> {
         use crate::artifact_store::{Artifact, ArtifactStore};
         use crate::types::{ArtifactId, ContentHash, VariationSetId};
+        use base64::Engine;
 
-        // Get seed path if provided
-        let seed_path = if let Some(ref hash) = seed_hash {
+        // Get seed MIDI and encode as base64 if provided
+        let seed_base64 = if let Some(ref hash) = seed_hash {
             let cas = self.local_models.inspect_cas_content(hash).await
                 .map_err(|e| ToolError::not_found("seed", e.to_string()))?;
-            cas.local_path
+            if let Some(path) = cas.local_path {
+                let bytes = std::fs::read(&path)
+                    .map_err(|e| ToolError::internal(format!("Failed to read seed: {}", e)))?;
+                Some(base64::engine::general_purpose::STANDARD.encode(&bytes))
+            } else {
+                None
+            }
         } else {
             None
         };
 
-        // Call loops service
+        // Call loops service with base64 data
         let client = reqwest::Client::new();
         let response = client
-            .post("http://localhost:2003/generate")
+            .post("http://localhost:2003/predict")
             .json(&serde_json::json!({
-                "seed_path": seed_path,
+                "seed_midi": seed_base64,
                 "max_tokens": max_tokens.unwrap_or(512),
                 "num_variations": num_variations.unwrap_or(1),
                 "temperature": temperature.unwrap_or(1.0),
@@ -2157,36 +2201,42 @@ impl EventDualityServer {
             .await
             .map_err(|e| ToolError::service("orpheus_loops", "parse_failed", e.to_string()))?;
 
-        // Extract generated MIDI paths
-        let output_paths: Vec<String> = result
-            .get("output_paths")
-            .and_then(|p| p.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default();
-
-        let tokens_per_variation: Vec<u64> = result
-            .get("tokens_per_variation")
-            .and_then(|t| t.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
-            .unwrap_or_default();
-
-        let total_tokens = result.get("total_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+        // Parse variations array
+        let variations = result
+            .get("variations")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| ToolError::service("orpheus_loops", "invalid_response", "Missing variations array"))?;
 
         // Generate variation set ID if multiple variations
-        let var_set_id = if output_paths.len() > 1 {
+        let var_set_id = if variations.len() > 1 {
             variation_set_id.clone().or_else(|| Some(VariationSetId::new(uuid::Uuid::new_v4().to_string()).as_str().to_string()))
         } else {
             variation_set_id.clone()
         };
 
-        // Store each output as artifact
+        // Store each variation as artifact
         let mut output_hashes = Vec::new();
         let mut artifact_ids = Vec::new();
+        let mut tokens_per_variation = Vec::new();
+        let mut total_tokens: u64 = 0;
         let creator_str = creator.clone().unwrap_or_else(|| "orpheus_loops".to_string());
 
-        for (idx, path) in output_paths.iter().enumerate() {
-            let midi_bytes = std::fs::read(path)
-                .map_err(|e| ToolError::internal(format!("Failed to read generated loop: {}", e)))?;
+        for (idx, variation) in variations.iter().enumerate() {
+            let midi_base64 = variation
+                .get("midi_base64")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| ToolError::service("orpheus_loops", "invalid_response", "Missing midi_base64"))?;
+
+            let midi_bytes = base64::engine::general_purpose::STANDARD
+                .decode(midi_base64)
+                .map_err(|e| ToolError::service("orpheus_loops", "decode_failed", e.to_string()))?;
+
+            let num_tokens = variation
+                .get("num_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            tokens_per_variation.push(num_tokens);
+            total_tokens += num_tokens;
 
             let cas_result = self.cas_store_typed(&midi_bytes, "audio/midi").await?;
             let content_hash = ContentHash::new(&cas_result.hash);
@@ -2204,7 +2254,7 @@ impl EventDualityServer {
                 "mime_type": "audio/midi",
                 "source": "orpheus_loops",
                 "variation_index": idx,
-                "tokens": tokens_per_variation.get(idx).copied().unwrap_or(0),
+                "tokens": num_tokens,
             });
 
             let mut artifact = Artifact::new(
@@ -2247,15 +2297,16 @@ impl EventDualityServer {
     }
 
     // Helper for seeded/continue generation
+    /// Helper for seeded/continue generation - uses task and midi_input (base64)
     async fn call_orpheus_generate_service(
         &self,
-        seed_path: Option<&str>,
-        continue_path: Option<&str>,
+        task: &str,  // "generate_seeded" or "continue"
+        midi_input_path: &str,  // Path to read MIDI from
         max_tokens: Option<u32>,
         num_variations: Option<u32>,
         temperature: Option<f32>,
         top_p: Option<f32>,
-        model: Option<String>,
+        _model: Option<String>,  // Not used by service currently
         tags: Vec<String>,
         creator: Option<String>,
         parent_id: Option<String>,
@@ -2263,25 +2314,25 @@ impl EventDualityServer {
     ) -> Result<hooteproto::responses::OrpheusGeneratedResponse, ToolError> {
         use crate::artifact_store::{Artifact, ArtifactStore};
         use crate::types::{ArtifactId, ContentHash, VariationSetId};
+        use base64::Engine;
+
+        // Read and encode the input MIDI
+        let midi_bytes = std::fs::read(midi_input_path)
+            .map_err(|e| ToolError::internal(format!("Failed to read input MIDI: {}", e)))?;
+        let midi_base64 = base64::engine::general_purpose::STANDARD.encode(&midi_bytes);
 
         let client = reqwest::Client::new();
-        let mut request_body = serde_json::json!({
+        let request_body = serde_json::json!({
+            "task": task,
+            "midi_input": midi_base64,
             "max_tokens": max_tokens.unwrap_or(512),
             "num_variations": num_variations.unwrap_or(1),
             "temperature": temperature.unwrap_or(1.0),
             "top_p": top_p.unwrap_or(0.95),
-            "model": model,
         });
 
-        if let Some(path) = seed_path {
-            request_body["seed_path"] = serde_json::json!(path);
-        }
-        if let Some(path) = continue_path {
-            request_body["continue_path"] = serde_json::json!(path);
-        }
-
         let response = client
-            .post("http://localhost:2000/generate")
+            .post("http://localhost:2000/predict")
             .json(&request_body)
             .send()
             .await
@@ -2300,21 +2351,13 @@ impl EventDualityServer {
             .await
             .map_err(|e| ToolError::service("orpheus", "parse_failed", e.to_string()))?;
 
-        let output_paths: Vec<String> = result
-            .get("output_paths")
-            .and_then(|p| p.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default();
+        // Parse variations array
+        let variations = result
+            .get("variations")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| ToolError::service("orpheus", "invalid_response", "Missing variations array"))?;
 
-        let tokens_per_variation: Vec<u64> = result
-            .get("tokens_per_variation")
-            .and_then(|t| t.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
-            .unwrap_or_default();
-
-        let total_tokens = result.get("total_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-
-        let var_set_id = if output_paths.len() > 1 {
+        let var_set_id = if variations.len() > 1 {
             variation_set_id.clone().or_else(|| Some(VariationSetId::new(uuid::Uuid::new_v4().to_string()).as_str().to_string()))
         } else {
             variation_set_id.clone()
@@ -2322,11 +2365,27 @@ impl EventDualityServer {
 
         let mut output_hashes = Vec::new();
         let mut artifact_ids = Vec::new();
+        let mut tokens_per_variation = Vec::new();
+        let mut total_tokens: u64 = 0;
         let creator_str = creator.clone().unwrap_or_else(|| "orpheus".to_string());
 
-        for (idx, path) in output_paths.iter().enumerate() {
-            let midi_bytes = std::fs::read(path)
-                .map_err(|e| ToolError::internal(format!("Failed to read generated MIDI: {}", e)))?;
+        for (idx, variation) in variations.iter().enumerate() {
+            // Decode base64 MIDI
+            let midi_base64 = variation
+                .get("midi_base64")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| ToolError::service("orpheus", "invalid_response", "Missing midi_base64"))?;
+
+            let midi_bytes = base64::engine::general_purpose::STANDARD
+                .decode(midi_base64)
+                .map_err(|e| ToolError::service("orpheus", "decode_failed", e.to_string()))?;
+
+            let num_tokens = variation
+                .get("num_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            tokens_per_variation.push(num_tokens);
+            total_tokens += num_tokens;
 
             let cas_result = self.cas_store_typed(&midi_bytes, "audio/midi").await?;
             let content_hash = ContentHash::new(&cas_result.hash);
@@ -2341,9 +2400,9 @@ impl EventDualityServer {
 
             let metadata = serde_json::json!({
                 "mime_type": "audio/midi",
-                "source": if continue_path.is_some() { "orpheus_continue" } else { "orpheus_seeded" },
+                "source": format!("orpheus_{}", task),
                 "variation_index": idx,
-                "tokens": tokens_per_variation.get(idx).copied().unwrap_or(0),
+                "tokens": num_tokens,
             });
 
             let mut artifact = Artifact::new(
