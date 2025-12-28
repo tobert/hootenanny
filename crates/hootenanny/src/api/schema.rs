@@ -288,10 +288,11 @@ pub struct GraphQueryRequest {
     pub limit: Option<usize>,
 }
 
-/// Schema function for JSON objects (not arbitrary values)
+/// Schema function for JSON objects (allows null for optional parameters)
 fn json_object_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
     serde_json::from_value(serde_json::json!({
-        "type": "object"
+        "type": ["object", "null"],
+        "default": null
     }))
     .unwrap()
 }
