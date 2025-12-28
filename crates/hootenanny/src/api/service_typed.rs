@@ -2497,17 +2497,19 @@ impl EventDualityServer {
                     )
                     .await?;
 
-                // Extract output path from response
-                let output_path = response
-                    .get("output_path")
+                // Decode audio_base64 from response
+                use base64::Engine;
+                let audio_base64 = response
+                    .get("audio_base64")
                     .and_then(|p| p.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("No output_path in MusicGen response"))?;
+                    .ok_or_else(|| anyhow::anyhow!("No audio_base64 in MusicGen response"))?;
+
+                let audio_bytes = base64::engine::general_purpose::STANDARD
+                    .decode(audio_base64)
+                    .map_err(|e| anyhow::anyhow!("Failed to decode audio_base64: {}", e))?;
 
                 let sample_rate = response.get("sample_rate").and_then(|s| s.as_u64()).unwrap_or(32000) as u32;
                 let duration_seconds = response.get("duration").and_then(|d| d.as_f64()).unwrap_or(duration_val as f64);
-
-                // Read and store in CAS
-                let audio_bytes = tokio::fs::read(output_path).await?;
                 let hash = local_models.store_cas_content(&audio_bytes, "audio/wav").await?;
                 let content_hash = ContentHash::new(&hash);
                 let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
@@ -2614,17 +2616,19 @@ impl EventDualityServer {
                     )
                     .await?;
 
-                // Extract output path from response
-                let output_path = response
-                    .get("output_path")
+                // Decode audio_base64 from response
+                use base64::Engine;
+                let audio_base64 = response
+                    .get("audio_base64")
                     .and_then(|p| p.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("No output_path in YuE response"))?;
+                    .ok_or_else(|| anyhow::anyhow!("No audio_base64 in YuE response"))?;
+
+                let audio_bytes = base64::engine::general_purpose::STANDARD
+                    .decode(audio_base64)
+                    .map_err(|e| anyhow::anyhow!("Failed to decode audio_base64: {}", e))?;
 
                 let sample_rate = response.get("sample_rate").and_then(|s| s.as_u64()).unwrap_or(44100) as u32;
                 let duration_seconds = response.get("duration").and_then(|d| d.as_f64()).unwrap_or(60.0);
-
-                // Read and store in CAS
-                let audio_bytes = tokio::fs::read(output_path).await?;
                 let hash = local_models.store_cas_content(&audio_bytes, "audio/wav").await?;
                 let content_hash = ContentHash::new(&hash);
                 let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
@@ -2738,7 +2742,7 @@ impl EventDualityServer {
                 };
 
                 let response = reqwest::Client::new()
-                    .post("http://127.0.0.1:2005/predict")
+                    .post("http://127.0.0.1:2012/predict")
                     .json(&service_request)
                     .timeout(std::time::Duration::from_secs(120))
                     .send()
