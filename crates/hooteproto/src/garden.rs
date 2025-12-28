@@ -3,15 +3,138 @@
 //! All messages follow a Jupyter-inspired envelope format with header,
 //! parent_header, metadata, and content.
 //!
-//! These types are shared between chaosgarden (the daemon) and holler/hootenanny (the clients).
+//! These types are shared between chaosgarden (the daemon) and holler/hootenanny (the peers).
+//!
+//! ## GardenEndpoints
+//!
+//! The 5-socket protocol is inspired by Jupyter's kernel architecture:
+//! - **control**: Priority commands (shutdown, interrupt)
+//! - **shell**: Normal request/reply
+//! - **iopub**: Event broadcasts (publish/subscribe)
+//! - **heartbeat**: Liveness detection
+//! - **query**: Trustfall graph queries
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 use uuid::Uuid;
 
 /// Protocol version
 pub const PROTOCOL_VERSION: &str = "0.1.0";
+
+/// Default heartbeat interval
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
+
+/// Default heartbeat timeout (miss 3 beats = dead)
+pub const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(10);
+
+// ============================================================================
+// Endpoint Configuration
+// ============================================================================
+
+/// Endpoint configuration for the 5-socket garden protocol.
+///
+/// Used by both peers (connect) and listeners (bind).
+#[derive(Debug, Clone)]
+pub struct GardenEndpoints {
+    /// Control channel (DEALER/ROUTER) - urgent commands
+    pub control: String,
+    /// Shell channel (DEALER/ROUTER) - normal commands
+    pub shell: String,
+    /// IOPub channel (SUB/PUB) - event broadcasts
+    pub iopub: String,
+    /// Heartbeat channel (REQ/REP) - liveness detection
+    pub heartbeat: String,
+    /// Query channel (REQ/REP) - Trustfall queries
+    pub query: String,
+}
+
+impl GardenEndpoints {
+    /// IPC endpoints in a specific directory.
+    ///
+    /// Use this with `config.infra.paths.socket_dir`:
+    /// ```ignore
+    /// let socket_dir = config.infra.paths.require_socket_dir()?;
+    /// let endpoints = GardenEndpoints::from_socket_dir(&socket_dir.to_string_lossy());
+    /// ```
+    pub fn from_socket_dir(dir: &str) -> Self {
+        Self {
+            control: format!("ipc://{}/chaosgarden-control", dir),
+            shell: format!("ipc://{}/chaosgarden-shell", dir),
+            iopub: format!("ipc://{}/chaosgarden-iopub", dir),
+            heartbeat: format!("ipc://{}/chaosgarden-hb", dir),
+            query: format!("ipc://{}/chaosgarden-query", dir),
+        }
+    }
+
+    /// TCP endpoints for remote daemon.
+    ///
+    /// Ports are allocated sequentially from `base_port`:
+    /// - control: base_port
+    /// - shell: base_port + 1
+    /// - iopub: base_port + 2
+    /// - heartbeat: base_port + 3
+    /// - query: base_port + 4
+    pub fn tcp(host: &str, base_port: u16) -> Self {
+        Self {
+            control: format!("tcp://{}:{}", host, base_port),
+            shell: format!("tcp://{}:{}", host, base_port + 1),
+            iopub: format!("tcp://{}:{}", host, base_port + 2),
+            heartbeat: format!("tcp://{}:{}", host, base_port + 3),
+            query: format!("tcp://{}:{}", host, base_port + 4),
+        }
+    }
+
+    /// In-process endpoints for testing.
+    pub fn inproc(prefix: &str) -> Self {
+        Self {
+            control: format!("inproc://{}-control", prefix),
+            shell: format!("inproc://{}-shell", prefix),
+            iopub: format!("inproc://{}-iopub", prefix),
+            heartbeat: format!("inproc://{}-hb", prefix),
+            query: format!("inproc://{}-query", prefix),
+        }
+    }
+
+    /// Create endpoints from HootConfig.
+    ///
+    /// Uses `infra.paths.socket_dir` for IPC mode (the default).
+    /// Falls back to TCP mode if `services.chaosgarden.zmq_router` is configured
+    /// with a non-default value.
+    ///
+    /// Returns error if socket_dir is required but not configured.
+    #[cfg(feature = "peer")]
+    pub fn from_config(config: &hooteconf::HootConfig) -> anyhow::Result<Self> {
+        let zmq_router = &config.infra.services.chaosgarden.zmq_router;
+
+        // TCP mode if zmq_router is explicitly configured (not the placeholder default)
+        if zmq_router.starts_with("tcp://") && zmq_router != "tcp://0.0.0.0:5585" {
+            if let Some(port_str) = zmq_router.rsplit(':').next() {
+                if let Ok(port) = port_str.parse::<u16>() {
+                    return Ok(Self::tcp("localhost", port));
+                }
+            }
+        }
+
+        // IPC mode - require socket_dir
+        let socket_dir = config.infra.paths.require_socket_dir()?;
+        Ok(Self::from_socket_dir(&socket_dir.to_string_lossy()))
+    }
+}
+
+impl Default for GardenEndpoints {
+    /// Default to IPC in /tmp (for development/testing).
+    ///
+    /// Production should use `from_config()` or `from_socket_dir()`.
+    fn default() -> Self {
+        Self::from_socket_dir("/tmp")
+    }
+}
+
+// ============================================================================
+// Message Types
+// ============================================================================
 
 /// Message header - present on every message
 #[derive(Debug, Clone, Serialize, Deserialize)]

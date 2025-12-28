@@ -178,13 +178,14 @@ async fn main() -> Result<()> {
 
     // --- Chaosgarden Connection (non-blocking) ---
     let chaosgarden_endpoint = &config.bootstrap.connections.chaosgarden;
-    let socket_dir = config.infra.paths.socket_dir.to_string_lossy();
     let garden_manager: Option<Arc<zmq::GardenManager>> = {
         info!("🌱 Connecting to chaosgarden ({})...", chaosgarden_endpoint);
 
         let manager: Option<zmq::GardenManager> = if chaosgarden_endpoint == "local" {
-            info!("   Using IPC sockets in {}", socket_dir);
-            Some(zmq::GardenManager::from_socket_dir(&socket_dir))
+            let socket_dir = config.infra.paths.require_socket_dir()
+                .context("Cannot connect to local chaosgarden without socket_dir configured")?;
+            info!("   Using IPC sockets in {:?}", socket_dir);
+            Some(zmq::GardenManager::from_socket_dir(&socket_dir.to_string_lossy()))
         } else if chaosgarden_endpoint.starts_with("tcp://") {
             let parts: Vec<&str> = chaosgarden_endpoint
                 .trim_start_matches("tcp://")
@@ -297,6 +298,7 @@ async fn main() -> Result<()> {
             gpu_monitor.clone(),
         )
         .with_garden(garden_manager.clone())
+        .with_vibeweaver(vibeweaver_client.clone())
         .with_broadcaster(Some(broadcast_publisher))
         .with_stream_manager(Some(stream_manager.clone()))
         .with_session_manager(Some(session_manager.clone()))
@@ -320,8 +322,7 @@ async fn main() -> Result<()> {
         Arc::new(cas.clone()),
         artifact_store.clone(),
         event_duality_server.clone(),
-    )
-    .with_vibeweaver(vibeweaver_client.clone());
+    );
 
     tokio::spawn(async move {
         if let Err(e) = zmq_server.run(shutdown_rx).await {
@@ -330,7 +331,7 @@ async fn main() -> Result<()> {
     });
     info!("   ZMQ ROUTER: {}", zmq_router);
     if vibeweaver_client.is_some() {
-        info!("   Vibeweaver proxy: enabled");
+        info!("   Vibeweaver proxy: enabled (via EventDualityServer)");
     }
 
     info!("🎵 Hootenanny starting on http://{}", addr);

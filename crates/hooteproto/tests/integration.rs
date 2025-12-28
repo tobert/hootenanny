@@ -8,12 +8,13 @@
 //! - Heartbeat and retry behavior
 
 use bytes::Bytes;
+use futures::{SinkExt, StreamExt};
+use hooteproto::socket_config::{Multipart, ZmqContext};
 use hooteproto::{ClientConfig, Command, HootClient, HootFrame, Payload};
-use rzmq::socket::options::LINGER;
-use rzmq::{Context, Msg, MsgFlags, SocketType};
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tmq::{dealer, router};
 use tokio::sync::{broadcast, Barrier};
 
 static PORT: AtomicU16 = AtomicU16::new(19000);
@@ -21,6 +22,20 @@ static PORT: AtomicU16 = AtomicU16::new(19000);
 fn next_endpoint() -> String {
     let port = PORT.fetch_add(1, Ordering::SeqCst);
     format!("tcp://127.0.0.1:{}", port)
+}
+
+fn frames_to_multipart(frames: &[Bytes]) -> Multipart {
+    frames
+        .iter()
+        .map(|f| f.to_vec())
+        .collect::<Vec<_>>()
+        .into()
+}
+
+fn multipart_to_frames(mp: Multipart) -> Vec<Bytes> {
+    mp.into_iter()
+        .map(|m| Bytes::from(m.to_vec()))
+        .collect()
 }
 
 /// Get the correct response command for a request
@@ -60,7 +75,7 @@ impl Hub {
 
         let fe = frontend_endpoint.to_string();
         let be = backend_endpoint.to_string();
-        let mut shutdown_rx = shutdown_tx.subscribe();
+        let shutdown_rx = shutdown_tx.subscribe();
         let stats_clone = stats.clone();
 
         tokio::spawn(async move {
@@ -84,38 +99,33 @@ impl Hub {
         mut shutdown: broadcast::Receiver<()>,
         stats: Arc<HubStats>,
     ) {
-        let ctx = Context::new().unwrap();
+        let ctx = ZmqContext::new();
 
         // Frontend ROUTER for clients
-        let frontend_socket = ctx.socket(SocketType::Router).unwrap();
-        frontend_socket
-            .set_option_raw(LINGER, &0i32.to_ne_bytes())
-            .await
-            .ok();
-        frontend_socket.bind(frontend).await.unwrap();
+        let frontend_socket = router(&ctx)
+            .set_linger(0)
+            .bind(frontend)
+            .expect("Failed to bind frontend");
+
+        let (mut frontend_tx, mut frontend_rx) = frontend_socket.split();
 
         // Backend ROUTER for workers
-        let backend_socket = ctx.socket(SocketType::Router).unwrap();
-        backend_socket
-            .set_option_raw(LINGER, &0i32.to_ne_bytes())
-            .await
-            .ok();
-        backend_socket.bind(backend).await.unwrap();
+        let backend_socket = router(&ctx)
+            .set_linger(0)
+            .bind(backend)
+            .expect("Failed to bind backend");
+
+        let (mut backend_tx, mut backend_rx) = backend_socket.split();
 
         // Track which worker should handle next request (round-robin)
         let mut available_workers: Vec<Vec<u8>> = Vec::new();
-        // Note: pending_requests not used in this simplified hub - we route responses
-        // based on client_id passed through workers, not tracked here
 
         loop {
             tokio::select! {
                 // Messages from clients
-                result = frontend_socket.recv_multipart() => {
-                    if let Ok(msgs) = result {
-                        let frames: Vec<Bytes> = msgs
-                            .iter()
-                            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
-                            .collect();
+                result = frontend_rx.next() => {
+                    if let Some(Ok(mp)) = result {
+                        let frames = multipart_to_frames(mp);
 
                         if let Ok((client_id, request)) = HootFrame::from_frames_with_identity(&frames) {
                             stats.messages_routed.fetch_add(1, Ordering::Relaxed);
@@ -124,23 +134,18 @@ impl Hub {
                             if let Some(worker_id) = available_workers.pop() {
                                 // Send to worker: [worker_id, empty, client_id, request_frames...]
                                 let request_frames = request.to_frames();
-                                let mut out_msgs = vec![
-                                    Msg::from_vec(worker_id),
-                                    Msg::from_vec(vec![]), // empty delimiter
+                                let mut out_frames: Vec<Vec<u8>> = vec![
+                                    worker_id,
+                                    vec![], // empty delimiter
                                 ];
                                 // Add client identity so worker knows where to route response
-                                out_msgs.push(Msg::from_vec(client_id.iter().flat_map(|b| b.to_vec()).collect()));
+                                out_frames.push(client_id.iter().flat_map(|b| b.to_vec()).collect());
                                 for frame in &request_frames {
-                                    out_msgs.push(Msg::from_vec(frame.to_vec()));
+                                    out_frames.push(frame.to_vec());
                                 }
 
-                                let last_idx = out_msgs.len() - 1;
-                                for (i, mut msg) in out_msgs.into_iter().enumerate() {
-                                    if i < last_idx {
-                                        msg.set_flags(MsgFlags::MORE);
-                                    }
-                                    backend_socket.send(msg).await.ok();
-                                }
+                                let mp: Multipart = out_frames.into();
+                                backend_tx.send(mp).await.ok();
                             }
                             // If no workers, request is dropped (client will retry)
                         }
@@ -148,12 +153,9 @@ impl Hub {
                 }
 
                 // Messages from workers
-                result = backend_socket.recv_multipart() => {
-                    if let Ok(msgs) = result {
-                        let frames: Vec<Bytes> = msgs
-                            .iter()
-                            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
-                            .collect();
+                result = backend_rx.next() => {
+                    if let Some(Ok(mp)) = result {
+                        let frames = multipart_to_frames(mp);
 
                         // First frame is worker identity
                         if frames.len() >= 2 {
@@ -170,21 +172,16 @@ impl Hub {
                                 let response_frames: Vec<Bytes> = frames[3..].to_vec();
 
                                 // Send back to client
-                                let mut out_msgs = vec![
-                                    Msg::from_vec(client_id_bytes.to_vec()),
-                                    Msg::from_vec(vec![]), // empty delimiter
+                                let mut out_frames: Vec<Vec<u8>> = vec![
+                                    client_id_bytes.to_vec(),
+                                    vec![], // empty delimiter
                                 ];
                                 for frame in &response_frames {
-                                    out_msgs.push(Msg::from_vec(frame.to_vec()));
+                                    out_frames.push(frame.to_vec());
                                 }
 
-                                let last_idx = out_msgs.len() - 1;
-                                for (i, mut msg) in out_msgs.into_iter().enumerate() {
-                                    if i < last_idx {
-                                        msg.set_flags(MsgFlags::MORE);
-                                    }
-                                    frontend_socket.send(msg).await.ok();
-                                }
+                                let mp: Multipart = out_frames.into();
+                                frontend_tx.send(mp).await.ok();
 
                                 // Worker is available again
                                 available_workers.push(worker_id);
@@ -219,7 +216,7 @@ impl Worker {
 
         let ep = endpoint.to_string();
         let id = worker_id.to_string();
-        let mut shutdown_rx = shutdown_tx.subscribe();
+        let shutdown_rx = shutdown_tx.subscribe();
         let processed = requests_processed.clone();
 
         tokio::spawn(async move {
@@ -242,30 +239,24 @@ impl Worker {
         mut shutdown: broadcast::Receiver<()>,
         processed: Arc<AtomicUsize>,
     ) {
-        let ctx = Context::new().unwrap();
-        let socket = ctx.socket(SocketType::Dealer).unwrap();
-        socket
-            .set_option_raw(LINGER, &0i32.to_ne_bytes())
-            .await
-            .ok();
-        socket
-            .set_option_raw(rzmq::socket::options::ROUTING_ID, worker_id.as_bytes())
-            .await
-            .ok();
-        socket.connect(endpoint).await.ok();
+        let ctx = ZmqContext::new();
+        let socket = dealer(&ctx)
+            .set_linger(0)
+            .set_identity(worker_id.as_bytes())
+            .connect(endpoint)
+            .expect("Failed to connect worker");
+
+        let (mut tx, mut rx) = socket.split();
 
         // Send READY
-        let ready_msg = Msg::from_vec(vec![]);
-        socket.send(ready_msg).await.ok();
+        let ready_mp: Multipart = vec![Vec::new()].into();
+        tx.send(ready_mp).await.ok();
 
         loop {
             tokio::select! {
-                result = socket.recv_multipart() => {
-                    if let Ok(msgs) = result {
-                        let frames: Vec<Bytes> = msgs
-                            .iter()
-                            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
-                            .collect();
+                result = rx.next() => {
+                    if let Some(Ok(mp)) = result {
+                        let frames = multipart_to_frames(mp);
 
                         // frames: [empty, client_id, request_frames...]
                         if frames.len() >= 3 {
@@ -292,21 +283,16 @@ impl Worker {
 
                                 // Send back: [empty, client_id, response_frames...]
                                 let response_frames = response.to_frames();
-                                let mut out_msgs = vec![
-                                    Msg::from_vec(vec![]),
-                                    Msg::from_vec(client_id.to_vec()),
+                                let mut out_frames: Vec<Vec<u8>> = vec![
+                                    vec![],
+                                    client_id.to_vec(),
                                 ];
                                 for frame in &response_frames {
-                                    out_msgs.push(Msg::from_vec(frame.to_vec()));
+                                    out_frames.push(frame.to_vec());
                                 }
 
-                                let last_idx = out_msgs.len() - 1;
-                                for (i, mut msg) in out_msgs.into_iter().enumerate() {
-                                    if i < last_idx {
-                                        msg.set_flags(MsgFlags::MORE);
-                                    }
-                                    socket.send(msg).await.ok();
-                                }
+                                let mp: Multipart = out_frames.into();
+                                tx.send(mp).await.ok();
                             }
                         }
                     }

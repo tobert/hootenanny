@@ -88,7 +88,7 @@ fn parse_toml(contents: &str, path: &Path) -> Result<HootConfig, ConfigError> {
                 infra.paths.cas_dir = expand_path(v);
             }
             if let Some(v) = paths_table.get("socket_dir").and_then(|v| v.as_str()) {
-                infra.paths.socket_dir = expand_path(v);
+                infra.paths.socket_dir = Some(expand_path(v));
             }
         }
 
@@ -324,7 +324,7 @@ pub fn apply_env_overrides(config: &mut HootConfig, sources: &mut ConfigSources)
         sources.env_overrides.push("HOOTENANNY_CAS_PATH".to_string());
     }
     if let Ok(v) = env::var("HOOTENANNY_SOCKET_DIR") {
-        config.infra.paths.socket_dir = expand_path(&v);
+        config.infra.paths.socket_dir = Some(expand_path(&v));
         sources.env_overrides.push("HOOTENANNY_SOCKET_DIR".to_string());
     }
 

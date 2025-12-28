@@ -2,12 +2,14 @@
 //!
 //! Tests holler serve receiving MCP requests and routing to a mock ZMQ backend.
 
-use hooteproto::{Envelope, Payload, ResponseEnvelope, ToolInfo};
+use futures::{SinkExt, StreamExt};
+use hooteproto::request::{CasInspectRequest, ToolRequest};
 use hooteproto::responses::ToolResponse;
-use rzmq::{Context, Msg, SocketType};
-use rzmq::socket::options::LINGER;
+use hooteproto::socket_config::{ZmqContext, Multipart};
+use hooteproto::{Envelope, Payload, ResponseEnvelope, ToolInfo};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
+use tmq::{dealer, router};
 use uuid::Uuid;
 
 static ZMQ_PORT: AtomicU16 = AtomicU16::new(25580);
@@ -24,16 +26,17 @@ fn next_http_port() -> u16 {
 
 /// Mock hootenanny backend that handles CAS and ListTools requests
 async fn mock_hootenanny(endpoint: &str, requests_to_handle: usize) -> anyhow::Result<()> {
-    let context = Context::new()?;
-    let socket = context.socket(SocketType::Router)?;
-    socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
-    socket.bind(endpoint).await?;
+    let context = ZmqContext::new();
+    let socket = router(&context).set_linger(0).bind(endpoint)?;
+
+    let (mut tx, mut rx) = socket.split();
 
     for _ in 0..requests_to_handle {
-        let msgs = socket.recv_multipart().await?;
+        let mp = rx.next().await.ok_or(anyhow::anyhow!("Stream ended"))??;
+        let frames: Vec<Vec<u8>> = mp.into_iter().map(|m| m.to_vec()).collect();
 
-        let identity = msgs[0].data().map(|d| d.to_vec()).unwrap_or_default();
-        let payload_bytes = msgs[1].data().unwrap_or_default();
+        let identity = frames[0].clone();
+        let payload_bytes = &frames[1];
         let payload_str = std::str::from_utf8(payload_bytes)?;
         let envelope: Envelope = serde_json::from_str(payload_str)?;
 
@@ -42,7 +45,7 @@ async fn mock_hootenanny(endpoint: &str, requests_to_handle: usize) -> anyhow::R
                 worker_id: Uuid::new_v4(),
                 uptime_secs: 100,
             },
-            Payload::ListTools => Payload::ToolList {
+            Payload::ToolRequest(ToolRequest::ListTools) => Payload::ToolList {
                 tools: vec![
                     ToolInfo {
                         name: "cas_store".to_string(),
@@ -62,14 +65,16 @@ async fn mock_hootenanny(endpoint: &str, requests_to_handle: usize) -> anyhow::R
                     },
                 ],
             },
-            Payload::CasInspect { hash } => Payload::TypedResponse(ResponseEnvelope::success(
-                ToolResponse::CasInspected(hooteproto::responses::CasInspectedResponse {
-                    hash,
-                    exists: true,
-                    size: Some(42),
-                    preview: Some("Hello, world!".to_string()),
-                }),
-            )),
+            Payload::ToolRequest(ToolRequest::CasInspect(ref req)) => {
+                Payload::TypedResponse(ResponseEnvelope::success(ToolResponse::CasInspected(
+                    hooteproto::responses::CasInspectedResponse {
+                        hash: req.hash.clone(),
+                        exists: true,
+                        size: Some(42),
+                        preview: Some("Hello, world!".to_string()),
+                    },
+                )))
+            }
             _ => Payload::Error {
                 code: "not_implemented".to_string(),
                 message: "Mock doesn't handle this".to_string(),
@@ -84,11 +89,8 @@ async fn mock_hootenanny(endpoint: &str, requests_to_handle: usize) -> anyhow::R
         };
 
         let response_json = serde_json::to_string(&response)?;
-        let reply = vec![
-            Msg::from_vec(identity),
-            Msg::from_vec(response_json.into_bytes()),
-        ];
-        socket.send_multipart(reply).await?;
+        let reply: Multipart = vec![identity, response_json.into_bytes()].into();
+        tx.send(reply).await?;
     }
 
     Ok(())
@@ -119,7 +121,7 @@ async fn mcp_request(
 #[tokio::test]
 async fn test_mcp_tools_list() {
     let zmq_endpoint = next_zmq_endpoint();
-    let http_port = next_http_port();
+    let _http_port = next_http_port();
 
     // Start mock hootenanny backend (will handle 1 ListTools request)
     let zmq_endpoint_clone = zmq_endpoint.clone();
@@ -138,22 +140,27 @@ async fn test_mcp_tools_list() {
         // For now, this test validates the mock backend protocol.
 
         // Simulate what holler would do: connect to backend and request tool list
-        let context = Context::new().unwrap();
-        let dealer = context.socket(SocketType::Dealer).unwrap();
-        dealer.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
-        dealer.connect(&zmq_for_holler).await.unwrap();
+        let context = ZmqContext::new();
+        let socket = dealer(&context)
+            .set_linger(0)
+            .connect(&zmq_for_holler)
+            .unwrap();
 
-        let envelope = Envelope::new(Payload::ListTools);
+        let (mut tx, mut rx) = socket.split();
+
+        let envelope = Envelope::new(Payload::ToolRequest(ToolRequest::ListTools));
         let json = serde_json::to_string(&envelope).unwrap();
-        dealer.send(Msg::from_vec(json.into_bytes())).await.unwrap();
+        let mp: Multipart = vec![json.into_bytes()].into();
+        tx.send(mp).await.unwrap();
 
-        let response = tokio::time::timeout(Duration::from_secs(2), dealer.recv())
+        let response_mp = tokio::time::timeout(Duration::from_secs(2), rx.next())
             .await
+            .unwrap()
             .unwrap()
             .unwrap();
 
-        let response_bytes = response.data().unwrap_or_default();
-        let response_str = std::str::from_utf8(response_bytes).unwrap();
+        let response_bytes = response_mp.into_iter().next().unwrap();
+        let response_str = std::str::from_utf8(&response_bytes).unwrap();
         let response_envelope: Envelope = serde_json::from_str(response_str).unwrap();
 
         match response_envelope.payload {
@@ -180,60 +187,78 @@ async fn test_mcp_tool_call_with_traceparent() {
     let zmq_endpoint_clone = zmq_endpoint.clone();
     let backend_handle = tokio::spawn(async move {
         // This backend will check for traceparent in the envelope
-        let context = Context::new().unwrap();
-        let socket = context.socket(SocketType::Router).unwrap();
-        socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
-        socket.bind(&zmq_endpoint_clone).await.unwrap();
+        let context = ZmqContext::new();
+        let socket = router(&context)
+            .set_linger(0)
+            .bind(&zmq_endpoint_clone)
+            .unwrap();
 
-        let msgs = socket.recv_multipart().await.unwrap();
-        let identity = msgs[0].data().map(|d| d.to_vec()).unwrap_or_default();
-        let payload_bytes = msgs[1].data().unwrap_or_default();
-        let envelope: Envelope = serde_json::from_str(std::str::from_utf8(payload_bytes).unwrap()).unwrap();
+        let (mut tx, mut rx) = socket.split();
+
+        let mp = rx.next().await.unwrap().unwrap();
+        let frames: Vec<Vec<u8>> = mp.into_iter().map(|m| m.to_vec()).collect();
+
+        let identity = frames[0].clone();
+        let payload_bytes = &frames[1];
+        let envelope: Envelope =
+            serde_json::from_str(std::str::from_utf8(payload_bytes).unwrap()).unwrap();
 
         // Verify traceparent was propagated
-        assert!(envelope.traceparent.is_some(), "Expected traceparent to be set");
+        assert!(
+            envelope.traceparent.is_some(),
+            "Expected traceparent to be set"
+        );
         let tp = envelope.traceparent.as_ref().unwrap();
-        assert!(tp.starts_with("00-"), "Traceparent should start with version 00");
+        assert!(
+            tp.starts_with("00-"),
+            "Traceparent should start with version 00"
+        );
 
         let response = Envelope {
             id: envelope.id,
             traceparent: envelope.traceparent,
-            payload: Payload::TypedResponse(ResponseEnvelope::success(ToolResponse::ack("traced"))),
+            payload: Payload::TypedResponse(ResponseEnvelope::success(ToolResponse::ack(
+                "traced",
+            ))),
         };
 
         let response_json = serde_json::to_string(&response).unwrap();
-        let reply = vec![
-            Msg::from_vec(identity),
-            Msg::from_vec(response_json.into_bytes()),
-        ];
-        socket.send_multipart(reply).await.unwrap();
+        let reply: Multipart = vec![identity, response_json.into_bytes()].into();
+        tx.send(reply).await.unwrap();
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Simulate holler sending a request with traceparent
     let holler_handle = tokio::spawn(async move {
-        let context = Context::new().unwrap();
-        let dealer = context.socket(SocketType::Dealer).unwrap();
-        dealer.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
-        dealer.connect(&zmq_endpoint).await.unwrap();
+        let context = ZmqContext::new();
+        let socket = dealer(&context)
+            .set_linger(0)
+            .connect(&zmq_endpoint)
+            .unwrap();
+
+        let (mut tx, mut rx) = socket.split();
 
         // Create envelope with traceparent (simulating what holler does)
-        let envelope = Envelope::new(Payload::CasInspect {
-            hash: "abc123".to_string(),
-        })
+        let envelope = Envelope::new(Payload::ToolRequest(ToolRequest::CasInspect(
+            CasInspectRequest {
+                hash: "abc123".to_string(),
+            },
+        )))
         .with_traceparent("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01");
 
         let json = serde_json::to_string(&envelope).unwrap();
-        dealer.send(Msg::from_vec(json.into_bytes())).await.unwrap();
+        let mp: Multipart = vec![json.into_bytes()].into();
+        tx.send(mp).await.unwrap();
 
-        let response = tokio::time::timeout(Duration::from_secs(2), dealer.recv())
+        let response_mp = tokio::time::timeout(Duration::from_secs(2), rx.next())
             .await
+            .unwrap()
             .unwrap()
             .unwrap();
 
-        let response_bytes = response.data().unwrap_or_default();
-        let response_str = std::str::from_utf8(response_bytes).unwrap();
+        let response_bytes = response_mp.into_iter().next().unwrap();
+        let response_str = std::str::from_utf8(&response_bytes).unwrap();
         let response_envelope: Envelope = serde_json::from_str(response_str).unwrap();
 
         match response_envelope.payload {

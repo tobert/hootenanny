@@ -6,8 +6,8 @@ description = "Protocol types for the Hootenanny ZMQ message bus"
 license = "MIT"
 
 [features]
-default = []
-client = ["rzmq", "tokio", "tracing", "async-trait"]
+default = ["peer"]
+peer = ["tmq", "zmq", "tokio", "tracing", "async-trait", "hooteconf", "futures", "async-stream"]
 
 [dependencies]
 anyhow = "1.0"
@@ -22,10 +22,14 @@ thiserror = "2.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
-# Optional dependencies for client feature
+# Optional dependencies for peer feature
+async-stream = { version = "0.3", optional = true }
 async-trait = { version = "0.1", optional = true }
-rzmq = { version = "0.5", features = ["ipc"], optional = true }
-tokio = { version = "1", features = ["sync", "time", "rt"], optional = true }
+futures = { version = "0.3", optional = true }
+hooteconf = { path = "../hooteconf", optional = true }
+tmq = { workspace = true, optional = true }
+zmq = { workspace = true, optional = true }
+tokio = { version = "1", features = ["sync", "time", "rt", "macros"], optional = true }
 tracing = { version = "0.1", optional = true }
 
 [build-dependencies]
@@ -34,17 +38,14 @@ capnpc = "0.20"
 [dev-dependencies]
 futures = "0.3"
 pretty_assertions = "1.4"
-rzmq = { version = "0.5", features = ["ipc"] }
+tmq = { workspace = true }
+zmq = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
 [[test]]
-name = "client_connect"
-required-features = ["client"]
-
-[[test]]
 name = "client_concurrency"
-required-features = ["client"]
+required-features = ["peer"]
 
 [[test]]
 name = "integration"
-required-features = ["client"]
+required-features = ["peer"]

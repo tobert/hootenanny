@@ -3,8 +3,9 @@
 //! Binds a ROUTER socket and handles HOOT01 + Cap'n Proto messages from:
 //! - Hootenanny (proxying weave_* tool calls)
 
-use anyhow::{Context as AnyhowContext, Result};
+use anyhow::Result;
 use bytes::Bytes;
+use futures::{SinkExt, StreamExt};
 use hooteproto::{
     capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope, Command, ContentType,
     HootFrame, Payload, ResponseEnvelope, PROTOCOL_VERSION,
@@ -14,36 +15,34 @@ use hooteproto::responses::{
     ToolResponse, WeaveEvalResponse, WeaveHelpResponse, WeaveOutputType, WeaveResetResponse,
     WeaveSessionInfo, WeaveSessionResponse,
 };
+use hooteproto::socket_config::{create_router_and_bind, ZmqContext, Multipart};
 use pyo3::prelude::*;
-use rzmq::{Context, Msg, MsgFlags, Socket, SocketType};
-use rzmq::socket::options::LINGER;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::kernel::Kernel;
 use crate::session::Session;
 
-/// Convert frames to Vec<Msg> for rzmq multipart
-fn frames_to_msgs(frames: &[Bytes]) -> Vec<Msg> {
-    frames.iter().map(|f| Msg::from_vec(f.to_vec())).collect()
+/// Boxed sink type for sending messages
+type BoxedSink = Pin<Box<dyn futures::Sink<Multipart, Error = tmq::TmqError> + Send>>;
+
+/// Convert tmq Multipart to Vec<Bytes> for frame processing
+fn multipart_to_frames(mp: Multipart) -> Vec<Bytes> {
+    mp.into_iter()
+        .map(|msg| Bytes::from(msg.to_vec()))
+        .collect()
 }
 
-/// Send multipart using individual send() calls with MORE flags.
-/// rzmq's ROUTER socket has a bug in send_multipart that drops frames.
-async fn send_multipart_individually(socket: &Socket, msgs: Vec<Msg>) -> anyhow::Result<()> {
-    use anyhow::Context;
-    let last_idx = msgs.len().saturating_sub(1);
-    for (i, mut msg) in msgs.into_iter().enumerate() {
-        if i < last_idx {
-            msg.set_flags(MsgFlags::MORE);
-        }
-        socket.send(msg).await
-            .with_context(|| format!("Failed to send frame {} of multipart", i))?;
-    }
-    Ok(())
+/// Convert Vec<Bytes> frames to tmq Multipart
+fn frames_to_multipart(frames: &[Bytes]) -> Multipart {
+    frames.iter()
+        .map(|f| f.to_vec())
+        .collect::<Vec<_>>()
+        .into()
 }
 
 /// ZMQ server configuration
@@ -85,42 +84,30 @@ impl Server {
     /// Uses concurrent request handling to avoid deadlocks when Python code
     /// calls back to hootenanny during request processing.
     pub async fn run(self, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
-        let context = Context::new()
-            .with_context(|| "Failed to create ZMQ context")?;
-        let socket = context
-            .socket(SocketType::Router)
-            .with_context(|| "Failed to create ROUTER socket")?;
-
-        // Set LINGER to 0 for immediate close
-        if let Err(e) = socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await {
-            warn!("Failed to set LINGER: {}", e);
-        }
-
-        socket
-            .bind(&self.config.bind_address)
-            .await
-            .with_context(|| format!("Failed to bind to {}", self.config.bind_address))?;
+        let context = ZmqContext::new();
+        let socket = create_router_and_bind(&context, &self.config.bind_address, &self.config.worker_name)?;
 
         info!(
             "Vibeweaver ZMQ server listening on {}",
             self.config.bind_address
         );
 
+        // Split socket into tx/rx halves
+        let (tx, mut rx) = socket.split();
+        let socket_tx: Arc<Mutex<BoxedSink>> = Arc::new(Mutex::new(Box::pin(tx)));
+
         // Channel for sending responses back to the main loop for transmission
-        let (response_tx, mut response_rx) = mpsc::channel::<Vec<Msg>>(256);
+        let (response_tx, mut response_rx) = mpsc::channel::<Multipart>(256);
 
         // Wrap self in Arc for sharing across spawned tasks
         let server = Arc::new(self);
 
         loop {
             tokio::select! {
-                result = socket.recv_multipart() => {
+                result = rx.next() => {
                     match result {
-                        Ok(msgs) => {
-                            let frames: Vec<Bytes> = msgs
-                                .iter()
-                                .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
-                                .collect();
+                        Some(Ok(mp)) => {
+                            let frames = multipart_to_frames(mp);
 
                             // Only accept HOOT01 frames
                             if !frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
@@ -140,9 +127,8 @@ impl Server {
                                             // Handle heartbeats synchronously (fast path)
                                             let response = HootFrame::heartbeat("vibeweaver");
                                             let reply_frames = response.to_frames_with_identity(&identity);
-                                            let reply = frames_to_msgs(&reply_frames);
-                                            // Use individual send() - rzmq ROUTER send_multipart has a bug
-                                            if let Err(e) = send_multipart_individually(&socket, reply).await {
+                                            let reply = frames_to_multipart(&reply_frames);
+                                            if let Err(e) = socket_tx.lock().await.send(reply).await {
                                                 error!("Failed to send heartbeat response: {}", e);
                                             }
                                         }
@@ -167,16 +153,19 @@ impl Server {
                                 }
                             }
                         }
-                        Err(e) => {
+                        Some(Err(e)) => {
                             error!("Error receiving message: {}", e);
+                        }
+                        None => {
+                            warn!("Socket stream ended");
+                            break;
                         }
                     }
                 }
 
                 // Send queued responses
                 Some(reply) = response_rx.recv() => {
-                    // Use individual send() - rzmq ROUTER send_multipart has a bug
-                    if let Err(e) = send_multipart_individually(&socket, reply).await {
+                    if let Err(e) = socket_tx.lock().await.send(reply).await {
                         error!("Failed to send response: {}", e);
                     }
                 }
@@ -191,8 +180,8 @@ impl Server {
         Ok(())
     }
 
-    /// Handle a request and return the ZMQ message to send as response
-    async fn handle_request(&self, identity: Vec<Bytes>, frame: HootFrame) -> Vec<Msg> {
+    /// Handle a request and return the multipart message to send as response
+    async fn handle_request(&self, identity: Vec<Bytes>, frame: HootFrame) -> Multipart {
         // Parse Cap'n Proto envelope to Payload
         let payload_result = match frame.read_capnp() {
             Ok(reader) => match reader.get_root::<envelope_capnp::envelope::Reader>() {
@@ -242,7 +231,7 @@ impl Server {
         };
 
         let reply_frames = response_frame.to_frames_with_identity(&identity);
-        frames_to_msgs(&reply_frames)
+        frames_to_multipart(&reply_frames)
     }
 
     /// Dispatch a payload to the appropriate handler

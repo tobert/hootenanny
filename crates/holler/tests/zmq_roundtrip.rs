@@ -1,13 +1,14 @@
 //! ZMQ roundtrip tests for hooteproto using localhost TCP
 
-use bytes::Bytes;
+use futures::{SinkExt, StreamExt};
+use hooteproto::socket_config::{ZmqContext, Multipart};
 use hooteproto::{Envelope, Payload, ResponseEnvelope};
-use hooteproto::responses::ToolResponse;
-use rzmq::{Context, Msg, SocketType};
-use rzmq::socket::options::LINGER;
+use hooteproto::request::{JobStatusRequest, ToolRequest, WeaveEvalRequest};
+use hooteproto::responses::{JobState, ToolResponse};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tokio::time::timeout;
+use tmq::{dealer, router};
 use uuid::Uuid;
 
 static PORT_COUNTER: AtomicU16 = AtomicU16::new(15570);
@@ -19,17 +20,20 @@ fn next_endpoint() -> String {
 
 /// Simple mock backend that responds to Ping with Pong
 async fn mock_router(endpoint: &str) -> anyhow::Result<()> {
-    let context = Context::new()?;
-    let socket = context.socket(SocketType::Router)?;
-    socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
-    socket.bind(endpoint).await?;
+    let context = ZmqContext::new();
+    let socket = router(&context)
+        .set_linger(0)
+        .bind(endpoint)?;
+
+    let (mut tx, mut rx) = socket.split();
 
     // Handle one request
-    let msgs = socket.recv_multipart().await?;
+    let mp = rx.next().await.ok_or(anyhow::anyhow!("Stream ended"))??;
+    let frames: Vec<Vec<u8>> = mp.into_iter().map(|m| m.to_vec()).collect();
 
     // ROUTER sockets prepend identity frame
-    let identity = msgs[0].data().map(|d| d.to_vec()).unwrap_or_default();
-    let payload_bytes = msgs[1].data().unwrap_or_default();
+    let identity = frames[0].clone();
+    let payload_bytes = &frames[1];
     let payload_str = std::str::from_utf8(payload_bytes)?;
     let envelope: Envelope = serde_json::from_str(payload_str)?;
 
@@ -39,26 +43,30 @@ async fn mock_router(endpoint: &str) -> anyhow::Result<()> {
             worker_id: Uuid::new_v4(),
             uptime_secs: 42,
         },
-        Payload::WeaveEval { code: _ } => Payload::TypedResponse(ResponseEnvelope::success(
-            ToolResponse::WeaveEval(hooteproto::responses::WeaveEvalResponse {
-                output_type: hooteproto::responses::WeaveOutputType::Expression,
-                result: Some("mock result".to_string()),
-                stdout: None,
-                stderr: None,
-            }),
-        )),
-        Payload::JobStatus { job_id } => Payload::TypedResponse(ResponseEnvelope::success(
-            ToolResponse::JobStatus(hooteproto::responses::JobStatusResponse {
-                job_id,
-                status: hooteproto::responses::JobState::Complete,
-                source: "mock".to_string(),
-                result: None,
-                error: None,
-                created_at: 0,
-                started_at: None,
-                completed_at: None,
-            }),
-        )),
+        Payload::ToolRequest(ToolRequest::WeaveEval(_)) => {
+            Payload::TypedResponse(ResponseEnvelope::success(ToolResponse::WeaveEval(
+                hooteproto::responses::WeaveEvalResponse {
+                    output_type: hooteproto::responses::WeaveOutputType::Expression,
+                    result: Some("mock result".to_string()),
+                    stdout: None,
+                    stderr: None,
+                },
+            )))
+        }
+        Payload::ToolRequest(ToolRequest::JobStatus(ref req)) => {
+            Payload::TypedResponse(ResponseEnvelope::success(ToolResponse::JobStatus(
+                hooteproto::responses::JobStatusResponse {
+                    job_id: req.job_id.clone(),
+                    status: JobState::Complete,
+                    source: "mock".to_string(),
+                    result: None,
+                    error: None,
+                    created_at: 0,
+                    started_at: None,
+                    completed_at: None,
+                },
+            )))
+        }
         _ => Payload::Error {
             code: "not_implemented".to_string(),
             message: "Mock doesn't handle this payload type".to_string(),
@@ -75,11 +83,8 @@ async fn mock_router(endpoint: &str) -> anyhow::Result<()> {
     let response_json = serde_json::to_string(&response)?;
 
     // Send response with identity frame
-    let reply = vec![
-        Msg::from_vec(identity),
-        Msg::from_vec(response_json.into_bytes()),
-    ];
-    socket.send_multipart(reply).await?;
+    let reply: Multipart = vec![identity, response_json.into_bytes()].into();
+    tx.send(reply).await?;
 
     Ok(())
 }
@@ -98,26 +103,28 @@ async fn test_ping_pong() {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     // Connect dealer and send ping
-    let context = Context::new().unwrap();
-    let dealer = context.socket(SocketType::Dealer).unwrap();
-    dealer.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
-    dealer.connect(&endpoint).await.unwrap();
+    let context = ZmqContext::new();
+    let socket = dealer(&context)
+        .set_linger(0)
+        .connect(&endpoint)
+        .unwrap();
+
+    let (mut tx, mut rx) = socket.split();
 
     let envelope = Envelope::new(Payload::Ping);
     let json = serde_json::to_string(&envelope).unwrap();
-    dealer
-        .send(Msg::from_vec(json.into_bytes()))
-        .await
-        .unwrap();
+    let mp: Multipart = vec![json.into_bytes()].into();
+    tx.send(mp).await.unwrap();
 
     // Receive response
-    let response = timeout(Duration::from_secs(1), dealer.recv())
+    let response_mp = timeout(Duration::from_secs(1), rx.next())
         .await
+        .unwrap()
         .unwrap()
         .unwrap();
 
-    let response_bytes = response.data().unwrap_or_default();
-    let response_str = std::str::from_utf8(response_bytes).unwrap();
+    let response_bytes = response_mp.into_iter().next().unwrap();
+    let response_str = std::str::from_utf8(&response_bytes).unwrap();
     let response_envelope: Envelope = serde_json::from_str(response_str).unwrap();
 
     match response_envelope.payload {
@@ -131,7 +138,7 @@ async fn test_ping_pong() {
 }
 
 #[tokio::test]
-async fn test_lua_eval() {
+async fn test_weave_eval() {
     let endpoint = next_endpoint();
 
     let endpoint_clone = endpoint.clone();
@@ -141,24 +148,31 @@ async fn test_lua_eval() {
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    let context = Context::new().unwrap();
-    let dealer = context.socket(SocketType::Dealer).unwrap();
-    dealer.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
-    dealer.connect(&endpoint).await.unwrap();
+    let context = ZmqContext::new();
+    let socket = dealer(&context)
+        .set_linger(0)
+        .connect(&endpoint)
+        .unwrap();
 
-    let envelope = Envelope::new(Payload::WeaveEval {
-        code: "print('hello')".to_string(),
-    });
+    let (mut tx, mut rx) = socket.split();
+
+    let envelope = Envelope::new(Payload::ToolRequest(ToolRequest::WeaveEval(
+        WeaveEvalRequest {
+            code: "print('hello')".to_string(),
+        },
+    )));
     let json = serde_json::to_string(&envelope).unwrap();
-    dealer.send(Msg::from_vec(json.into_bytes())).await.unwrap();
+    let mp: Multipart = vec![json.into_bytes()].into();
+    tx.send(mp).await.unwrap();
 
-    let response = timeout(Duration::from_secs(1), dealer.recv())
+    let response_mp = timeout(Duration::from_secs(1), rx.next())
         .await
+        .unwrap()
         .unwrap()
         .unwrap();
 
-    let response_bytes = response.data().unwrap_or_default();
-    let response_str = std::str::from_utf8(response_bytes).unwrap();
+    let response_bytes = response_mp.into_iter().next().unwrap();
+    let response_str = std::str::from_utf8(&response_bytes).unwrap();
     let response_envelope: Envelope = serde_json::from_str(response_str).unwrap();
 
     match response_envelope.payload {
@@ -185,24 +199,31 @@ async fn test_job_status() {
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    let context = Context::new().unwrap();
-    let dealer = context.socket(SocketType::Dealer).unwrap();
-    dealer.set_option_raw(LINGER, &0i32.to_ne_bytes()).await.ok();
-    dealer.connect(&endpoint).await.unwrap();
+    let context = ZmqContext::new();
+    let socket = dealer(&context)
+        .set_linger(0)
+        .connect(&endpoint)
+        .unwrap();
 
-    let envelope = Envelope::new(Payload::JobStatus {
-        job_id: "test-job-123".to_string(),
-    });
+    let (mut tx, mut rx) = socket.split();
+
+    let envelope = Envelope::new(Payload::ToolRequest(ToolRequest::JobStatus(
+        JobStatusRequest {
+            job_id: "test-job-123".to_string(),
+        },
+    )));
     let json = serde_json::to_string(&envelope).unwrap();
-    dealer.send(Msg::from_vec(json.into_bytes())).await.unwrap();
+    let mp: Multipart = vec![json.into_bytes()].into();
+    tx.send(mp).await.unwrap();
 
-    let response = timeout(Duration::from_secs(1), dealer.recv())
+    let response_mp = timeout(Duration::from_secs(1), rx.next())
         .await
+        .unwrap()
         .unwrap()
         .unwrap();
 
-    let response_bytes = response.data().unwrap_or_default();
-    let response_str = std::str::from_utf8(response_bytes).unwrap();
+    let response_bytes = response_mp.into_iter().next().unwrap();
+    let response_str = std::str::from_utf8(&response_bytes).unwrap();
     let response_envelope: Envelope = serde_json::from_str(response_str).unwrap();
 
     match response_envelope.payload {

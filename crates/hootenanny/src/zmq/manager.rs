@@ -1,6 +1,6 @@
 //! GardenManager - manages the connection to chaosgarden daemon
 //!
-//! Wraps GardenClient with connection management, reconnection logic,
+//! Wraps GardenPeer with connection management, reconnection logic,
 //! and event forwarding.
 
 use anyhow::{Context, Result};
@@ -11,10 +11,10 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
 use tracing::{debug, error, info, warn};
 
-use super::garden_client::GardenClient;
-use chaosgarden::ipc::{
-    ControlReply, ControlRequest, GardenEndpoints, IOPubEvent, QueryReply, ShellReply, ShellRequest,
+use hooteproto::garden::{
+    Beat, ControlReply, ControlRequest, IOPubEvent, QueryReply, ShellReply, ShellRequest,
 };
+use hooteproto::{GardenEndpoints, GardenPeer};
 
 /// Connection state to chaosgarden
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,13 +27,13 @@ pub enum ConnectionState {
 
 /// Manages the connection to chaosgarden daemon
 ///
-/// Provides a higher-level interface than GardenClient with:
+/// Provides a higher-level interface than GardenPeer with:
 /// - Automatic reconnection
 /// - Connection state tracking
 /// - Event broadcasting
 pub struct GardenManager {
     endpoints: GardenEndpoints,
-    client: Arc<RwLock<Option<GardenClient>>>,
+    client: Arc<RwLock<Option<GardenPeer>>>,
     state: Arc<RwLock<ConnectionState>>,
     event_tx: mpsc::Sender<IOPubEvent>,
     event_rx: Arc<RwLock<Option<mpsc::Receiver<IOPubEvent>>>>,
@@ -53,21 +53,23 @@ impl GardenManager {
         }
     }
 
-    /// Create with local IPC endpoints (uses /tmp)
-    pub fn local() -> Self {
-        Self::new(GardenEndpoints::local())
-    }
-
     /// Create with IPC endpoints in a specific directory
     ///
     /// Use this with `paths.socket_dir` from HootConfig:
     /// ```ignore
-    /// let manager = GardenManager::from_socket_dir(
-    ///     &config.infra.paths.socket_dir.to_string_lossy()
-    /// );
+    /// let socket_dir = config.infra.paths.require_socket_dir()?;
+    /// let manager = GardenManager::from_socket_dir(&socket_dir.to_string_lossy());
     /// ```
     pub fn from_socket_dir(dir: &str) -> Self {
         Self::new(GardenEndpoints::from_socket_dir(dir))
+    }
+
+    /// Create from HootConfig (recommended)
+    ///
+    /// This validates that socket_dir is present and configured.
+    pub fn from_config(config: &hooteconf::HootConfig) -> anyhow::Result<Self> {
+        let endpoints = GardenEndpoints::from_config(config)?;
+        Ok(Self::new(endpoints))
     }
 
     /// Create with TCP endpoints
@@ -97,7 +99,7 @@ impl GardenManager {
 
         info!("Connecting to chaosgarden at {:?}", self.endpoints);
 
-        match GardenClient::connect(&self.endpoints).await {
+        match GardenPeer::connect(&self.endpoints).await {
             Ok(client) => {
                 info!("Connected to chaosgarden, session={}", client.session());
                 *self.client.write().await = Some(client);
@@ -197,8 +199,8 @@ impl GardenManager {
         let event_tx = self.event_tx.clone();
         let state = self.state.clone();
 
-        // Reconnect with a fresh client for request/control channels
-        let new_client = GardenClient::connect(&self.endpoints).await?;
+        // Reconnect with a fresh peer for request/control channels
+        let new_client = GardenPeer::connect(&self.endpoints).await?;
         *self.client.write().await = Some(new_client);
 
         // Spawn listener task with the old client (which owns the SUB socket)
@@ -243,7 +245,7 @@ impl GardenManager {
     /// Seek to beat position
     pub async fn seek(&self, beat: f64) -> Result<ShellReply> {
         self.request(ShellRequest::Seek {
-            beat: chaosgarden::ipc::Beat(beat),
+            beat: Beat(beat),
         })
         .await
     }
@@ -274,8 +276,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_garden_manager_new() {
-        let manager = GardenManager::local();
+    fn test_garden_manager_from_socket_dir() {
+        let manager = GardenManager::from_socket_dir("/tmp");
         assert_eq!(manager.endpoints.control, "ipc:///tmp/chaosgarden-control");
     }
 
@@ -288,7 +290,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_initial_state_disconnected() {
-        let manager = GardenManager::local();
+        let manager = GardenManager::from_socket_dir("/tmp");
         assert_eq!(manager.state().await, ConnectionState::Disconnected);
         assert!(!manager.is_connected().await);
     }

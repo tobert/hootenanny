@@ -334,6 +334,7 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
         ToolRequest::CasInspect(req) => builder.reborrow().init_cas_inspect().set_hash(&req.hash),
         ToolRequest::CasGet(req) => builder.reborrow().init_cas_get().set_hash(&req.hash),
         ToolRequest::CasUploadFile(req) => { let mut c = builder.reborrow().init_cas_upload_file(); c.set_file_path(&req.file_path); c.set_mime_type(&req.mime_type); }
+        ToolRequest::CasStats => builder.reborrow().set_cas_stats(()),
         ToolRequest::OrpheusGenerate(req) => {
             let mut o = builder.reborrow().init_orpheus_generate();
             o.set_model(req.model.as_deref().unwrap_or(""));
@@ -657,6 +658,7 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
             let cas = cas?;
             Ok(ToolRequest::CasUploadFile(CasUploadFileRequest { file_path: cas.get_file_path()?.to_str()?.to_string(), mime_type: cas.get_mime_type()?.to_str()?.to_string() }))
         }
+        tools_capnp::tool_request::CasStats(()) => Ok(ToolRequest::CasStats),
         tools_capnp::tool_request::OrpheusGenerate(o) => {
             let o = o?; let m = o.get_metadata()?;
             Ok(ToolRequest::OrpheusGenerate(OrpheusGenerateRequest {
@@ -1229,6 +1231,12 @@ fn response_to_capnp_tool_response(
             b.set_size(r.size.unwrap_or(0) as u64);
             b.set_preview(r.preview.as_deref().unwrap_or(""));
         }
+        ToolResponse::CasStats(r) => {
+            let mut b = builder.reborrow().init_cas_stats();
+            b.set_total_items(r.total_items);
+            b.set_total_bytes(r.total_bytes);
+            b.set_cas_dir(&r.cas_dir);
+        }
 
         // Artifacts
         ToolResponse::ArtifactCreated(r) => {
@@ -1344,6 +1352,32 @@ fn response_to_capnp_tool_response(
             }
             b.set_timed_out(r.timed_out);
         }
+        ToolResponse::JobPoll(r) => {
+            // Reuse job_poll_result structure
+            let mut b = builder.reborrow().init_job_poll_result();
+            let mut completed = b.reborrow().init_completed(r.completed.len() as u32);
+            for (i, id) in r.completed.iter().enumerate() {
+                completed.set(i as u32, id);
+            }
+            let mut failed = b.reborrow().init_failed(r.failed.len() as u32);
+            for (i, id) in r.failed.iter().enumerate() {
+                failed.set(i as u32, id);
+            }
+            let mut pending = b.reborrow().init_pending(r.pending.len() as u32);
+            for (i, id) in r.pending.iter().enumerate() {
+                pending.set(i as u32, id);
+            }
+            b.set_timed_out(r.reason == "timeout");
+        }
+        ToolResponse::JobCancel(r) => {
+            // Use ack with structured message
+            let msg = format!("Job {} cancelled: {}", r.job_id, r.cancelled);
+            builder.reborrow().init_ack().set_message(&msg);
+        }
+        ToolResponse::JobSleep(r) => {
+            let msg = format!("Slept for {}ms", r.slept_ms);
+            builder.reborrow().init_ack().set_message(&msg);
+        }
 
         // ABC Notation
         ToolResponse::AbcParsed(r) => {
@@ -1383,6 +1417,20 @@ fn response_to_capnp_tool_response(
             b.set_content_hash(&r.content_hash);
             b.set_duration_seconds(r.duration_seconds);
             b.set_notes_count(r.notes_count as u64);
+        }
+        ToolResponse::AbcToMidi(r) => {
+            // Reuse artifact_created structure
+            let mut b = builder.reborrow().init_artifact_created();
+            b.set_artifact_id(&r.artifact_id);
+            b.set_content_hash(&r.content_hash);
+            b.set_creator("abc_to_midi");
+        }
+        ToolResponse::MidiToWav(r) => {
+            // Reuse artifact_created structure
+            let mut b = builder.reborrow().init_artifact_created();
+            b.set_artifact_id(&r.artifact_id);
+            b.set_content_hash(&r.content_hash);
+            b.set_creator("midi_to_wav");
         }
 
         // SoundFont
@@ -1535,6 +1583,25 @@ fn response_to_capnp_tool_response(
             b.set_results(&serde_json::to_string(&r.results).unwrap_or_default());
             b.set_count(r.count as u64);
         }
+        ToolResponse::GardenAudioStatus(r) => {
+            let mut b = builder.reborrow().init_garden_audio_status();
+            b.set_attached(r.attached);
+            b.set_device_name(r.device_name.as_deref().unwrap_or(""));
+            b.set_sample_rate(r.sample_rate.unwrap_or(0));
+            b.set_latency_frames(r.latency_frames.unwrap_or(0));
+            b.set_buffer_underruns(r.underruns);
+        }
+        ToolResponse::GardenInputStatus(r) => {
+            let mut b = builder.reborrow().init_garden_input_status();
+            b.set_attached(r.attached);
+            b.set_device_name(r.device_name.as_deref().unwrap_or(""));
+            b.set_sample_rate(r.sample_rate.unwrap_or(0));
+        }
+        ToolResponse::GardenMonitorStatus(r) => {
+            let mut b = builder.reborrow().init_garden_monitor_status();
+            b.set_enabled(r.enabled);
+            b.set_gain(r.gain);
+        }
 
         // Graph
         ToolResponse::GraphIdentity(r) => {
@@ -1586,6 +1653,26 @@ fn response_to_capnp_tool_response(
             let mut b = builder.reborrow().init_graph_query_result();
             b.set_results(&serde_json::to_string(&r.results).unwrap_or_default());
             b.set_count(r.count as u64);
+        }
+        ToolResponse::GraphBind(r) => {
+            // Reuse graph_identity structure
+            let mut b = builder.reborrow().init_graph_identity();
+            b.set_id(&r.identity_id);
+            b.set_name(&r.name);
+            b.set_created_at(0); // Not tracked in bind response
+        }
+        ToolResponse::GraphTag(r) => {
+            let msg = format!("Tagged {} with {}", r.identity_id, r.tag);
+            builder.reborrow().init_ack().set_message(&msg);
+        }
+        ToolResponse::GraphConnect(r) => {
+            let mut b = builder.reborrow().init_graph_connection();
+            b.set_connection_id(""); // Not tracked
+            b.set_from_identity(&r.from_identity);
+            b.set_from_port(&r.from_port);
+            b.set_to_identity(&r.to_identity);
+            b.set_to_port(&r.to_port);
+            b.set_transport("");
         }
 
         // Config
@@ -1720,6 +1807,14 @@ fn capnp_tool_response_to_response(
                 exists: r.get_exists(),
                 size: if size > 0 { Some(size as usize) } else { None },
                 preview: if preview.is_empty() { None } else { Some(preview) },
+            }))
+        }
+        Which::CasStats(r) => {
+            let r = r?;
+            Ok(ToolResponse::CasStats(CasStatsResponse {
+                total_items: r.get_total_items(),
+                total_bytes: r.get_total_bytes(),
+                cas_dir: r.get_cas_dir()?.to_string()?,
             }))
         }
 
@@ -2113,6 +2208,41 @@ fn capnp_tool_response_to_response(
                 count: r.get_count() as usize,
             }))
         }
+        Which::GardenAudioStatus(r) => {
+            let r = r?;
+            let device_name = r.get_device_name()?.to_string()?;
+            Ok(ToolResponse::GardenAudioStatus(GardenAudioStatusResponse {
+                attached: r.get_attached(),
+                device_name: if device_name.is_empty() { None } else { Some(device_name) },
+                sample_rate: Some(r.get_sample_rate()),
+                latency_frames: Some(r.get_latency_frames()),
+                callbacks: 0, // Not in capnp schema yet
+                samples_written: 0, // Not in capnp schema yet
+                underruns: r.get_buffer_underruns(),
+            }))
+        }
+        Which::GardenInputStatus(r) => {
+            let r = r?;
+            let device_name = r.get_device_name()?.to_string()?;
+            Ok(ToolResponse::GardenInputStatus(GardenInputStatusResponse {
+                attached: r.get_attached(),
+                device_name: if device_name.is_empty() { None } else { Some(device_name) },
+                sample_rate: Some(r.get_sample_rate()),
+                channels: None, // Not in capnp schema yet
+                monitor_enabled: false, // Not in capnp schema yet
+                monitor_gain: 1.0, // Not in capnp schema yet
+                callbacks: 0, // Not in capnp schema yet
+                samples_captured: 0, // Not in capnp schema yet
+                overruns: 0, // Not in capnp schema yet
+            }))
+        }
+        Which::GardenMonitorStatus(r) => {
+            let r = r?;
+            Ok(ToolResponse::GardenMonitorStatus(GardenMonitorStatusResponse {
+                enabled: r.get_enabled(),
+                gain: r.get_gain(),
+            }))
+        }
 
         // Graph
         Which::GraphIdentity(r) => {
@@ -2282,13 +2412,9 @@ fn capnp_tool_response_to_response(
         }
 
         // New response types added in responses.capnp but not yet in Rust
-        Which::GardenAudioStatus(_) |
-        Which::GardenInputStatus(_) |
-        Which::GardenMonitorStatus(_) |
         Which::ToolHelp(_) |
         Which::ScheduleResult(_) |
-        Which::AnalyzeResult(_) |
-        Which::CasStats(_) => {
+        Which::AnalyzeResult(_) => {
             Err(capnp::Error::failed("Unimplemented response type".to_string()))
         }
     }

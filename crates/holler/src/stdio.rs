@@ -6,6 +6,7 @@
 use anyhow::{Context, Result};
 use rmcp::{transport::stdio, ServiceExt};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::backend::BackendPool;
@@ -33,7 +34,7 @@ pub async fn run(config: StdioConfig) -> Result<()> {
         .setup_hootenanny(&config.hootenanny, config.timeout_ms)
         .await;
 
-    let backends = Arc::new(backends);
+    let backends = Arc::new(RwLock::new(backends));
 
     // Create shared tool cache
     let tool_cache = new_tool_cache();

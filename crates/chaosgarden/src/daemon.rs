@@ -6,14 +6,12 @@
 //! - Trustfall queries over graph state
 //! - Latent lifecycle management
 
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
 
-#[cfg(test)]
-use std::collections::HashMap;
-
+use hooteproto::garden::QueryReply;
 use tracing::{debug, info, warn};
-#[cfg(test)]
 use trustfall::execute_query;
 use uuid::Uuid;
 
@@ -28,8 +26,6 @@ use crate::monitor_input::{MonitorInputConfig, MonitorInputStream};
 use crate::nodes::ContentResolver;
 use crate::pipewire_output::{MonitorMixState, PipeWireOutputConfig, PipeWireOutputStream};
 use crate::playback::{CompiledGraph, PlaybackEngine};
-#[cfg(test)]
-use crate::ipc::QueryReply;
 use crate::primitives::{Behavior, ContentType};
 use crate::stream_io::{
     SampleFormat, StreamDefinition, StreamFormat, StreamManager, StreamUri,
@@ -758,8 +754,8 @@ impl GardenDaemon {
             .collect()
     }
 
-    #[cfg(test)]
-    fn execute_query(&self, query: &str, variables: &HashMap<String, serde_json::Value>) -> QueryReply {
+    /// Execute a Trustfall query against the garden state
+    pub fn execute_query(&self, query: &str, variables: &HashMap<String, serde_json::Value>) -> QueryReply {
         let adapter = match &self.query_adapter {
             Some(a) => Arc::clone(a),
             None => {
@@ -1263,7 +1259,6 @@ impl StreamEventPublisher for NoOpStreamPublisher {
 }
 
 /// Convert JSON value to Trustfall FieldValue
-#[cfg(test)]
 fn json_to_field_value(v: &serde_json::Value) -> trustfall::FieldValue {
     match v {
         serde_json::Value::Null => trustfall::FieldValue::Null,
@@ -1292,7 +1287,6 @@ fn json_to_field_value(v: &serde_json::Value) -> trustfall::FieldValue {
 }
 
 /// Convert Trustfall FieldValue to JSON
-#[cfg(test)]
 fn field_value_to_json(v: &trustfall::FieldValue) -> serde_json::Value {
     match v {
         trustfall::FieldValue::Null => serde_json::Value::Null,

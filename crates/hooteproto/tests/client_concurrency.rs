@@ -6,12 +6,13 @@
 //! - Response correlation works with out-of-order responses
 
 use bytes::Bytes;
+use futures::{SinkExt, StreamExt};
+use hooteproto::socket_config::{Multipart, ZmqContext};
 use hooteproto::{ClientConfig, Command, HootClient, HootFrame, Payload};
-use rzmq::socket::options::LINGER;
-use rzmq::{Context, Msg, MsgFlags, SocketType};
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tmq::router;
 use tokio::sync::Barrier;
 
 static PORT: AtomicU16 = AtomicU16::new(18500);
@@ -19,6 +20,20 @@ static PORT: AtomicU16 = AtomicU16::new(18500);
 fn next_endpoint() -> String {
     let port = PORT.fetch_add(1, Ordering::SeqCst);
     format!("tcp://127.0.0.1:{}", port)
+}
+
+fn frames_to_multipart(frames: &[Bytes]) -> Multipart {
+    frames
+        .iter()
+        .map(|f| f.to_vec())
+        .collect::<Vec<_>>()
+        .into()
+}
+
+fn multipart_to_frames(mp: Multipart) -> Vec<Bytes> {
+    mp.into_iter()
+        .map(|m| Bytes::from(m.to_vec()))
+        .collect()
 }
 
 /// Get the correct response command for a request (heartbeats echo, others get Reply)
@@ -32,21 +47,18 @@ fn response_command(request: &HootFrame) -> Command {
 
 /// Mock ROUTER that echoes requests back as responses
 async fn echo_router(endpoint: &str, request_count: usize) {
-    let ctx = Context::new().unwrap();
-    let socket = ctx.socket(SocketType::Router).unwrap();
-    socket
-        .set_option_raw(LINGER, &0i32.to_ne_bytes())
-        .await
-        .ok();
-    socket.bind(endpoint).await.unwrap();
+    let ctx = ZmqContext::new();
+    let socket = router(&ctx)
+        .set_linger(0)
+        .bind(endpoint)
+        .expect("Failed to bind router");
+
+    let (mut tx, mut rx) = socket.split();
 
     for _ in 0..request_count {
         // Receive request
-        let msgs = socket.recv_multipart().await.unwrap();
-        let frames: Vec<Bytes> = msgs
-            .iter()
-            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
-            .collect();
+        let mp = rx.next().await.expect("Stream ended").expect("Recv failed");
+        let frames = multipart_to_frames(mp);
 
         // Parse to get identity and request
         let (identity, request) =
@@ -64,33 +76,24 @@ async fn echo_router(endpoint: &str, request_count: usize) {
 
         // Send response with identity
         let reply_frames = response.to_frames_with_identity(&identity);
-        let last_idx = reply_frames.len() - 1;
-        for (i, frame) in reply_frames.iter().enumerate() {
-            let mut msg = Msg::from_vec(frame.to_vec());
-            if i < last_idx {
-                msg.set_flags(MsgFlags::MORE);
-            }
-            socket.send(msg).await.unwrap();
-        }
+        let reply_mp = frames_to_multipart(&reply_frames);
+        tx.send(reply_mp).await.expect("Send failed");
     }
 }
 
 /// Mock ROUTER that delays responses by specified duration
 async fn delayed_router(endpoint: &str, delay: Duration, request_count: usize) {
-    let ctx = Context::new().unwrap();
-    let socket = ctx.socket(SocketType::Router).unwrap();
-    socket
-        .set_option_raw(LINGER, &0i32.to_ne_bytes())
-        .await
-        .ok();
-    socket.bind(endpoint).await.unwrap();
+    let ctx = ZmqContext::new();
+    let socket = router(&ctx)
+        .set_linger(0)
+        .bind(endpoint)
+        .expect("Failed to bind router");
+
+    let (mut tx, mut rx) = socket.split();
 
     for _ in 0..request_count {
-        let msgs = socket.recv_multipart().await.unwrap();
-        let frames: Vec<Bytes> = msgs
-            .iter()
-            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
-            .collect();
+        let mp = rx.next().await.expect("Stream ended").expect("Recv failed");
+        let frames = multipart_to_frames(mp);
 
         let (identity, request) =
             HootFrame::from_frames_with_identity(&frames).expect("Failed to parse request");
@@ -108,36 +111,27 @@ async fn delayed_router(endpoint: &str, delay: Duration, request_count: usize) {
         };
 
         let reply_frames = response.to_frames_with_identity(&identity);
-        let last_idx = reply_frames.len() - 1;
-        for (i, frame) in reply_frames.iter().enumerate() {
-            let mut msg = Msg::from_vec(frame.to_vec());
-            if i < last_idx {
-                msg.set_flags(MsgFlags::MORE);
-            }
-            socket.send(msg).await.unwrap();
-        }
+        let reply_mp = frames_to_multipart(&reply_frames);
+        tx.send(reply_mp).await.expect("Send failed");
     }
 }
 
 /// Mock ROUTER that responds to requests out of order
 async fn reordering_router(endpoint: &str, request_count: usize) {
-    let ctx = Context::new().unwrap();
-    let socket = ctx.socket(SocketType::Router).unwrap();
-    socket
-        .set_option_raw(LINGER, &0i32.to_ne_bytes())
-        .await
-        .ok();
-    socket.bind(endpoint).await.unwrap();
+    let ctx = ZmqContext::new();
+    let socket = router(&ctx)
+        .set_linger(0)
+        .bind(endpoint)
+        .expect("Failed to bind router");
+
+    let (mut tx, mut rx) = socket.split();
 
     // Collect all requests first
     let mut pending: Vec<(Vec<Bytes>, HootFrame)> = Vec::new();
 
     for _ in 0..request_count {
-        let msgs = socket.recv_multipart().await.unwrap();
-        let frames: Vec<Bytes> = msgs
-            .iter()
-            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
-            .collect();
+        let mp = rx.next().await.expect("Stream ended").expect("Recv failed");
+        let frames = multipart_to_frames(mp);
 
         let (identity, request) =
             HootFrame::from_frames_with_identity(&frames).expect("Failed to parse request");
@@ -156,14 +150,8 @@ async fn reordering_router(endpoint: &str, request_count: usize) {
         };
 
         let reply_frames = response.to_frames_with_identity(&identity);
-        let last_idx = reply_frames.len() - 1;
-        for (i, frame) in reply_frames.iter().enumerate() {
-            let mut msg = Msg::from_vec(frame.to_vec());
-            if i < last_idx {
-                msg.set_flags(MsgFlags::MORE);
-            }
-            socket.send(msg).await.unwrap();
-        }
+        let reply_mp = frames_to_multipart(&reply_frames);
+        tx.send(reply_mp).await.expect("Send failed");
     }
 }
 
@@ -244,25 +232,22 @@ async fn test_multiple_requests_in_flight() {
     let in_flight_clone = in_flight.clone();
     let max_in_flight_clone = max_in_flight.clone();
     let router_handle = tokio::spawn(async move {
-        let ctx = Context::new().unwrap();
-        let socket = ctx.socket(SocketType::Router).unwrap();
-        socket
-            .set_option_raw(LINGER, &0i32.to_ne_bytes())
-            .await
-            .ok();
-        socket.bind(&router_endpoint).await.unwrap();
+        let ctx = ZmqContext::new();
+        let socket = router(&ctx)
+            .set_linger(0)
+            .bind(&router_endpoint)
+            .expect("Failed to bind router");
+
+        let (mut tx, mut rx) = socket.split();
 
         for _ in 0..request_count {
-            let msgs = socket.recv_multipart().await.unwrap();
+            let mp = rx.next().await.expect("Stream ended").expect("Recv failed");
 
             // Track in-flight
             let current = in_flight_clone.fetch_add(1, Ordering::SeqCst) + 1;
             max_in_flight_clone.fetch_max(current, Ordering::SeqCst);
 
-            let frames: Vec<Bytes> = msgs
-                .iter()
-                .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
-                .collect();
+            let frames = multipart_to_frames(mp);
 
             let (identity, request) =
                 HootFrame::from_frames_with_identity(&frames).expect("Failed to parse");
@@ -282,14 +267,8 @@ async fn test_multiple_requests_in_flight() {
             };
 
             let reply_frames = response.to_frames_with_identity(&identity);
-            let last_idx = reply_frames.len() - 1;
-            for (i, frame) in reply_frames.iter().enumerate() {
-                let mut msg = Msg::from_vec(frame.to_vec());
-                if i < last_idx {
-                    msg.set_flags(MsgFlags::MORE);
-                }
-                socket.send(msg).await.unwrap();
-            }
+            let reply_mp = frames_to_multipart(&reply_frames);
+            tx.send(reply_mp).await.expect("Send failed");
         }
     });
 
@@ -352,9 +331,6 @@ async fn test_response_correlation_with_reordering() {
     router_handle.abort();
 }
 
-// NOTE: Heartbeat independence is tested in integration.rs with parallel routers.
-// The serial delayed_router used here can't properly test parallel behavior.
-
 /// Test that timeout triggers retry (Lazy Pirate pattern)
 #[tokio::test]
 async fn test_retry_on_timeout() {
@@ -363,24 +339,21 @@ async fn test_retry_on_timeout() {
     // Router that only responds to 2nd request (drops first)
     let router_endpoint = endpoint.clone();
     let router_handle = tokio::spawn(async move {
-        let ctx = Context::new().unwrap();
-        let socket = ctx.socket(SocketType::Router).unwrap();
-        socket
-            .set_option_raw(LINGER, &0i32.to_ne_bytes())
-            .await
-            .ok();
-        socket.bind(&router_endpoint).await.unwrap();
+        let ctx = ZmqContext::new();
+        let socket = router(&ctx)
+            .set_linger(0)
+            .bind(&router_endpoint)
+            .expect("Failed to bind router");
+
+        let (mut tx, mut rx) = socket.split();
 
         // Receive and drop first request
-        let _ = socket.recv_multipart().await.unwrap();
+        let _ = rx.next().await.expect("Stream ended").expect("Recv failed");
         println!("Router: dropped first request");
 
         // Respond to second request
-        let msgs = socket.recv_multipart().await.unwrap();
-        let frames: Vec<Bytes> = msgs
-            .iter()
-            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
-            .collect();
+        let mp = rx.next().await.expect("Stream ended").expect("Recv failed");
+        let frames = multipart_to_frames(mp);
 
         let (identity, request) =
             HootFrame::from_frames_with_identity(&frames).expect("Failed to parse");
@@ -396,14 +369,8 @@ async fn test_retry_on_timeout() {
         };
 
         let reply_frames = response.to_frames_with_identity(&identity);
-        let last_idx = reply_frames.len() - 1;
-        for (i, frame) in reply_frames.iter().enumerate() {
-            let mut msg = Msg::from_vec(frame.to_vec());
-            if i < last_idx {
-                msg.set_flags(MsgFlags::MORE);
-            }
-            socket.send(msg).await.unwrap();
-        }
+        let reply_mp = frames_to_multipart(&reply_frames);
+        tx.send(reply_mp).await.expect("Send failed");
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;

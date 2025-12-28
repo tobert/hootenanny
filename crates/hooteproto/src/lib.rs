@@ -119,17 +119,36 @@ pub mod responses;
 pub mod schema_helpers;
 pub mod timing;
 
-#[cfg(feature = "client")]
+// Peer infrastructure - batteries included for building hootenanny peers
+#[cfg(feature = "peer")]
 pub mod client;
 
-#[cfg(feature = "client")]
+#[cfg(feature = "peer")]
 pub mod lazy_pirate;
 
-#[cfg(feature = "client")]
+#[cfg(feature = "peer")]
+pub mod socket_config;
+
+#[cfg(feature = "peer")]
+pub mod garden_peer;
+
+#[cfg(feature = "peer")]
+pub mod garden_listener;
+
+#[cfg(feature = "peer")]
 pub use client::{ClientConfig, ConnectionState, HealthTracker, HootClient, spawn_health_task};
 
-#[cfg(feature = "client")]
+#[cfg(feature = "peer")]
 pub use lazy_pirate::{AttemptResult, LazyPirateClient, LazyPirateConfig};
+
+#[cfg(feature = "peer")]
+pub use garden_peer::GardenPeer;
+
+#[cfg(feature = "peer")]
+pub use garden_listener::{GardenListener, GardenSockets};
+
+// Garden protocol types (always available, no feature gate)
+pub use garden::GardenEndpoints;
 
 pub use conversion::{
     capnp_envelope_to_payload, envelope_to_payload, payload_to_capnp_envelope,
@@ -568,6 +587,179 @@ pub enum Broadcast {
         /// Device name (if known)
         name: Option<String>,
     },
+}
+
+/// Parse a Cap'n Proto broadcast message into the Rust Broadcast enum
+pub fn capnp_to_broadcast(
+    reader: broadcast_capnp::broadcast::Reader,
+) -> capnp::Result<Broadcast> {
+    use broadcast_capnp::broadcast::Which;
+
+    match reader.which()? {
+        Which::ConfigUpdate(config) => {
+            let config = config?;
+            let key = config.get_key()?.to_string()?;
+            let value_str = config.get_value()?.to_string()?;
+            let value = serde_json::from_str(&value_str).unwrap_or(serde_json::Value::Null);
+            Ok(Broadcast::ConfigUpdate { key, value })
+        }
+        Which::Shutdown(shutdown) => {
+            let shutdown = shutdown?;
+            let reason = shutdown.get_reason()?.to_string()?;
+            Ok(Broadcast::Shutdown { reason })
+        }
+        Which::ScriptInvalidate(script) => {
+            let script = script?;
+            let hash = script.get_hash()?.to_string()?;
+            Ok(Broadcast::ScriptInvalidate { hash })
+        }
+        Which::JobStateChanged(job) => {
+            let job = job?;
+            let job_id = job.get_job_id()?.to_string()?;
+            let state = job.get_state()?.to_string()?;
+            let result_str = job.get_result()?.to_string()?;
+            let result = if result_str.is_empty() {
+                None
+            } else {
+                serde_json::from_str(&result_str).ok()
+            };
+            Ok(Broadcast::JobStateChanged {
+                job_id,
+                state,
+                result,
+            })
+        }
+        Which::Progress(prog) => {
+            let prog = prog?;
+            let job_id = prog.get_job_id()?.to_string()?;
+            let percent = prog.get_percent();
+            let message = prog.get_message()?.to_string()?;
+            Ok(Broadcast::Progress {
+                job_id,
+                percent,
+                message,
+            })
+        }
+        Which::ArtifactCreated(artifact) => {
+            let artifact = artifact?;
+            let artifact_id = artifact.get_artifact_id()?.to_string()?;
+            let content_hash = artifact.get_content_hash()?.to_string()?;
+            let tags: Vec<String> = artifact
+                .get_tags()?
+                .iter()
+                .filter_map(|t| t.ok().map(|s| s.to_string().ok()).flatten())
+                .collect();
+            let creator_str = artifact.get_creator()?.to_string()?;
+            let creator = if creator_str.is_empty() {
+                None
+            } else {
+                Some(creator_str)
+            };
+            Ok(Broadcast::ArtifactCreated {
+                artifact_id,
+                content_hash,
+                tags,
+                creator,
+            })
+        }
+        Which::TransportStateChanged(transport) => {
+            let transport = transport?;
+            let state = transport.get_state()?.to_string()?;
+            let position_beats = transport.get_position_beats();
+            let tempo_bpm = transport.get_tempo_bpm();
+            Ok(Broadcast::TransportStateChanged {
+                state,
+                position_beats,
+                tempo_bpm,
+            })
+        }
+        Which::MarkerReached(marker) => {
+            let marker = marker?;
+            let position_beats = marker.get_position_beats();
+            let marker_type = marker.get_marker_type()?.to_string()?;
+            let metadata_str = marker.get_metadata()?.to_string()?;
+            let metadata =
+                serde_json::from_str(&metadata_str).unwrap_or(serde_json::Value::Null);
+            Ok(Broadcast::MarkerReached {
+                position_beats,
+                marker_type,
+                metadata,
+            })
+        }
+        Which::BeatTick(tick) => {
+            let tick = tick?;
+            let beat = tick.get_beat();
+            let position_beats = tick.get_position_beats();
+            let tempo_bpm = tick.get_tempo_bpm();
+            Ok(Broadcast::BeatTick {
+                beat,
+                position_beats,
+                tempo_bpm,
+            })
+        }
+        Which::Log(log) => {
+            let log = log?;
+            let level = log.get_level()?.to_string()?;
+            let message = log.get_message()?.to_string()?;
+            let source = log.get_source()?.to_string()?;
+            Ok(Broadcast::Log {
+                level,
+                message,
+                source,
+            })
+        }
+        Which::DeviceConnected(device) => {
+            let device = device?;
+            let pipewire_id = device.get_pipewire_id();
+            let name = device.get_name()?.to_string()?;
+            let media_class_str = device.get_media_class()?.to_string()?;
+            let media_class = if media_class_str.is_empty() {
+                None
+            } else {
+                Some(media_class_str)
+            };
+            let identity_id_str = device.get_identity_id()?.to_string()?;
+            let identity_id = if identity_id_str.is_empty() {
+                None
+            } else {
+                Some(identity_id_str)
+            };
+            let identity_name_str = device.get_identity_name()?.to_string()?;
+            let identity_name = if identity_name_str.is_empty() {
+                None
+            } else {
+                Some(identity_name_str)
+            };
+            Ok(Broadcast::DeviceConnected {
+                pipewire_id,
+                name,
+                media_class,
+                identity_id,
+                identity_name,
+            })
+        }
+        Which::DeviceDisconnected(device) => {
+            let device = device?;
+            let pipewire_id = device.get_pipewire_id();
+            let name_str = device.get_name()?.to_string()?;
+            let name = if name_str.is_empty() {
+                None
+            } else {
+                Some(name_str)
+            };
+            Ok(Broadcast::DeviceDisconnected { pipewire_id, name })
+        }
+        // Stream events are handled separately by chaosgarden, not needed here
+        Which::StreamHeadPosition(_)
+        | Which::StreamChunkFull(_)
+        | Which::StreamError(_)
+        | Which::AudioAttached(_)
+        | Which::AudioDetached(_)
+        | Which::AudioUnderrun(_) => {
+            // These are internal stream events, skip for broadcast forwarding
+            Err(capnp::Error::failed("Stream events not broadcast to SSE".to_string()))
+        }
+    }
 }
 
 #[cfg(test)]

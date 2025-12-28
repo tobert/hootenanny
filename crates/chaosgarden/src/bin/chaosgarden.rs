@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use chaosgarden::{GardenDaemon, DaemonConfig};
-use chaosgarden::ipc::{capnp_server::CapnpGardenServer, GardenEndpoints};
+use chaosgarden::ipc::capnp_server::CapnpGardenServer;
 use chaosgarden::nodes::FileCasClient;
 use hooteconf::HootConfig;
 use tracing::{info, Level};
@@ -32,31 +32,9 @@ async fn main() -> Result<()> {
 
     // Load configuration
     let hoote_config = HootConfig::load()?;
+    info!("Using socket_dir: {:?}", hoote_config.infra.paths.socket_dir);
 
-    // IPC is default. TCP only if [services.chaosgarden] zmq_router starts with "tcp://"
-    // and differs from the placeholder default
-    let zmq_router = &hoote_config.infra.services.chaosgarden.zmq_router;
-    let socket_dir = hoote_config.infra.paths.socket_dir.to_string_lossy();
-    let endpoints = if zmq_router.starts_with("tcp://") && zmq_router != "tcp://0.0.0.0:5585" {
-        if let Some(port_str) = zmq_router.rsplit(':').next() {
-            if let Ok(port) = port_str.parse::<u16>() {
-                info!("Using TCP mode on port {} (from config)", port);
-                GardenEndpoints::tcp("0.0.0.0", port)
-            } else {
-                info!("Using IPC mode in {} (from config)", socket_dir);
-                GardenEndpoints::from_socket_dir(&socket_dir)
-            }
-        } else {
-            info!("Using IPC mode in {} (from config)", socket_dir);
-            GardenEndpoints::from_socket_dir(&socket_dir)
-        }
-    } else {
-        info!("Using IPC mode in {} (from config)", socket_dir);
-        GardenEndpoints::from_socket_dir(&socket_dir)
-    };
-    info!("binding to endpoints: {:?}", endpoints);
-
-    let server = CapnpGardenServer::new(endpoints);
+    let server = CapnpGardenServer::new(hoote_config.clone());
 
     // Create real daemon with state management
     let daemon_config = DaemonConfig::default();

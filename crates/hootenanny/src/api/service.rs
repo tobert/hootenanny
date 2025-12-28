@@ -4,7 +4,7 @@ use crate::job_system::JobStore;
 use crate::mcp_tools::local_models::LocalModels;
 use crate::sessions::SessionManager;
 use crate::streams::{SlicingEngine, StreamManager};
-use crate::zmq::{BroadcastPublisher, GardenManager};
+use crate::zmq::{BroadcastPublisher, GardenManager, VibeweaverClient};
 use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use std::sync::{Arc, RwLock};
 
@@ -17,6 +17,8 @@ pub struct EventDualityServer {
     pub graph_adapter: Arc<AudioGraphAdapter>,
     pub gpu_monitor: Arc<GpuMonitor>,
     pub garden_manager: Option<Arc<GardenManager>>,
+    /// Optional vibeweaver client for Python kernel proxy
+    pub vibeweaver: Option<Arc<VibeweaverClient>>,
     /// Optional broadcast publisher for SSE events via holler
     pub broadcaster: Option<BroadcastPublisher>,
     /// Stream manager for capture sessions
@@ -52,6 +54,7 @@ impl EventDualityServer {
             graph_adapter,
             gpu_monitor,
             garden_manager: None,
+            vibeweaver: None,
             broadcaster: None,
             stream_manager: None,
             session_manager: None,
@@ -62,6 +65,12 @@ impl EventDualityServer {
     /// Create with garden manager for chaosgarden connection
     pub fn with_garden(mut self, garden_manager: Option<Arc<GardenManager>>) -> Self {
         self.garden_manager = garden_manager;
+        self
+    }
+
+    /// Create with vibeweaver client for Python kernel proxy
+    pub fn with_vibeweaver(mut self, vibeweaver: Option<Arc<VibeweaverClient>>) -> Self {
+        self.vibeweaver = vibeweaver;
         self
     }
 

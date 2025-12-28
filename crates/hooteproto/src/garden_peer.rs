@@ -1,44 +1,65 @@
-//! GardenClient - ZMQ client for chaosgarden daemon
+//! GardenPeer - ZMQ peer for connecting to chaosgarden daemon
 //!
 //! Connects to chaosgarden using the Jupyter-inspired 5-socket protocol over HOOT01 frames.
-//! Uses JSON serialization for garden message envelopes.
+//!
+//! ## Usage
+//!
+//! ```ignore
+//! use hooteconf::HootConfig;
+//! use hooteproto::GardenPeer;
+//!
+//! let config = HootConfig::load()?;
+//! let peer = GardenPeer::from_config(&config).await?;
+//! let reply = peer.control(ControlRequest::DebugDump).await?;
+//! ```
 //!
 //! ## Lazy Pirate Pattern
 //!
-//! This client implements the Lazy Pirate pattern for reliable request-reply:
+//! This peer implements the Lazy Pirate pattern for reliable request-reply:
 //! - Retries on timeout with exponential backoff
 //! - Tracks peer health via successful responses
 //! - Caps reconnection backoff to prevent hours-long delays
 //!
-//! ## Workarounds for rzmq Issues
+//! ## Socket Types
 //!
-//! REQ sockets (heartbeat, query) include workarounds for rzmq issues:
-//! - RECONNECT_IVL_MAX capped at 60s to prevent runaway backoff
-//! - Periodic keepalives to prevent 300s idle timeout
+//! All sockets use DEALER for consistent multipart HOOT01 framing:
+//! - control, shell: DEALER → ROUTER (chaosgarden)
+//! - heartbeat, query: DEALER → REP (chaosgarden)
+//! - iopub: SUB → PUB (chaosgarden)
 //!
-//! See: docs/issues/rzmq-req-idle-timeout.md, docs/issues/rzmq-backoff-cap.md
+//! RECONNECT_IVL_MAX is capped at 60s to prevent runaway backoff.
 
-use anyhow::{Context as AnyhowContext, Result};
-use bytes::Bytes;
-use chaosgarden::ipc::{
-    ControlReply, ControlRequest, GardenEndpoints, IOPubEvent, Message, QueryReply,
-    QueryRequest, ShellReply, ShellRequest,
-};
-use futures::stream::Stream;
-use hooteproto::{Command, ConnectionState, ContentType, HootFrame, LazyPirateConfig, PROTOCOL_VERSION};
-use rzmq::socket::options::{LINGER, RECONNECT_IVL, RECONNECT_IVL_MAX, ROUTING_ID, SUBSCRIBE};
-use rzmq::{Context, Msg, Socket, SocketType};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
+
+use anyhow::{Context as AnyhowContext, Result};
+use bytes::Bytes;
+use futures::stream::{Stream, StreamExt};
+use futures::SinkExt;
+use hooteconf::HootConfig;
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-/// Health tracking for GardenClient
+use crate::garden::{
+    ControlReply, ControlRequest, GardenEndpoints, IOPubEvent, Message, QueryReply, ShellReply,
+    ShellRequest,
+};
+use crate::request::{GardenQueryRequest, ToolRequest};
+use crate::responses::ToolResponse;
+use crate::socket_config::{
+    create_dealer_and_connect, create_subscriber_and_connect, Multipart, ZmqContext,
+};
+use crate::{
+    capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope, Command, ConnectionState,
+    ContentType, HootFrame, LazyPirateConfig, Payload, PROTOCOL_VERSION,
+};
+
+/// Health tracking for GardenPeer
 struct GardenHealth {
     state: AtomicU8,
     consecutive_failures: AtomicU32,
@@ -76,28 +97,81 @@ impl GardenHealth {
         }
         failures
     }
+}
 
-    fn reset_failures(&self) {
-        self.consecutive_failures.store(0, Ordering::Relaxed);
+/// Boxed sink type for sending messages
+type BoxedSink = Pin<Box<dyn futures::Sink<Multipart, Error = tmq::TmqError> + Send>>;
+
+/// Boxed stream type for receiving messages
+type BoxedStream = Pin<Box<dyn Stream<Item = Result<Multipart, tmq::TmqError>> + Send>>;
+
+/// Split DEALER socket (tx + rx halves)
+struct SplitDealer {
+    tx: Mutex<BoxedSink>,
+    rx: Mutex<BoxedStream>,
+}
+
+/// Split SUB socket (rx only)
+struct SplitSubscriber {
+    rx: Mutex<BoxedStream>,
+}
+
+/// Helper to create split dealer
+fn split_dealer<S>(socket: S) -> SplitDealer
+where
+    S: futures::Stream<Item = Result<Multipart, tmq::TmqError>>
+        + futures::Sink<Multipart, Error = tmq::TmqError>
+        + Unpin
+        + Send
+        + 'static,
+{
+    let (tx, rx) = socket.split();
+    SplitDealer {
+        tx: Mutex::new(Box::pin(tx)),
+        rx: Mutex::new(Box::pin(rx)),
+    }
+}
+
+/// Helper to create split subscriber
+fn split_subscriber<S>(socket: S) -> SplitSubscriber
+where
+    S: futures::Stream<Item = Result<Multipart, tmq::TmqError>> + Unpin + Send + 'static,
+{
+    SplitSubscriber {
+        rx: Mutex::new(Box::pin(socket)),
     }
 }
 
 /// Client for connecting to chaosgarden's ZMQ endpoints
-pub struct GardenClient {
+pub struct GardenPeer {
     session: Uuid,
-    #[allow(dead_code)]
-    context: Context,
-    control: Arc<RwLock<Socket>>,
-    shell: Arc<RwLock<Socket>>,
-    iopub: Arc<RwLock<Socket>>,
-    heartbeat: Arc<RwLock<Socket>>,
-    query: Arc<RwLock<Socket>>,
+    control: Arc<SplitDealer>,
+    shell: Arc<SplitDealer>,
+    iopub: Arc<SplitSubscriber>,
+    heartbeat: Arc<SplitDealer>,
+    query: Arc<SplitDealer>,
     config: LazyPirateConfig,
     health: Arc<GardenHealth>,
+    #[allow(dead_code)]
     keepalive_handle: Option<JoinHandle<()>>,
 }
 
-impl GardenClient {
+impl GardenPeer {
+    /// Create client from HootConfig (the recommended way).
+    pub async fn from_config(config: &HootConfig) -> Result<Self> {
+        let endpoints = GardenEndpoints::from_config(config)?;
+        Self::connect(&endpoints).await
+    }
+
+    /// Create client from HootConfig with custom Lazy Pirate settings.
+    pub async fn from_config_with_options(
+        config: &HootConfig,
+        lazy_config: LazyPirateConfig,
+    ) -> Result<Self> {
+        let endpoints = GardenEndpoints::from_config(config)?;
+        Self::connect_with_config(&endpoints, lazy_config).await
+    }
+
     /// Connect to chaosgarden at the given endpoints with default config
     pub async fn connect(endpoints: &GardenEndpoints) -> Result<Self> {
         Self::connect_with_config(endpoints, LazyPirateConfig::default()).await
@@ -112,100 +186,37 @@ impl GardenClient {
 
         debug!("Creating sockets for chaosgarden session {}", session);
 
-        let context = Context::new().with_context(|| "Failed to create ZMQ context")?;
+        let context = ZmqContext::new();
 
-        // Helper to set common socket options
-        // Includes RECONNECT_IVL_MAX cap (workaround for rzmq unbounded backoff)
-        async fn set_socket_opts(socket: &Socket, name: &str) {
-            if let Err(e) = socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await {
-                warn!("{}: Failed to set LINGER: {}", name, e);
-            }
-            if let Err(e) = socket
-                .set_option_raw(RECONNECT_IVL, &1000i32.to_ne_bytes())
-                .await
-            {
-                warn!("{}: Failed to set RECONNECT_IVL: {}", name, e);
-            }
-            // Cap reconnect backoff at 60s (workaround for rzmq unbounded backoff)
-            // See: docs/issues/rzmq-backoff-cap.md
-            if let Err(e) = socket
-                .set_option_raw(RECONNECT_IVL_MAX, &60000i32.to_ne_bytes())
-                .await
-            {
-                warn!("{}: Failed to set RECONNECT_IVL_MAX: {}", name, e);
-            }
-        }
+        // Create and connect all sockets, then split them
+        let control = create_dealer_and_connect(
+            &context,
+            &endpoints.control,
+            b"garden-control",
+            "control",
+        )?;
 
-        // Create and connect all sockets
-        let control = context
-            .socket(SocketType::Dealer)
-            .with_context(|| "Failed to create control socket")?;
-        set_socket_opts(&control, "control").await;
-        if let Err(e) = control
-            .set_option_raw(ROUTING_ID, b"garden-control")
-            .await
-        {
-            warn!("control: Failed to set ROUTING_ID: {}", e);
-        }
-        control.connect(&endpoints.control).await.with_context(|| {
-            format!("Failed to connect control socket to {}", endpoints.control)
-        })?;
+        let shell =
+            create_dealer_and_connect(&context, &endpoints.shell, b"garden-shell", "shell")?;
 
-        let shell = context
-            .socket(SocketType::Dealer)
-            .with_context(|| "Failed to create shell socket")?;
-        set_socket_opts(&shell, "shell").await;
-        if let Err(e) = shell.set_option_raw(ROUTING_ID, b"garden-shell").await {
-            warn!("shell: Failed to set ROUTING_ID: {}", e);
-        }
-        shell
-            .connect(&endpoints.shell)
-            .await
-            .with_context(|| format!("Failed to connect shell socket to {}", endpoints.shell))?;
+        let iopub = create_subscriber_and_connect(&context, &endpoints.iopub, "iopub")?;
 
-        let iopub = context
-            .socket(SocketType::Sub)
-            .with_context(|| "Failed to create iopub socket")?;
-        set_socket_opts(&iopub, "iopub").await;
-        // Subscribe to all messages
-        if let Err(e) = iopub.set_option_raw(SUBSCRIBE, b"").await {
-            warn!("iopub: Failed to subscribe: {}", e);
-        }
-        iopub
-            .connect(&endpoints.iopub)
-            .await
-            .with_context(|| format!("Failed to connect iopub socket to {}", endpoints.iopub))?;
+        let heartbeat = create_dealer_and_connect(
+            &context,
+            &endpoints.heartbeat,
+            b"garden-heartbeat",
+            "heartbeat",
+        )?;
 
-        let heartbeat = context
-            .socket(SocketType::Req)
-            .with_context(|| "Failed to create heartbeat socket")?;
-        set_socket_opts(&heartbeat, "heartbeat").await;
-        heartbeat
-            .connect(&endpoints.heartbeat)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to connect heartbeat socket to {}",
-                    endpoints.heartbeat
-                )
-            })?;
-
-        let query = context
-            .socket(SocketType::Req)
-            .with_context(|| "Failed to create query socket")?;
-        set_socket_opts(&query, "query").await;
-        query
-            .connect(&endpoints.query)
-            .await
-            .with_context(|| format!("Failed to connect query socket to {}", endpoints.query))?;
+        let query =
+            create_dealer_and_connect(&context, &endpoints.query, b"garden-query", "query")?;
 
         info!("Connected to chaosgarden, session={}", session);
 
         let health = Arc::new(GardenHealth::new());
-        let heartbeat = Arc::new(RwLock::new(heartbeat));
+        let heartbeat = Arc::new(split_dealer(heartbeat));
 
-        // Spawn keepalive task to prevent 300s idle timeout on REQ sockets
-        // See: docs/issues/rzmq-req-idle-timeout.md
+        // Spawn keepalive task
         let keepalive_handle = Self::spawn_keepalive_task(
             Arc::clone(&heartbeat),
             Arc::clone(&health),
@@ -215,25 +226,20 @@ impl GardenClient {
 
         Ok(Self {
             session,
-            context,
-            control: Arc::new(RwLock::new(control)),
-            shell: Arc::new(RwLock::new(shell)),
-            iopub: Arc::new(RwLock::new(iopub)),
+            control: Arc::new(split_dealer(control)),
+            shell: Arc::new(split_dealer(shell)),
+            iopub: Arc::new(split_subscriber(iopub)),
             heartbeat,
-            query: Arc::new(RwLock::new(query)),
+            query: Arc::new(split_dealer(query)),
             config,
             health,
             keepalive_handle: Some(keepalive_handle),
         })
     }
 
-    /// Spawn keepalive task to prevent rzmq's 300s idle timeout on REQ sockets.
-    ///
-    /// This is a workaround for rzmq issue where REQ sockets timeout after
-    /// 300 seconds of idle time because SessionConnectionActorX unconditionally
-    /// reads in Operational phase.
+    /// Spawn keepalive task
     fn spawn_keepalive_task(
-        heartbeat: Arc<RwLock<Socket>>,
+        heartbeat: Arc<SplitDealer>,
         health: Arc<GardenHealth>,
         interval: Duration,
         max_failures: u32,
@@ -242,12 +248,14 @@ impl GardenClient {
             let mut ticker = tokio::time::interval(interval);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-            debug!("GardenClient keepalive task started (interval: {:?})", interval);
+            debug!(
+                "GardenPeer keepalive task started (interval: {:?})",
+                interval
+            );
 
             loop {
                 ticker.tick().await;
 
-                // Send a heartbeat to keep the REQ socket alive
                 let ping_result = Self::ping_internal(&heartbeat, Duration::from_secs(5)).await;
 
                 match ping_result {
@@ -266,28 +274,32 @@ impl GardenClient {
         })
     }
 
-    /// Internal ping for keepalive (doesn't record health - caller does that)
-    async fn ping_internal(heartbeat: &Arc<RwLock<Socket>>, timeout: Duration) -> Result<bool> {
+    /// Internal ping for keepalive
+    async fn ping_internal(heartbeat: &Arc<SplitDealer>, timeout: Duration) -> Result<bool> {
         let frame = HootFrame::heartbeat("chaosgarden");
         let frames = frame.to_frames();
-        let msgs = frames_to_msgs(&frames);
+        let multipart: Multipart = frames.iter().map(|f| f.to_vec()).collect::<Vec<_>>().into();
 
-        let socket = heartbeat.write().await;
+        // Send
+        {
+            let mut tx = heartbeat.tx.lock().await;
+            tokio::time::timeout(timeout, tx.send(multipart))
+                .await
+                .context("Heartbeat send timeout")??;
+        }
 
-        // Send heartbeat
-        tokio::time::timeout(timeout, socket.send_multipart(msgs))
-            .await
-            .context("Heartbeat send timeout")??;
+        // Receive
+        let response = {
+            let mut rx = heartbeat.rx.lock().await;
+            tokio::time::timeout(timeout, rx.next())
+                .await
+                .context("Heartbeat receive timeout")?
+                .ok_or_else(|| anyhow::anyhow!("Socket stream ended"))??
+        };
 
-        // Wait for response
-        let response = tokio::time::timeout(timeout, socket.recv_multipart())
-            .await
-            .context("Heartbeat receive timeout")??;
-
-        // Check for HOOT01 heartbeat reply
         let response_frames: Vec<Bytes> = response
-            .iter()
-            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+            .into_iter()
+            .map(|m| Bytes::from(m.to_vec()))
             .collect();
 
         if response_frames
@@ -349,26 +361,30 @@ impl GardenClient {
         };
 
         let frames = frame.to_frames();
-        let msgs = frames_to_msgs(&frames);
+        let multipart: Multipart = frames.iter().map(|f| f.to_vec()).collect::<Vec<_>>().into();
 
         debug!("Sending shell request ({})", request_id);
 
-        let socket = self.shell.write().await;
-
         // Send
-        tokio::time::timeout(self.config.timeout, socket.send_multipart(msgs))
-            .await
-            .context("Shell request send timeout")??;
+        {
+            let mut tx = self.shell.tx.lock().await;
+            tokio::time::timeout(self.config.timeout, tx.send(multipart))
+                .await
+                .context("Shell request send timeout")??;
+        }
 
         // Receive
-        let response = tokio::time::timeout(self.config.timeout, socket.recv_multipart())
-            .await
-            .context("Shell response receive timeout")??;
+        let response = {
+            let mut rx = self.shell.rx.lock().await;
+            tokio::time::timeout(self.config.timeout, rx.next())
+                .await
+                .context("Shell response receive timeout")?
+                .ok_or_else(|| anyhow::anyhow!("Socket stream ended"))??
+        };
 
-        // Parse response
         let response_frames: Vec<Bytes> = response
             .into_iter()
-            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+            .map(|m| Bytes::from(m.to_vec()))
             .collect();
 
         let response_frame =
@@ -405,26 +421,30 @@ impl GardenClient {
         };
 
         let frames = frame.to_frames();
-        let msgs = frames_to_msgs(&frames);
+        let multipart: Multipart = frames.iter().map(|f| f.to_vec()).collect::<Vec<_>>().into();
 
         debug!("Sending control request ({})", request_id);
 
-        let socket = self.control.write().await;
-
         // Send
-        tokio::time::timeout(self.config.timeout, socket.send_multipart(msgs))
-            .await
-            .context("Control request send timeout")??;
+        {
+            let mut tx = self.control.tx.lock().await;
+            tokio::time::timeout(self.config.timeout, tx.send(multipart))
+                .await
+                .context("Control request send timeout")??;
+        }
 
         // Receive
-        let response = tokio::time::timeout(self.config.timeout, socket.recv_multipart())
-            .await
-            .context("Control response receive timeout")??;
+        let response = {
+            let mut rx = self.control.rx.lock().await;
+            tokio::time::timeout(self.config.timeout, rx.next())
+                .await
+                .context("Control response receive timeout")?
+                .ok_or_else(|| anyhow::anyhow!("Socket stream ended"))??
+        };
 
-        // Parse response
         let response_frames: Vec<Bytes> = response
             .into_iter()
-            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+            .map(|m| Bytes::from(m.to_vec()))
             .collect();
 
         let response_frame =
@@ -445,10 +465,6 @@ impl GardenClient {
     }
 
     /// Execute a Trustfall query with Lazy Pirate retry logic.
-    ///
-    /// The query socket uses REQ pattern, which needs retries because:
-    /// 1. REQ sockets can timeout on idle (rzmq issue)
-    /// 2. Chaosgarden serializes requests, so we retry on timeout
     pub async fn query(
         &self,
         query_str: &str,
@@ -482,68 +498,106 @@ impl GardenClient {
         }
     }
 
-    /// Single query attempt (used by retry loop)
     async fn query_single_attempt(
         &self,
         query_str: &str,
         variables: &HashMap<String, serde_json::Value>,
     ) -> Result<QueryReply> {
-        let req = QueryRequest {
+        let request_id = Uuid::new_v4();
+
+        let payload = Payload::ToolRequest(ToolRequest::GardenQuery(GardenQueryRequest {
             query: query_str.to_string(),
-            variables: variables.clone(),
-        };
+            variables: Some(serde_json::Value::Object(
+                variables
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            )),
+        }));
 
-        let msg = Message::new(self.session, "query_request", req);
-        let msg_json = serde_json::to_vec(&msg).context("Failed to serialize query request")?;
-
-        let request_id = msg.header.msg_id;
+        let message = payload_to_capnp_envelope(request_id, &payload)
+            .context("Failed to encode query payload")?;
+        let body_bytes = capnp::serialize::write_message_to_words(&message);
 
         let frame = HootFrame {
             command: Command::Request,
-            content_type: ContentType::Json,
+            content_type: ContentType::CapnProto,
             request_id,
             service: "chaosgarden".to_string(),
             traceparent: None,
-            body: Bytes::from(msg_json),
+            body: Bytes::from(body_bytes),
         };
 
         let frames = frame.to_frames();
-        let msgs = frames_to_msgs(&frames);
+        let multipart: Multipart = frames.iter().map(|f| f.to_vec()).collect::<Vec<_>>().into();
 
         debug!("Sending query ({}) attempt", request_id);
 
-        let socket = self.query.write().await;
-
         // Send
-        tokio::time::timeout(self.config.timeout, socket.send_multipart(msgs))
-            .await
-            .context("Query send timeout")??;
+        {
+            let mut tx = self.query.tx.lock().await;
+            tokio::time::timeout(self.config.timeout, tx.send(multipart))
+                .await
+                .context("Query send timeout")??;
+        }
 
         // Receive
-        let response = tokio::time::timeout(self.config.timeout, socket.recv_multipart())
-            .await
-            .context("Query response timeout")??;
+        let response = {
+            let mut rx = self.query.rx.lock().await;
+            tokio::time::timeout(self.config.timeout, rx.next())
+                .await
+                .context("Query response timeout")?
+                .ok_or_else(|| anyhow::anyhow!("Socket stream ended"))??
+        };
 
-        // Parse response
         let response_frames: Vec<Bytes> = response
             .into_iter()
-            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+            .map(|m| Bytes::from(m.to_vec()))
             .collect();
 
         let response_frame =
             HootFrame::from_frames(&response_frames).context("Failed to parse response frame")?;
 
-        if response_frame.content_type != ContentType::Json {
+        if response_frame.content_type != ContentType::CapnProto {
             anyhow::bail!(
-                "Expected JSON response, got {:?}",
+                "Expected CapnProto response, got {:?}",
                 response_frame.content_type
             );
         }
 
-        let response_msg: Message<QueryReply> = serde_json::from_slice(&response_frame.body)
-            .context("Failed to deserialize query reply")?;
+        let reader = response_frame
+            .read_capnp()
+            .context("Failed to read Cap'n Proto message")?;
+        let envelope_reader = reader
+            .get_root::<envelope_capnp::envelope::Reader>()
+            .context("Failed to get envelope root")?;
+        let response_payload =
+            capnp_envelope_to_payload(envelope_reader).context("Failed to parse response payload")?;
 
-        Ok(response_msg.content)
+        match response_payload {
+            Payload::TypedResponse(envelope) => match envelope {
+                crate::ResponseEnvelope::Success { response } => match response {
+                    ToolResponse::GardenQueryResult(result) => Ok(QueryReply::Results {
+                        rows: result.results,
+                    }),
+                    other => anyhow::bail!("Unexpected response type: {:?}", other),
+                },
+                crate::ResponseEnvelope::Error(err) => Ok(QueryReply::Error {
+                    error: err.message(),
+                }),
+                other => anyhow::bail!("Unexpected envelope type: {:?}", other),
+            },
+            Payload::Error {
+                message, details, ..
+            } => Ok(QueryReply::Error {
+                error: if let Some(d) = details {
+                    format!("{}: {}", message, d)
+                } else {
+                    message
+                },
+            }),
+            other => anyhow::bail!("Unexpected payload type: {:?}", other),
+        }
     }
 
     /// Ping the daemon via heartbeat
@@ -571,18 +625,17 @@ impl GardenClient {
         Box::pin(async_stream::stream! {
             loop {
                 let msg = {
-                    let socket = iopub.write().await;
-                    socket.recv_multipart().await
+                    let mut rx = iopub.rx.lock().await;
+                    rx.next().await
                 };
 
                 match msg {
-                    Ok(zmq_msgs) => {
-                        let frames: Vec<Bytes> = zmq_msgs
+                    Some(Ok(multipart)) => {
+                        let frames: Vec<Bytes> = multipart
                             .into_iter()
-                            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+                            .map(|m| Bytes::from(m.to_vec()))
                             .collect();
 
-                        // Skip subscription filter frame if present
                         let frame_result = if frames.len() > 1 && frames[0].is_empty() {
                             HootFrame::from_frames(&frames[1..])
                         } else {
@@ -606,8 +659,12 @@ impl GardenClient {
                             }
                         }
                     }
-                    Err(e) => {
+                    Some(Err(e)) => {
                         error!("IOPub socket error: {}", e);
+                        break;
+                    }
+                    None => {
+                        error!("IOPub socket stream ended");
                         break;
                     }
                 }
@@ -616,7 +673,8 @@ impl GardenClient {
     }
 }
 
-/// Convert Vec<Bytes> to Vec<Msg> for rzmq multipart
-fn frames_to_msgs(frames: &[Bytes]) -> Vec<Msg> {
-    frames.iter().map(|f| Msg::from_vec(f.to_vec())).collect()
-}
+/// Default heartbeat interval
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
+
+/// Default heartbeat timeout (miss 3 beats = dead)
+pub const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(10);

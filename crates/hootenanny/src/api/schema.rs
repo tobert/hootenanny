@@ -288,11 +288,13 @@ pub struct GraphQueryRequest {
     pub limit: Option<usize>,
 }
 
-/// Schema function for JSON objects (allows null for optional parameters)
+/// Schema function for JSON objects
+/// Note: Uses simple "object" type for llama.cpp compatibility.
+/// The field uses #[serde(default)] so omitting works, and the handler
+/// treats Value::Null as empty in json_to_variables().
 fn json_object_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
     serde_json::from_value(serde_json::json!({
-        "type": ["object", "null"],
-        "default": null
+        "type": "object"
     }))
     .unwrap()
 }

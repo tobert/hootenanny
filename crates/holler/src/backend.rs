@@ -3,20 +3,26 @@
 //! Uses hooteproto's HootClient for lazy connection, reconnection, and request correlation.
 
 use anyhow::Result;
-use hooteproto::{ClientConfig, HootClient, Payload};
+use hooteproto::{ClientConfig, ConnectionState, HootClient, Payload};
 use std::sync::Arc;
+use tracing::info;
 
 /// Pool of backend connections
 ///
 /// Simplified to only connect to hootenanny, which proxies to vibeweaver and chaosgarden.
 pub struct BackendPool {
     pub hootenanny: Option<Arc<HootClient>>,
+    /// Stored config for client recreation after Dead state
+    hootenanny_config: Option<ClientConfig>,
 }
 
 impl BackendPool {
     /// Create a new empty pool
     pub fn new() -> Self {
-        Self { hootenanny: None }
+        Self {
+            hootenanny: None,
+            hootenanny_config: None,
+        }
     }
 
     /// Set up Hootenanny backend.
@@ -25,8 +31,48 @@ impl BackendPool {
     /// The server can start immediately without waiting for the backend.
     pub async fn setup_hootenanny(&mut self, endpoint: &str, timeout_ms: u64) {
         let config = ClientConfig::new("hootenanny", endpoint).with_timeout(timeout_ms);
+        self.hootenanny_config = Some(config.clone()); // Store for recreation
         let client = HootClient::new(config).await;
         self.hootenanny = Some(client);
+    }
+
+    /// Check if hootenanny client is dead and needs recreation.
+    ///
+    /// This returns true when the client has exhausted retries and is marked Dead.
+    /// The client should be recreated to get a fresh socket and clear pending state.
+    pub fn needs_recreation(&self) -> bool {
+        self.hootenanny
+            .as_ref()
+            .map(|c| c.health.get_state() == ConnectionState::Dead)
+            .unwrap_or(false)
+    }
+
+    /// Recreate the hootenanny client after sustained failures.
+    ///
+    /// This should be called when `needs_recreation()` returns true.
+    /// Creates a fresh client with the stored config.
+    pub async fn recreate_hootenanny(&mut self) -> Result<()> {
+        let config = self
+            .hootenanny_config
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("No config stored for recreation"))?;
+
+        // Take the old client (if any) to ensure it's dropped
+        if let Some(old_client) = self.hootenanny.take() {
+            info!(
+                "Dropping old hootenanny client (failures={})",
+                old_client.health.get_failures()
+            );
+            // Arc will be dropped, triggering reactor shutdown
+            drop(old_client);
+        }
+
+        // Create new client with fresh socket
+        info!("Recreating hootenanny client for {}", config.endpoint);
+        let client = HootClient::new(config).await;
+        self.hootenanny = Some(client);
+
+        Ok(())
     }
 
     /// Route all tool calls to hootenanny

@@ -8,18 +8,9 @@
 //! This module provides a common abstraction that can be implemented by
 //! different socket types (DEALER for HootClient, REQ for GardenClient).
 //!
-//! ## Workarounds for rzmq Issues
-//!
-//! This abstraction includes workarounds for two rzmq issues:
-//!
-//! 1. **REQ idle timeout**: rzmq's SessionConnectionActorX unconditionally reads
-//!    in Operational phase, causing REQ sockets to timeout after 300s even when
-//!    idle. Workaround: periodic keepalives.
-//!    See: docs/issues/rzmq-req-idle-timeout.md
-//!
-//! 2. **Unbounded backoff**: Reconnection backoff can grow to 8192s (2.3 hours).
-//!    Workaround: set RECONNECT_IVL_MAX explicitly.
-//!    See: docs/issues/rzmq-backoff-cap.md
+//! We use tmq (libzmq wrapper) which handles these concerns correctly:
+//! - RECONNECT_IVL_MAX can be set to cap backoff
+//! - libzmq doesn't have the idle timeout issues that affect pure-Rust implementations
 
 use std::time::Duration;
 
@@ -44,7 +35,7 @@ pub struct LazyPirateConfig {
     pub backoff_max: Duration,
     /// Consecutive failures before marking peer as dead
     pub max_failures: u32,
-    /// Interval for keepalive heartbeats (workaround for rzmq 300s idle timeout)
+    /// Interval for keepalive heartbeats (useful for detecting stale connections)
     pub keepalive_interval: Duration,
 }
 

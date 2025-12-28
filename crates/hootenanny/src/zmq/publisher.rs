@@ -4,9 +4,9 @@
 //! Messages are serialized using Cap'n Proto for cross-language compatibility.
 
 use anyhow::{Context as AnyhowContext, Result};
-use hooteproto::socket_config::create_and_bind;
+use futures::SinkExt;
+use hooteproto::socket_config::{create_publisher_and_bind, ZmqContext, Multipart};
 use hooteproto::{broadcast_capnp, Broadcast};
-use rzmq::{Context, Msg, SocketType};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -113,11 +113,9 @@ impl PublisherServer {
 
     /// Run the publisher until the channel closes
     pub async fn run(mut self) -> Result<()> {
-        let context = Context::new()
-            .with_context(|| "Failed to create ZMQ context")?;
+        let context = ZmqContext::new();
 
-        let socket =
-            create_and_bind(&context, SocketType::Pub, &self.bind_address, "publisher").await?;
+        let mut socket = create_publisher_and_bind(&context, &self.bind_address, "publisher")?;
 
         info!("Hootenanny PUB socket listening on {}", self.bind_address);
 
@@ -132,14 +130,14 @@ impl PublisherServer {
                 }
             }
 
-            // Write to bytes
+            // Write to bytes and convert to Multipart
             let bytes = capnp::serialize::write_message_to_words(&message);
             debug!(
                 "Publishing broadcast: {:?}",
                 broadcast_variant_name(&broadcast)
             );
-            let msg = Msg::from_vec(bytes);
-            if let Err(e) = socket.send(msg).await {
+            let multipart: Multipart = vec![bytes].into();
+            if let Err(e) = socket.send(multipart).await {
                 warn!("Failed to publish broadcast: {}", e);
             }
         }

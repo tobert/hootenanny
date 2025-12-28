@@ -17,16 +17,16 @@
 
 use anyhow::{Context as AnyhowContext, Result};
 use bytes::Bytes;
+use futures::{SinkExt, StreamExt};
 use hooteproto::{
     capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope, Command, ContentType,
     HootFrame, Payload, PROTOCOL_VERSION,
 };
-use hooteproto::request::ToolRequest;
-use hooteproto::socket_config::create_router_and_bind;
-use rzmq::{Context, Msg, MsgFlags, Socket};
+use hooteproto::socket_config::{create_router_and_bind, ZmqContext, Multipart};
+use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
@@ -36,24 +36,23 @@ use crate::artifact_store;
 use crate::cas::FileStore;
 use crate::telemetry;
 use crate::zmq::client_tracker::ClientTracker;
-use crate::zmq::VibeweaverClient;
+
+/// Boxed sink type for sending messages
+type BoxedSink = Pin<Box<dyn futures::Sink<Multipart, Error = tmq::TmqError> + Send>>;
 
 /// ZMQ server for hooteproto messages
 ///
-/// Can operate in two modes:
-/// 1. Standalone - with direct CAS/artifact access (legacy, for basic operations)
-/// 2. Full - with EventDualityServer for full tool dispatch
-///
+/// Pure ZMQ transport layer - all tool dispatch goes through TypedDispatcher.
 /// Tracks connected clients for bidirectional heartbeating.
 pub struct HooteprotoServer {
     bind_address: String,
+    #[allow(dead_code)]
     cas: Arc<FileStore>,
+    #[allow(dead_code)]
     artifacts: Arc<RwLock<artifact_store::FileStore>>,
     start_time: Instant,
-    /// Optional EventDualityServer for full tool dispatch
+    /// EventDualityServer for full tool dispatch (includes vibeweaver proxy)
     event_server: Option<Arc<EventDualityServer>>,
-    /// Optional vibeweaver client for Python kernel proxy
-    vibeweaver: Option<Arc<VibeweaverClient>>,
     /// Connected client tracker for bidirectional heartbeats
     client_tracker: Arc<ClientTracker>,
 }
@@ -71,7 +70,6 @@ impl HooteprotoServer {
             artifacts,
             start_time: Instant::now(),
             event_server: None,
-            vibeweaver: None,
             client_tracker: Arc::new(ClientTracker::new()),
         }
     }
@@ -89,15 +87,8 @@ impl HooteprotoServer {
             artifacts,
             start_time: Instant::now(),
             event_server: Some(event_server),
-            vibeweaver: None,
             client_tracker: Arc::new(ClientTracker::new()),
         }
-    }
-
-    /// Add vibeweaver client for Python kernel proxy
-    pub fn with_vibeweaver(mut self, vibeweaver: Option<Arc<VibeweaverClient>>) -> Self {
-        self.vibeweaver = vibeweaver;
-        self
     }
 
     /// Get the client tracker for monitoring connected clients
@@ -110,16 +101,18 @@ impl HooteprotoServer {
     /// Uses concurrent request handling to avoid deadlocks when proxied services
     /// (like vibeweaver) call back to hootenanny during request processing.
     pub async fn run(self, mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
-        let context = Context::new()
-            .with_context(|| "Failed to create ZMQ context")?;
+        let context = ZmqContext::new();
 
-        let socket =
-            create_router_and_bind(&context, &self.bind_address, "hooteproto-server").await?;
+        let socket = create_router_and_bind(&context, &self.bind_address, "hooteproto-server")?;
 
         info!("Hootenanny ZMQ server listening on {}", self.bind_address);
 
+        // Split socket into tx/rx halves
+        let (tx, mut rx) = socket.split();
+        let socket_tx: Arc<Mutex<BoxedSink>> = Arc::new(Mutex::new(Box::pin(tx)));
+
         // Channel for sending responses back to the main loop for transmission
-        let (response_tx, mut response_rx) = mpsc::channel::<Vec<Msg>>(256);
+        let (response_tx, mut response_rx) = mpsc::channel::<Multipart>(256);
 
         // Wrap self in Arc for sharing across spawned tasks
         let server = Arc::new(self);
@@ -130,14 +123,11 @@ impl HooteprotoServer {
         loop {
             tokio::select! {
                 // Receive incoming messages
-                result = socket.recv_multipart() => {
+                result = rx.next() => {
                     match result {
-                        Ok(msgs) => {
-                            debug!("📥 Received multipart: {} frames", msgs.len());
-                            let frames: Vec<Bytes> = msgs
-                                .iter()
-                                .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
-                                .collect();
+                        Some(Ok(mp)) => {
+                            debug!("📥 Received multipart: {} frames", mp.len());
+                            let frames = multipart_to_frames(mp);
 
                             // Check for HOOT01 protocol
                             if !frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
@@ -156,18 +146,25 @@ impl HooteprotoServer {
                                     match frame.command {
                                         Command::Heartbeat => {
                                             // Handle heartbeats synchronously (fast path)
-                                            debug!("💓 Heartbeat received from {}", frame.service);
+                                            // Echo the request_id so client can correlate response
+                                            debug!("💓 Heartbeat received from {} (id={})", frame.service, frame.request_id);
                                             if let Some(client_id) = identity.first() {
                                                 server.client_tracker.record_activity(client_id).await;
                                             }
-                                            let response = HootFrame::heartbeat("hootenanny");
+                                            let response = HootFrame {
+                                                command: Command::Heartbeat,
+                                                content_type: ContentType::Empty,
+                                                request_id: frame.request_id, // Echo client's ID
+                                                service: "hootenanny".to_string(),
+                                                traceparent: None,
+                                                body: Bytes::new(),
+                                            };
                                             let reply_frames = response.to_frames_with_identity(&identity);
-                                            let reply = frames_to_msgs(&reply_frames);
-                                            // Use individual send() - rzmq ROUTER send_multipart has a bug
-                                            if let Err(e) = send_multipart_individually(&socket, reply).await {
+                                            let reply = frames_to_multipart(&reply_frames);
+                                            if let Err(e) = socket_tx.lock().await.send(reply).await {
                                                 error!("Failed to send heartbeat response: {}", e);
                                             }
-                                            debug!("💓 Heartbeat response sent to {}", frame.service);
+                                            debug!("💓 Heartbeat response sent to {} (id={})", frame.service, frame.request_id);
                                         }
                                         Command::Request => {
                                             // Spawn async task for request handling (allows concurrency)
@@ -208,16 +205,19 @@ impl HooteprotoServer {
                                 }
                             }
                         }
-                        Err(e) => {
+                        Some(Err(e)) => {
                             error!("Error receiving message: {}", e);
+                        }
+                        None => {
+                            warn!("Socket stream ended");
+                            break;
                         }
                     }
                 }
 
                 // Send queued responses
                 Some(reply) = response_rx.recv() => {
-                    // Use individual send() - rzmq ROUTER send_multipart has a bug
-                    if let Err(e) = send_multipart_individually(&socket, reply).await {
+                    if let Err(e) = socket_tx.lock().await.send(reply).await {
                         error!("Failed to send response: {}", e);
                     }
                 }
@@ -241,8 +241,8 @@ impl HooteprotoServer {
         Ok(())
     }
 
-    /// Handle a request and return the ZMQ message to send as response
-    async fn handle_request(&self, identity: Vec<Bytes>, frame: HootFrame) -> Vec<Msg> {
+    /// Handle a request and return the multipart message to send as response
+    async fn handle_request(&self, identity: Vec<Bytes>, frame: HootFrame) -> Multipart {
         // Create span with traceparent
         let span = tracing::info_span!(
             "hoot_request",
@@ -285,7 +285,7 @@ impl HooteprotoServer {
         };
 
         let reply_frames = response_frame.to_frames_with_identity(&identity);
-        frames_to_msgs(&reply_frames)
+        frames_to_multipart(&reply_frames)
     }
 
     /// Dispatch a request and return the response payload
@@ -334,20 +334,7 @@ impl HooteprotoServer {
             };
         }
 
-        // Route weave_* payloads to vibeweaver if connected
-        if self.should_route_to_vibeweaver(&payload) {
-            if let Some(ref vibeweaver) = self.vibeweaver {
-                return self.dispatch_via_vibeweaver(vibeweaver, payload).await;
-            } else {
-                return Payload::Error {
-                    code: "vibeweaver_not_connected".to_string(),
-                    message: "Python kernel requires vibeweaver connection. Configure bootstrap.connections.vibeweaver in config.".to_string(),
-                    details: None,
-                };
-            }
-        }
-
-        // Route everything else through TypedDispatcher
+        // Route everything through TypedDispatcher (includes vibeweaver proxy)
         if let Some(ref server) = self.event_server {
             return self.dispatch_via_server(server, payload).await;
         }
@@ -401,43 +388,6 @@ impl HooteprotoServer {
         }
     }
 
-    /// Check if a payload should be routed to vibeweaver
-    fn should_route_to_vibeweaver(&self, payload: &Payload) -> bool {
-        // Typed weave payloads go to vibeweaver for Python kernel execution
-        if let Payload::ToolRequest(tr) = payload {
-            matches!(
-                tr,
-                ToolRequest::WeaveEval(_)
-                    | ToolRequest::WeaveSession
-                    | ToolRequest::WeaveReset(_)
-                    | ToolRequest::WeaveHelp(_)
-            )
-        } else {
-            false
-        }
-    }
-
-    /// Dispatch a payload to vibeweaver via ZMQ proxy
-    async fn dispatch_via_vibeweaver(
-        &self,
-        vibeweaver: &VibeweaverClient,
-        payload: Payload,
-    ) -> Payload {
-        debug!("Proxying to vibeweaver: {}", payload_type_name(&payload));
-
-        match vibeweaver.request(payload).await {
-            Ok(response) => response,
-            Err(e) => {
-                warn!("Vibeweaver proxy error: {}", e);
-                Payload::Error {
-                    code: "vibeweaver_proxy_error".to_string(),
-                    message: e.to_string(),
-                    details: None,
-                }
-            }
-        }
-    }
-
 }
 
 /// Get a human-readable name for a payload type (for span naming)
@@ -464,38 +414,17 @@ fn payload_type_name(payload: &Payload) -> &'static str {
     }
 }
 
-/// Convert a Vec<Bytes> to Vec<Msg> for rzmq multipart
-fn frames_to_msgs(frames: &[Bytes]) -> Vec<Msg> {
-    frames.iter().map(|f| Msg::from_vec(f.to_vec())).collect()
+/// Convert tmq Multipart to Vec<Bytes> for frame processing
+fn multipart_to_frames(mp: Multipart) -> Vec<Bytes> {
+    mp.into_iter()
+        .map(|msg| Bytes::from(msg.to_vec()))
+        .collect()
 }
 
-/// Send a multipart message using individual send() calls with MORE flags.
-///
-/// rzmq's ROUTER socket has a bug in send_multipart that drops frames.
-/// This workaround sends each frame individually with the MORE flag set
-/// for all but the last frame.
-async fn send_multipart_individually(socket: &Socket, msgs: Vec<Msg>) -> Result<()> {
-    let last_idx = msgs.len().saturating_sub(1);
-    let total_frames = msgs.len();
-    for (i, mut msg) in msgs.into_iter().enumerate() {
-        if i < last_idx {
-            msg.set_flags(MsgFlags::MORE);
-        }
-        if let Err(e) = socket.send(msg).await {
-            // Log the actual error from rzmq for debugging
-            tracing::debug!(
-                frame = i,
-                total = total_frames,
-                error = %e,
-                "ROUTER send failed"
-            );
-            return Err(anyhow::anyhow!(
-                "Failed to send frame {} of {} multipart: {}",
-                i,
-                total_frames,
-                e
-            ));
-        }
-    }
-    Ok(())
+/// Convert Vec<Bytes> frames to tmq Multipart
+fn frames_to_multipart(frames: &[Bytes]) -> Multipart {
+    frames.iter()
+        .map(|f| f.to_vec())
+        .collect::<Vec<_>>()
+        .into()
 }

@@ -38,8 +38,10 @@ pub fn new_tool_cache() -> ToolCache {
 /// Refresh tools from hootenanny into the shared cache.
 ///
 /// Called on startup and when backend recovers from Dead → Ready.
-pub async fn refresh_tools_into(cache: &ToolCache, backends: &BackendPool) -> usize {
-    let tools = collect_tools_async(backends).await;
+pub async fn refresh_tools_into(cache: &ToolCache, backends: &Arc<RwLock<BackendPool>>) -> usize {
+    let backends_guard = backends.read().await;
+    let tools = collect_tools_async(&backends_guard).await;
+    drop(backends_guard); // Release lock before writing to cache
     let count = tools.len();
 
     if count > 0 {
@@ -56,14 +58,14 @@ pub async fn refresh_tools_into(cache: &ToolCache, backends: &BackendPool) -> us
 /// when backends recover from failure (Dead → Ready transition).
 #[derive(Clone)]
 pub struct ZmqHandler {
-    backends: Arc<BackendPool>,
+    backends: Arc<RwLock<BackendPool>>,
     /// Cached tool list - shared across handler instances
     cached_tools: ToolCache,
 }
 
 impl ZmqHandler {
     /// Create a new handler with the given backend pool and a new cache.
-    pub fn new(backends: Arc<BackendPool>) -> Self {
+    pub fn new(backends: Arc<RwLock<BackendPool>>) -> Self {
         Self {
             backends,
             cached_tools: new_tool_cache(),
@@ -74,7 +76,7 @@ impl ZmqHandler {
     ///
     /// Use this when you need multiple handlers to share the same tool list
     /// (e.g., for recovery callbacks to update tools visible to MCP clients).
-    pub fn with_shared_cache(backends: Arc<BackendPool>, cache: ToolCache) -> Self {
+    pub fn with_shared_cache(backends: Arc<RwLock<BackendPool>>, cache: ToolCache) -> Self {
         Self {
             backends,
             cached_tools: cache,
@@ -134,13 +136,16 @@ impl ServerHandler for ZmqHandler {
 
             info!(tool = %name, "Tool call via ZMQ");
 
-            let backend = match self.backends.route_tool(name) {
-                Some(b) => b,
-                None => {
-                    return Err(McpError::invalid_params(
-                        format!("No backend available for tool: {}", name),
-                        None,
-                    ));
+            let backend = {
+                let backends_guard = self.backends.read().await;
+                match backends_guard.route_tool(name) {
+                    Some(b) => b,
+                    None => {
+                        return Err(McpError::invalid_params(
+                            format!("No backend available for tool: {}", name),
+                            None,
+                        ));
+                    }
                 }
             };
 

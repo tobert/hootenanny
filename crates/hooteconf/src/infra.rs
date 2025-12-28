@@ -17,9 +17,9 @@ pub struct PathsConfig {
     pub cas_dir: PathBuf,
 
     /// Directory for IPC sockets (chaosgarden).
-    /// Default: /tmp
-    #[serde(default = "PathsConfig::default_socket_dir")]
-    pub socket_dir: PathBuf,
+    /// REQUIRED - must be set in config file. No default.
+    /// Example: /tmp or /run/hootenanny
+    pub socket_dir: Option<PathBuf>,
 }
 
 impl PathsConfig {
@@ -35,8 +35,19 @@ impl PathsConfig {
             .unwrap_or_else(|| PathBuf::from(".hootenanny/cas"))
     }
 
-    fn default_socket_dir() -> PathBuf {
-        PathBuf::from("/tmp")
+    /// Get socket_dir or return error if not configured.
+    ///
+    /// Call this at startup to fail fast if socket_dir is missing.
+    pub fn require_socket_dir(&self) -> anyhow::Result<&PathBuf> {
+        self.socket_dir.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Missing required config: infra.paths.socket_dir\n\
+                 Add to your hootenanny.toml:\n\
+                 \n\
+                 [infra.paths]\n\
+                 socket_dir = \"/tmp\"  # or /run/hootenanny"
+            )
+        })
     }
 }
 
@@ -45,7 +56,7 @@ impl Default for PathsConfig {
         Self {
             state_dir: Self::default_state_dir(),
             cas_dir: Self::default_cas_dir(),
-            socket_dir: Self::default_socket_dir(),
+            socket_dir: None, // Must be explicitly configured
         }
     }
 }
@@ -313,7 +324,27 @@ mod tests {
         let paths = PathsConfig::default();
         assert!(paths.state_dir.to_string_lossy().contains("hootenanny"));
         assert!(paths.cas_dir.to_string_lossy().contains("hootenanny"));
-        assert_eq!(paths.socket_dir, PathBuf::from("/tmp"));
+        // socket_dir has no default - must be configured explicitly
+        assert!(paths.socket_dir.is_none());
+    }
+
+    #[test]
+    fn test_require_socket_dir_missing() {
+        let paths = PathsConfig::default();
+        let result = paths.require_socket_dir();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Missing required config"));
+        assert!(err.contains("socket_dir"));
+    }
+
+    #[test]
+    fn test_require_socket_dir_present() {
+        let mut paths = PathsConfig::default();
+        paths.socket_dir = Some(PathBuf::from("/run/hootenanny"));
+        let result = paths.require_socket_dir();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), &PathBuf::from("/run/hootenanny"));
     }
 
     #[test]

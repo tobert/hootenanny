@@ -4,9 +4,9 @@
 //! to the SSE broadcast channel.
 
 use anyhow::{Context as AnyhowContext, Result};
-use hooteproto::Broadcast;
-use rzmq::{Context, SocketType};
-use rzmq::socket::options::{LINGER, RECONNECT_IVL, SUBSCRIBE};
+use futures::StreamExt;
+use hooteproto::socket_config::{create_subscriber_and_connect, ZmqContext};
+use hooteproto::{broadcast_capnp, capnp_to_broadcast, Broadcast};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
@@ -24,60 +24,71 @@ pub async fn subscribe_to_backend(
     config: SubscriberConfig,
     broadcast_tx: broadcast::Sender<Broadcast>,
 ) -> Result<()> {
-    let context = Context::new()
-        .with_context(|| "Failed to create ZMQ context")?;
-    let socket = context.socket(SocketType::Sub)
-        .with_context(|| "Failed to create SUB socket")?;
+    let context = ZmqContext::new();
+    let mut socket =
+        create_subscriber_and_connect(&context, &config.endpoint, &config.name)?;
 
-    // Set socket options
-    if let Err(e) = socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await {
-        warn!("{}: Failed to set LINGER: {}", config.name, e);
-    }
-    if let Err(e) = socket.set_option_raw(RECONNECT_IVL, &1000i32.to_ne_bytes()).await {
-        warn!("{}: Failed to set RECONNECT_IVL: {}", config.name, e);
-    }
-
-    // Subscribe to all messages (empty prefix)
-    socket.set_option_raw(SUBSCRIBE, b"").await
-        .context("Failed to set subscription")?;
-
-    socket.connect(&config.endpoint).await
-        .with_context(|| format!("Failed to connect SUB socket to {}", config.endpoint))?;
-
-    info!("Subscribed to {} broadcasts at {}", config.name, config.endpoint);
+    info!(
+        "Subscribed to {} broadcasts at {}",
+        config.name, config.endpoint
+    );
 
     loop {
-        match socket.recv().await {
-            Ok(msg) => {
-                if let Some(bytes) = msg.data() {
-                    match std::str::from_utf8(bytes) {
-                        Ok(json) => {
-                            debug!("Received broadcast from {}: {}", config.name, json);
-                            match serde_json::from_str::<Broadcast>(json) {
-                                Ok(broadcast) => {
-                                    // Forward to SSE clients
-                                    if let Err(e) = broadcast_tx.send(broadcast) {
-                                        debug!("No SSE clients connected: {}", e);
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!("Failed to parse broadcast from {}: {} - {}", config.name, e, json);
-                                }
+        match socket.next().await {
+            Some(Ok(multipart)) => {
+                // The multipart message should have one frame: the Cap'n Proto broadcast
+                for msg in multipart {
+                    let bytes: &[u8] = msg.as_ref();
+                    if bytes.is_empty() {
+                        continue;
+                    }
+
+                    // Parse Cap'n Proto broadcast
+                    match parse_capnp_broadcast(bytes) {
+                        Ok(broadcast) => {
+                            debug!("Received {} broadcast: {:?}", config.name, broadcast);
+                            if let Err(e) = broadcast_tx.send(broadcast) {
+                                debug!("No SSE clients connected: {}", e);
                             }
                         }
                         Err(e) => {
-                            warn!("Invalid UTF-8 in broadcast from {}: {}", config.name, e);
+                            warn!(
+                                "Failed to parse broadcast from {}: {} ({} bytes)",
+                                config.name,
+                                e,
+                                bytes.len()
+                            );
                         }
                     }
                 }
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 error!("Error receiving from {} SUB socket: {}", config.name, e);
-                // Brief pause before retrying
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
+            None => {
+                warn!("SUB socket stream ended for {}", config.name);
+                break;
             }
         }
     }
+
+    Ok(())
+}
+
+/// Parse Cap'n Proto broadcast bytes into Broadcast enum
+fn parse_capnp_broadcast(bytes: &[u8]) -> Result<Broadcast> {
+    let words = capnp::serialize::read_message_from_flat_slice(
+        &mut bytes.as_ref(),
+        capnp::message::ReaderOptions::default(),
+    )
+    .context("Failed to read Cap'n Proto message")?;
+
+    let reader = words
+        .get_root::<broadcast_capnp::broadcast::Reader>()
+        .context("Failed to get broadcast root")?;
+
+    capnp_to_broadcast(reader).context("Failed to convert Cap'n Proto to Broadcast")
 }
 
 /// Spawn subscriber tasks for all configured backends

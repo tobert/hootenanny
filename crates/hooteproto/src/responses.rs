@@ -23,6 +23,7 @@ pub enum ToolResponse {
     CasStored(CasStoredResponse),
     CasContent(CasContentResponse),
     CasInspected(CasInspectedResponse),
+    CasStats(CasStatsResponse),
 
     // === Artifacts ===
     ArtifactCreated(ArtifactCreatedResponse),
@@ -34,12 +35,19 @@ pub enum ToolResponse {
     JobStatus(JobStatusResponse),
     JobList(JobListResponse),
     JobPollResult(JobPollResultResponse),
+    JobPoll(JobPollResponse),
+    JobCancel(JobCancelResponse),
+    JobSleep(JobSleepResponse),
 
     // === ABC Notation ===
     AbcParsed(AbcParsedResponse),
     AbcValidated(AbcValidatedResponse),
     AbcTransposed(AbcTransposedResponse),
     AbcConverted(AbcConvertedResponse),
+    AbcToMidi(AbcToMidiResponse),
+
+    // === Audio Conversion ===
+    MidiToWav(MidiToWavResponse),
 
     // === SoundFont ===
     SoundfontInfo(SoundfontInfoResponse),
@@ -61,6 +69,9 @@ pub enum ToolResponse {
     GardenRegions(GardenRegionsResponse),
     GardenRegionCreated(GardenRegionCreatedResponse),
     GardenQueryResult(GardenQueryResultResponse),
+    GardenAudioStatus(GardenAudioStatusResponse),
+    GardenInputStatus(GardenInputStatusResponse),
+    GardenMonitorStatus(GardenMonitorStatusResponse),
 
     // === Graph ===
     GraphIdentity(GraphIdentityResponse),
@@ -69,6 +80,9 @@ pub enum ToolResponse {
     GraphTags(GraphTagsResponse),
     GraphContext(GraphContextResponse),
     GraphQueryResult(GraphQueryResultResponse),
+    GraphBind(GraphBindResponse),
+    GraphTag(GraphTagResponse),
+    GraphConnect(GraphConnectResponse),
 
     // === Config ===
     ConfigValue(ConfigValueResponse),
@@ -113,6 +127,13 @@ pub struct CasInspectedResponse {
     pub exists: bool,
     pub size: Option<usize>,
     pub preview: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CasStatsResponse {
+    pub total_items: u64,
+    pub total_bytes: u64,
+    pub cas_dir: String,
 }
 
 // =============================================================================
@@ -217,6 +238,26 @@ pub struct JobPollResultResponse {
     pub timed_out: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobPollResponse {
+    pub completed: Vec<String>,
+    pub failed: Vec<String>,
+    pub pending: Vec<String>,
+    pub reason: String,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobCancelResponse {
+    pub job_id: String,
+    pub cancelled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobSleepResponse {
+    pub slept_ms: u64,
+}
+
 // =============================================================================
 // ABC Notation Responses
 // =============================================================================
@@ -259,6 +300,24 @@ pub struct AbcConvertedResponse {
     pub content_hash: String,
     pub duration_seconds: f64,
     pub notes_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AbcToMidiResponse {
+    pub artifact_id: String,
+    pub content_hash: String,
+}
+
+// =============================================================================
+// Audio Conversion Responses
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiToWavResponse {
+    pub artifact_id: String,
+    pub content_hash: String,
+    pub sample_rate: u32,
+    pub duration_secs: Option<f64>,
 }
 
 // =============================================================================
@@ -428,6 +487,36 @@ pub struct GardenQueryResultResponse {
     pub count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GardenAudioStatusResponse {
+    pub attached: bool,
+    pub device_name: Option<String>,
+    pub sample_rate: Option<u32>,
+    pub latency_frames: Option<u32>,
+    pub callbacks: u64,
+    pub samples_written: u64,
+    pub underruns: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GardenInputStatusResponse {
+    pub attached: bool,
+    pub device_name: Option<String>,
+    pub sample_rate: Option<u32>,
+    pub channels: Option<u32>,
+    pub monitor_enabled: bool,
+    pub monitor_gain: f32,
+    pub callbacks: u64,
+    pub samples_captured: u64,
+    pub overruns: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GardenMonitorStatusResponse {
+    pub enabled: bool,
+    pub gain: f64,
+}
+
 // =============================================================================
 // Graph Responses
 // =============================================================================
@@ -485,6 +574,27 @@ pub struct GraphContextResponse {
 pub struct GraphQueryResultResponse {
     pub results: Vec<serde_json::Value>, // Trustfall results
     pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GraphBindResponse {
+    pub identity_id: String,
+    pub name: String,
+    pub hints_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GraphTagResponse {
+    pub identity_id: String,
+    pub tag: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GraphConnectResponse {
+    pub from_identity: String,
+    pub from_port: String,
+    pub to_identity: String,
+    pub to_port: String,
 }
 
 // =============================================================================

@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Hootenanny Protocol
-hooteproto = { path = "../hooteproto", features = ["client"] }
+hooteproto = { path = "../hooteproto" }
 
 # Configuration
 hooteconf = { path = "../hooteconf" }
@@ -31,8 +31,9 @@ tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 futures = "0.3"
 
-# ZMQ
-rzmq = { version = "0.5", features = ["ipc"] }
+# ZMQ - tmq wraps battle-tested libzmq
+tmq = { workspace = true }
+zmq = { workspace = true }
 bytes = "1"
 capnp = "0.20"
 

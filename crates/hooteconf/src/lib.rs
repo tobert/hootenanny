@@ -165,10 +165,9 @@ impl HootConfig {
             "cas_dir = \"{}\"\n",
             self.infra.paths.cas_dir.display()
         ));
-        output.push_str(&format!(
-            "socket_dir = \"{}\"\n",
-            self.infra.paths.socket_dir.display()
-        ));
+        if let Some(socket_dir) = &self.infra.paths.socket_dir {
+            output.push_str(&format!("socket_dir = \"{}\"\n", socket_dir.display()));
+        }
 
         output.push_str("\n[bind]\n");
         output.push_str(&format!("http_port = {}\n", self.infra.bind.http_port));

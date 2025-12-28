@@ -5,9 +5,11 @@ edition = "2021"
 description = "Realtime audio daemon for Hootenanny - RT priority playback, graph state, PipeWire I/O"
 
 [dependencies]
-# IPC
-zeromq = "0.4"
+# IPC - tmq wraps battle-tested libzmq
+tmq = { workspace = true }
+zmq = { workspace = true }
 hooteproto = { path = "../hooteproto" }
+hooteconf = { path = "../hooteconf" }
 bytes = "1"
 capnp = "0.20"
 

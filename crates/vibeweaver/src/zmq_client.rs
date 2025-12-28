@@ -4,12 +4,11 @@
 
 use anyhow::Result;
 use bytes::Bytes;
-use hooteproto::socket_config::configure_socket;
-use rzmq::socket::options::SUBSCRIBE;
-use rzmq::{Context, Socket, SocketType};
+use futures::StreamExt;
+use hooteproto::socket_config::{ZmqContext, Multipart};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::warn;
+use tmq::subscribe;
 
 pub use hooteproto::{ClientConfig, HootClient, Payload};
 
@@ -62,53 +61,40 @@ pub enum Broadcast {
 /// Broadcast receiver (separate from client for ownership)
 pub struct BroadcastReceiver {
     #[allow(dead_code)]
-    context: Context,
-    sub: Socket,
+    context: ZmqContext,
+    sub: Box<dyn futures::Stream<Item = Result<Multipart, tmq::TmqError>> + Unpin + Send>,
 }
 
 impl BroadcastReceiver {
     /// Connect SUB socket and subscribe to all relevant topics
-    pub async fn connect(endpoint: &str) -> Result<Self> {
-        let context = Context::new()
-            .map_err(|e| anyhow::anyhow!("Failed to create ZMQ context: {}", e))?;
-        let sub = context
-            .socket(SocketType::Sub)
-            .map_err(|e| anyhow::anyhow!("Failed to create SUB socket: {}", e))?;
+    pub fn connect(endpoint: &str) -> Result<Self> {
+        let context = ZmqContext::new();
 
-        // Configure socket with standard options (LINGER, RECONNECT_*, HEARTBEAT_*)
-        configure_socket(&sub, "vibeweaver-broadcast-sub")
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to configure SUB socket: {}", e))?;
+        // Subscribe to all messages - filtering done on receive
+        // tmq's subscribe() API returns Result<()>, so we can only subscribe once
+        // during the builder chain. Subscribe to "" for all messages.
+        let sub = subscribe(&context)
+            .set_linger(0)
+            .set_reconnect_ivl(1000)
+            .set_reconnect_ivl_max(60000)
+            .connect(endpoint)?
+            .subscribe(b"")?;
 
-        // Subscribe to relevant topics
-        for topic in &["job.", "artifact.", "transport.", "beat.", "marker."] {
-            if let Err(e) = sub.set_option_raw(SUBSCRIBE, topic.as_bytes()).await {
-                warn!("Failed to subscribe to {}: {}", topic, e);
-            }
-        }
-
-        sub.connect(endpoint)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to connect SUB to {}: {}", endpoint, e))?;
-
-        Ok(Self { context, sub })
-    }
-
-    /// Subscribe to specific topic prefix
-    pub async fn subscribe(&self, topic: &str) -> Result<()> {
-        self.sub.set_option_raw(SUBSCRIBE, topic.as_bytes()).await
-            .map_err(|e| anyhow::anyhow!("Failed to subscribe to {}: {}", topic, e))?;
-        Ok(())
+        Ok(Self {
+            context,
+            sub: Box::new(sub),
+        })
     }
 
     /// Receive next broadcast (blocking)
-    pub async fn recv(&self) -> Result<Broadcast> {
-        let msgs = self.sub.recv_multipart().await
+    pub async fn recv(&mut self) -> Result<Broadcast> {
+        let mp = self.sub.next().await
+            .ok_or_else(|| anyhow::anyhow!("Socket stream ended"))?
             .map_err(|e| anyhow::anyhow!("Failed to receive: {}", e))?;
 
-        let frames: Vec<Bytes> = msgs
+        let frames: Vec<Bytes> = mp
             .into_iter()
-            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+            .map(|m| Bytes::from(m.to_vec()))
             .collect();
 
         if frames.is_empty() {

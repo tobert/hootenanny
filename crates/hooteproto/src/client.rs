@@ -24,14 +24,14 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as AnyhowContext, Result};
 use bytes::Bytes;
-use rzmq::socket::options::{LINGER, RECONNECT_IVL, RECONNECT_IVL_MAX, ROUTING_ID};
-use rzmq::{Context, Msg, Socket, SocketType};
+use futures::{SinkExt, StreamExt};
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
 use crate::{
     capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope,
+    socket_config::{create_dealer_and_connect, DealerSocket, Multipart, ZmqContext},
     Command, ContentType, HootFrame, Payload,
 };
 
@@ -198,8 +198,8 @@ impl ClientConfig {
 /// - Processing commands from callers (send requests)
 /// - Receiving responses from the socket
 /// - Cleaning up timed-out requests
-async fn reactor_task(
-    socket: Socket,
+async fn reactor_task<S: DealerSocket>(
+    mut socket: S,
     mut cmd_rx: mpsc::Receiver<ReactorCommand>,
     health: Arc<HealthTracker>,
     name: String,
@@ -221,9 +221,15 @@ async fn reactor_task(
                     Some(ReactorCommand::Request { frames, request_id, timeout, response_tx }) => {
                         trace!("{}: Sending request {}", name, request_id);
 
-                        // Send immediately
-                        let msgs = frames_to_msgs(&frames);
-                        if let Err(e) = socket.send_multipart(msgs).await {
+                        // Convert frames to Multipart for tmq
+                        let multipart: Multipart = frames
+                            .iter()
+                            .map(|f| f.to_vec())
+                            .collect::<Vec<_>>()
+                            .into();
+
+                        // Send via Sink trait
+                        if let Err(e) = socket.send(multipart).await {
                             warn!("{}: Send failed for {}: {}", name, request_id, e);
                             let _ = response_tx.send(Err(anyhow::anyhow!("Send failed: {}", e)));
                             continue;
@@ -251,13 +257,14 @@ async fn reactor_task(
                 }
             }
 
-            // Receive responses from socket
-            result = socket.recv_multipart() => {
+            // Receive responses from socket via Stream trait
+            result = socket.next() => {
                 match result {
-                    Ok(msgs) => {
-                        let frames: Vec<Bytes> = msgs
+                    Some(Ok(multipart)) => {
+                        // Convert Multipart to Vec<Bytes>
+                        let frames: Vec<Bytes> = multipart
                             .into_iter()
-                            .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+                            .map(|msg| Bytes::from(msg.to_vec()))
                             .collect();
 
                         match HootFrame::from_frames(&frames) {
@@ -288,9 +295,14 @@ async fn reactor_task(
                             }
                         }
                     }
-                    Err(e) => {
+                    Some(Err(e)) => {
                         warn!("{}: Receive error: {}", name, e);
                         // ZMQ handles reconnection - don't panic
+                    }
+                    None => {
+                        // Stream ended - shouldn't happen with ZMQ sockets
+                        warn!("{}: Socket stream ended unexpectedly", name);
+                        break;
                     }
                 }
             }
@@ -349,46 +361,20 @@ impl HootClient {
     /// ZMQ's connect() is non-blocking - the peer doesn't need to exist yet.
     /// ZMQ will automatically handle reconnection if the peer appears later.
     pub async fn new(config: ClientConfig) -> Arc<Self> {
-        let context = Context::new().expect("Failed to create ZMQ context");
-        let socket = context
-            .socket(SocketType::Dealer)
-            .expect("Failed to create DEALER socket");
+        let context = ZmqContext::new();
 
-        // Set socket options for proper Lazy Pirate behavior
-        // ROUTING_ID: Stable identity so ROUTER can route back after reconnect
-        if let Err(e) = socket
-            .set_option_raw(ROUTING_ID, config.name.as_bytes())
-            .await
-        {
-            warn!("{}: Failed to set ROUTING_ID: {}", config.name, e);
-        }
-
-        // RECONNECT_IVL: Initial reconnect interval (1 second)
-        if let Err(e) = socket
-            .set_option_raw(RECONNECT_IVL, &1000i32.to_ne_bytes())
-            .await
-        {
-            warn!("{}: Failed to set RECONNECT_IVL: {}", config.name, e);
-        }
-
-        // RECONNECT_IVL_MAX: Max backoff (30 seconds)
-        if let Err(e) = socket
-            .set_option_raw(RECONNECT_IVL_MAX, &30000i32.to_ne_bytes())
-            .await
-        {
-            warn!("{}: Failed to set RECONNECT_IVL_MAX: {}", config.name, e);
-        }
-
-        // LINGER: Don't block on close (immediate)
-        if let Err(e) = socket.set_option_raw(LINGER, &0i32.to_ne_bytes()).await {
-            warn!("{}: Failed to set LINGER: {}", config.name, e);
-        }
-
-        // ZMQ connect is non-blocking - it just configures the socket.
-        // The peer doesn't need to exist. ZMQ will reconnect automatically.
-        if let Err(e) = socket.connect(&config.endpoint).await {
-            warn!("{}: Socket connect configuration failed: {}", config.name, e);
-        }
+        // Use centralized socket configuration
+        let socket = match create_dealer_and_connect(
+            &context,
+            &config.endpoint,
+            config.name.as_bytes(),
+            &config.name,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                panic!("{}: Failed to create socket: {}", config.name, e);
+            }
+        };
 
         info!(
             "{}: Socket configured for {} (ZMQ will connect when peer available)",
@@ -454,21 +440,34 @@ impl HootClient {
                 Ok(response) => {
                     return Ok(response);
                 }
-                Err(e) if attempts < max_attempts => {
-                    warn!(
-                        "{}: Request {} attempt {} failed: {}, retrying...",
-                        self.config.name, request_id, attempts, e
-                    );
-                    self.health.record_failure();
-                    // Small delay before retry with backoff
-                    tokio::time::sleep(Duration::from_millis(100 * attempts as u64)).await;
-                }
                 Err(e) => {
-                    self.health.record_failure();
-                    return Err(e.context(format!(
-                        "{}: Request failed after {} attempts",
-                        self.config.name, attempts
-                    )));
+                    let error_msg = e.to_string();
+
+                    // Connection lost is not retriable - fail immediately
+                    if error_msg.contains("Connection lost") {
+                        self.health.record_failure();
+                        return Err(e.context(format!(
+                            "{}: Connection lost, not retrying",
+                            self.config.name
+                        )));
+                    }
+
+                    // Other errors (timeout, send failure) can be retried
+                    if attempts < max_attempts {
+                        warn!(
+                            "{}: Request {} attempt {} failed: {}, retrying...",
+                            self.config.name, request_id, attempts, e
+                        );
+                        self.health.record_failure();
+                        // Small delay before retry with backoff
+                        tokio::time::sleep(Duration::from_millis(100 * attempts as u64)).await;
+                    } else {
+                        self.health.record_failure();
+                        return Err(e.context(format!(
+                            "{}: Request failed after {} attempts",
+                            self.config.name, attempts
+                        )));
+                    }
                 }
             }
         }
@@ -644,7 +643,7 @@ pub fn spawn_health_task(
                             // During initial connection phase, just wait silently
                             if ever_connected {
                                 let failures = client.health.record_failure();
-                                if failures == 1 || failures.is_multiple_of(5) {
+                                if failures == 1 || failures % 5 == 0 {
                                     debug!("{}: Peer still not responding (failures={})", client.config.name, failures);
                                 }
 
@@ -670,9 +669,4 @@ pub fn spawn_health_task(
             }
         }
     });
-}
-
-/// Convert frames to Vec<Msg> for rzmq multipart
-fn frames_to_msgs(frames: &[Bytes]) -> Vec<Msg> {
-    frames.iter().map(|f| Msg::from_vec(f.to_vec())).collect()
 }

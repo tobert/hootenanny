@@ -15,9 +15,10 @@ use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager,
 };
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{error, info, warn};
 
 use crate::backend::BackendPool;
 use crate::handler::{new_tool_cache, refresh_tools_into, ZmqHandler};
@@ -39,7 +40,7 @@ pub struct ServeConfig {
 /// Server state for health endpoint
 #[derive(Clone)]
 pub struct HealthState {
-    pub backends: Arc<BackendPool>,
+    pub backends: Arc<RwLock<BackendPool>>,
     pub start_time: Instant,
 }
 
@@ -48,8 +49,9 @@ pub async fn handle_health(
     axum::extract::State(state): axum::extract::State<HealthState>,
 ) -> axum::Json<serde_json::Value> {
     let uptime = state.start_time.elapsed();
-    let backends_health = state.backends.health().await;
-    let all_alive = state.backends.all_alive();
+    let backends = state.backends.read().await;
+    let backends_health = backends.health().await;
+    let all_alive = backends.all_alive();
 
     axum::Json(serde_json::json!({
         "status": if all_alive { "healthy" } else { "degraded" },
@@ -75,7 +77,7 @@ pub async fn run(config: ServeConfig) -> Result<()> {
         .setup_hootenanny(&config.hootenanny, config.timeout_ms)
         .await;
 
-    let backends = Arc::new(backends);
+    let backends = Arc::new(RwLock::new(backends));
 
     // Create shared tool cache for dynamic refresh
     // Tools will be loaded when on_connected callback fires after first heartbeat success
@@ -98,7 +100,31 @@ pub async fn run(config: ServeConfig) -> Result<()> {
     });
 
     // Spawn health task for hootenanny with connect callback
-    backends.spawn_health_task(shutdown_tx.subscribe(), Some(on_connected));
+    {
+        let backends_guard = backends.read().await;
+        backends_guard.spawn_health_task(shutdown_tx.subscribe(), Some(on_connected));
+    }
+
+    // Spawn periodic recreation check - recovers Dead connections
+    {
+        let backends_for_recreation = Arc::clone(&backends);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+                let needs_recreation = {
+                    backends_for_recreation.read().await.needs_recreation()
+                };
+                if needs_recreation {
+                    warn!("Backend marked dead, attempting recreation");
+                    let mut backends_mut = backends_for_recreation.write().await;
+                    if let Err(e) = backends_mut.recreate_hootenanny().await {
+                        error!("Failed to recreate backend: {}", e);
+                    }
+                }
+            }
+        });
+    }
 
     // Also do an immediate tool refresh (in case backend is already up)
     {
@@ -106,7 +132,7 @@ pub async fn run(config: ServeConfig) -> Result<()> {
         let backends = Arc::clone(&backends);
         tokio::spawn(async move {
             // Small delay to let ZMQ connection establish
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
             let count = refresh_tools_into(&cache, &backends).await;
             if count > 0 {
                 info!("🔧 Initial tool refresh: {} tools loaded", count);

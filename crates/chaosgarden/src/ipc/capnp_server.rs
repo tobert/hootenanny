@@ -7,22 +7,23 @@
 //! - control (ROUTER): Priority commands (shutdown, interrupt)
 //! - shell (ROUTER): Normal commands (transport, streams)
 //! - iopub (PUB): Event broadcasts (state changes, metrics)
-//! - heartbeat (REP): Liveness detection
-//! - query (REP): Trustfall queries
+//! - heartbeat (ROUTER): Liveness detection (ROUTER for DEALER clients)
+//! - query (ROUTER): Trustfall queries (ROUTER for DEALER clients)
 
 use anyhow::{Context as AnyhowContext, Result};
 use bytes::Bytes;
+use futures::{SinkExt, StreamExt};
 use hooteproto::{
     capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope,
+    garden_listener::{GardenListener, SplitRouter},
     request::ToolRequest,
     responses::{
         GardenRegionInfo, GardenRegionsResponse, GardenStatusResponse, ToolResponse,
         TransportState,
     },
-    socket_config::create_and_bind,
+    socket_config::Multipart,
     Command, ContentType, HootFrame, Payload, ResponseEnvelope, PROTOCOL_VERSION,
 };
-use rzmq::{Context, Msg, MsgFlags, Socket, SocketType};
 use std::sync::Arc;
 use tokio::select;
 use tracing::{debug, error, info, warn};
@@ -30,59 +31,38 @@ use tracing::{debug, error, info, warn};
 use crate::daemon::GardenDaemon;
 use uuid::Uuid;
 
-/// Convert frames to Vec<Msg> for rzmq multipart
-fn frames_to_msgs(frames: &[Bytes]) -> Vec<Msg> {
-    frames.iter().map(|f| Msg::from_vec(f.to_vec())).collect()
-}
-
-/// Convert Vec<Msg> to Vec<Bytes> for frame processing
-fn msgs_to_frames(msgs: &[Msg]) -> Vec<Bytes> {
-    msgs.iter()
-        .map(|m| Bytes::from(m.data().map(|d| d.to_vec()).unwrap_or_default()))
+/// Convert tmq Multipart to Vec<Bytes> for frame processing
+fn multipart_to_frames(mp: Multipart) -> Vec<Bytes> {
+    mp.into_iter()
+        .map(|msg| Bytes::from(msg.to_vec()))
         .collect()
 }
 
-/// Send multipart using individual send() calls with MORE flags.
-async fn send_multipart_individually(socket: &Socket, msgs: Vec<Msg>) -> anyhow::Result<()> {
-    let last_idx = msgs.len().saturating_sub(1);
-    for (i, mut msg) in msgs.into_iter().enumerate() {
-        if i < last_idx {
-            msg.set_flags(MsgFlags::MORE);
-        }
-        socket.send(msg).await
-            .with_context(|| format!("Failed to send frame {} of multipart", i))?;
-    }
-    Ok(())
+/// Convert Vec<Bytes> frames to tmq Multipart
+fn frames_to_multipart(frames: &[Bytes]) -> Multipart {
+    frames.iter()
+        .map(|f| f.to_vec())
+        .collect::<Vec<_>>()
+        .into()
 }
 
 /// ZMQ server using Cap'n Proto for chaosgarden
 pub struct CapnpGardenServer {
-    endpoints: crate::ipc::GardenEndpoints,
+    config: hooteconf::HootConfig,
 }
 
 impl CapnpGardenServer {
-    pub fn new(endpoints: crate::ipc::GardenEndpoints) -> Self {
-        Self { endpoints }
+    pub fn new(config: hooteconf::HootConfig) -> Self {
+        Self { config }
     }
 
     /// Run the server with the garden daemon handler
     pub async fn run(self, handler: Arc<GardenDaemon>) -> Result<()> {
-        let context = Context::new()
-            .with_context(|| "Failed to create ZMQ context")?;
-
-        // Bind all 5 sockets (Jupyter-inspired protocol)
-        let control_socket =
-            create_and_bind(&context, SocketType::Router, &self.endpoints.control, "control")
-                .await?;
-        let shell_socket =
-            create_and_bind(&context, SocketType::Router, &self.endpoints.shell, "shell").await?;
-        let _iopub_socket =
-            create_and_bind(&context, SocketType::Pub, &self.endpoints.iopub, "iopub").await?;
-        let heartbeat_socket =
-            create_and_bind(&context, SocketType::Rep, &self.endpoints.heartbeat, "heartbeat")
-                .await?;
-        let query_socket =
-            create_and_bind(&context, SocketType::Rep, &self.endpoints.query, "query").await?;
+        // Bind all 5 sockets using GardenListener
+        let listener = GardenListener::from_config(&self.config)
+            .with_context(|| "Failed to create garden listener")?;
+        let sockets = listener.bind()
+            .with_context(|| "Failed to bind garden sockets")?;
 
         info!("🎵 chaosgarden server ready (5 sockets bound)");
 
@@ -90,12 +70,14 @@ impl CapnpGardenServer {
         loop {
             select! {
                 // Control socket - priority commands
-                msg = control_socket.recv_multipart() => {
+                msg = async {
+                    sockets.control.rx.lock().await.next().await
+                } => {
                     match msg {
-                        Ok(msgs) => {
-                            let frames = msgs_to_frames(&msgs);
+                        Some(Ok(mp)) => {
+                            let frames = multipart_to_frames(mp);
                             if let Err(e) = self.handle_router_message(
-                                &control_socket,
+                                &sockets.control,
                                 &handler,
                                 frames,
                                 "control"
@@ -103,17 +85,23 @@ impl CapnpGardenServer {
                                 error!("Error handling control message: {}", e);
                             }
                         }
-                        Err(e) => error!("Control socket recv error: {}", e),
+                        Some(Err(e)) => error!("Control socket recv error: {}", e),
+                        None => {
+                            warn!("Control socket stream ended");
+                            break;
+                        }
                     }
                 }
 
                 // Shell socket - normal commands
-                msg = shell_socket.recv_multipart() => {
+                msg = async {
+                    sockets.shell.rx.lock().await.next().await
+                } => {
                     match msg {
-                        Ok(msgs) => {
-                            let frames = msgs_to_frames(&msgs);
+                        Some(Ok(mp)) => {
+                            let frames = multipart_to_frames(mp);
                             if let Err(e) = self.handle_router_message(
-                                &shell_socket,
+                                &sockets.shell,
                                 &handler,
                                 frames,
                                 "shell"
@@ -121,43 +109,61 @@ impl CapnpGardenServer {
                                 error!("Error handling shell message: {}", e);
                             }
                         }
-                        Err(e) => error!("Shell socket recv error: {}", e),
+                        Some(Err(e)) => error!("Shell socket recv error: {}", e),
+                        None => {
+                            warn!("Shell socket stream ended");
+                            break;
+                        }
                     }
                 }
 
                 // Heartbeat socket - liveness detection
-                msg = heartbeat_socket.recv_multipart() => {
+                msg = async {
+                    sockets.heartbeat.rx.lock().await.next().await
+                } => {
                     match msg {
-                        Ok(msgs) => {
-                            let frames = msgs_to_frames(&msgs);
-                            if let Err(e) = self.handle_heartbeat(&heartbeat_socket, frames).await {
+                        Some(Ok(mp)) => {
+                            let frames = multipart_to_frames(mp);
+                            if let Err(e) = self.handle_heartbeat(&sockets.heartbeat, frames).await {
                                 error!("Error handling heartbeat: {}", e);
                             }
                         }
-                        Err(e) => error!("Heartbeat socket recv error: {}", e),
+                        Some(Err(e)) => error!("Heartbeat socket recv error: {}", e),
+                        None => {
+                            warn!("Heartbeat socket stream ended");
+                            break;
+                        }
                     }
                 }
 
                 // Query socket - Trustfall queries
-                msg = query_socket.recv_multipart() => {
+                msg = async {
+                    sockets.query.rx.lock().await.next().await
+                } => {
                     match msg {
-                        Ok(msgs) => {
-                            let frames = msgs_to_frames(&msgs);
-                            if let Err(e) = self.handle_query(&query_socket, &handler, frames).await {
+                        Some(Ok(mp)) => {
+                            let frames = multipart_to_frames(mp);
+                            if let Err(e) = self.handle_query(&sockets.query, &handler, frames).await {
                                 error!("Error handling query: {}", e);
                             }
                         }
-                        Err(e) => error!("Query socket recv error: {}", e),
+                        Some(Err(e)) => error!("Query socket recv error: {}", e),
+                        None => {
+                            warn!("Query socket stream ended");
+                            break;
+                        }
                     }
                 }
             }
         }
+
+        Ok(())
     }
 
     /// Handle messages on ROUTER sockets (control/shell)
     async fn handle_router_message(
         &self,
-        socket: &Socket,
+        socket: &SplitRouter,
         handler: &Arc<GardenDaemon>,
         frames: Vec<Bytes>,
         channel: &str,
@@ -181,8 +187,9 @@ impl CapnpGardenServer {
                 // Respond with heartbeat
                 let response = HootFrame::heartbeat("chaosgarden");
                 let reply_frames = response.to_frames_with_identity(&identity);
-                let reply = frames_to_msgs(&reply_frames);
-                send_multipart_individually(socket, reply).await?;
+                let reply = frames_to_multipart(&reply_frames);
+                socket.tx.lock().await.send(reply).await
+                    .with_context(|| format!("[{}] Failed to send heartbeat response", channel))?;
                 debug!("[{}] Heartbeat response sent", channel);
             }
 
@@ -219,8 +226,9 @@ impl CapnpGardenServer {
                             body: reply_json.into(),
                         };
                         let reply_frames = response_frame.to_frames_with_identity(&identity);
-                        let reply = frames_to_msgs(&reply_frames);
-                        send_multipart_individually(socket, reply).await?;
+                        let reply = frames_to_multipart(&reply_frames);
+                        socket.tx.lock().await.send(reply).await
+                            .with_context(|| format!("[{}] Failed to send JSON response", channel))?;
                     }
                     ContentType::CapnProto => {
                         // Cap'n Proto request - parse as Payload
@@ -266,8 +274,9 @@ impl CapnpGardenServer {
                         };
 
                         let reply_frames = response_frame.to_frames_with_identity(&identity);
-                        let reply = frames_to_msgs(&reply_frames);
-                        send_multipart_individually(socket, reply).await?;
+                        let reply = frames_to_multipart(&reply_frames);
+                        socket.tx.lock().await.send(reply).await
+                            .with_context(|| format!("[{}] Failed to send capnp response", channel))?;
                     }
                     other => {
                         warn!(
@@ -286,46 +295,53 @@ impl CapnpGardenServer {
         Ok(())
     }
 
-    /// Handle heartbeat messages (REP socket - simple echo)
-    async fn handle_heartbeat(&self, socket: &Socket, frames: Vec<Bytes>) -> Result<()> {
+    /// Handle heartbeat messages (ROUTER socket - extract identity, echo response)
+    async fn handle_heartbeat(&self, socket: &SplitRouter, frames: Vec<Bytes>) -> Result<()> {
         // Check for HOOT01 frame
         if frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
-            // Parse and respond with HOOT01 heartbeat
-            match HootFrame::from_frames(&frames) {
-                Ok(_frame) => {
+            // Parse with identity (ROUTER socket prepends identity frame)
+            match HootFrame::from_frames_with_identity(&frames) {
+                Ok((identity, _frame)) => {
                     let response = HootFrame::heartbeat("chaosgarden");
-                    let reply_frames = response.to_frames();
-                    let reply = frames_to_msgs(&reply_frames);
-                    send_multipart_individually(socket, reply).await?;
+                    let reply_frames = response.to_frames_with_identity(&identity);
+                    let reply = frames_to_multipart(&reply_frames);
+                    socket.tx.lock().await.send(reply).await
+                        .with_context(|| "Failed to send heartbeat response")?;
                     debug!("💓 Heartbeat response sent");
                 }
                 Err(e) => {
                     warn!("Failed to parse heartbeat frame: {}", e);
-                    // Echo back anyway for compatibility
-                    let reply = frames_to_msgs(&frames);
-                    send_multipart_individually(socket, reply).await?;
+                    // Echo back anyway for compatibility (with identity preserved)
+                    let reply = frames_to_multipart(&frames);
+                    socket.tx.lock().await.send(reply).await
+                        .with_context(|| "Failed to echo heartbeat")?;
                 }
             }
         } else {
-            // Legacy heartbeat - just echo back
-            let reply = frames_to_msgs(&frames);
-            send_multipart_individually(socket, reply).await?;
+            // Legacy heartbeat - just echo back (identity should be first frame)
+            let reply = frames_to_multipart(&frames);
+            socket.tx.lock().await.send(reply).await
+                .with_context(|| "Failed to echo legacy heartbeat")?;
         }
 
         Ok(())
     }
 
-    /// Handle Trustfall query messages (REP socket)
+    /// Handle Trustfall query messages (ROUTER socket)
     async fn handle_query(
         &self,
-        socket: &Socket,
+        socket: &SplitRouter,
         handler: &Arc<GardenDaemon>,
         frames: Vec<Bytes>,
     ) -> Result<()> {
+        // Extract identity frames (first frame(s) before HOOT01 from ROUTER socket)
+        // We'll get the proper identity from from_frames_with_identity, but need a fallback
+        let fallback_identity: Vec<Bytes> = frames.first().cloned().map(|f| vec![f]).unwrap_or_default();
+
         // Check for HOOT01 frame
         if !frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
             warn!("[query] Received non-HOOT01 message");
-            // Send error response
+            // Send error response with identity
             let error_payload = Payload::Error {
                 code: "protocol_error".to_string(),
                 message: "Expected HOOT01 frame".to_string(),
@@ -341,12 +357,14 @@ impl CapnpGardenServer {
                 traceparent: None,
                 body: bytes.into(),
             };
-            let reply = frames_to_msgs(&response_frame.to_frames());
-            send_multipart_individually(socket, reply).await?;
+            let reply = frames_to_multipart(&response_frame.to_frames_with_identity(&fallback_identity));
+            socket.tx.lock().await.send(reply).await
+                .with_context(|| "[query] Failed to send error response")?;
             return Ok(());
         }
 
-        let frame = HootFrame::from_frames(&frames)?;
+        // Parse with identity extraction
+        let (identity, frame) = HootFrame::from_frames_with_identity(&frames)?;
 
         debug!(
             "[query] HOOT01 {:?} request_id={}",
@@ -379,7 +397,7 @@ impl CapnpGardenServer {
             },
         };
 
-        // Send response
+        // Send response with identity
         let response_msg = payload_to_capnp_envelope(frame.request_id, &result_payload)?;
         let bytes = capnp::serialize::write_message_to_words(&response_msg);
         let response_frame = HootFrame {
@@ -390,8 +408,9 @@ impl CapnpGardenServer {
             traceparent: None,
             body: bytes.into(),
         };
-        let reply = frames_to_msgs(&response_frame.to_frames());
-        send_multipart_individually(socket, reply).await?;
+        let reply = frames_to_multipart(&response_frame.to_frames_with_identity(&identity));
+        socket.tx.lock().await.send(reply).await
+            .with_context(|| "[query] Failed to send response")?;
 
         Ok(())
     }
@@ -522,6 +541,34 @@ impl CapnpGardenServer {
             ToolRequest::GardenDetachInput => ShellRequest::DetachInput,
             ToolRequest::GardenInputStatus => ShellRequest::GetInputStatus,
             ToolRequest::GardenSetMonitor(r) => ShellRequest::SetMonitor { enabled: r.enabled, gain: r.gain },
+
+            // GardenQuery bypasses ShellRequest - directly executes Trustfall query
+            ToolRequest::GardenQuery(r) => {
+                use std::collections::HashMap;
+                let vars: HashMap<String, serde_json::Value> = r.variables
+                    .and_then(|v| v.as_object().cloned())
+                    .map(|m| m.into_iter().collect())
+                    .unwrap_or_default();
+                let result = handler.execute_query(&r.query, &vars);
+                return match result {
+                    hooteproto::garden::QueryReply::Results { rows } => {
+                        Payload::TypedResponse(ResponseEnvelope::success(
+                            ToolResponse::GardenQueryResult(hooteproto::responses::GardenQueryResultResponse {
+                                results: rows,
+                                count: 0, // Could count rows but already consumed
+                            })
+                        ))
+                    }
+                    hooteproto::garden::QueryReply::Error { error } => {
+                        Payload::Error {
+                            code: "query_error".to_string(),
+                            message: error,
+                            details: None,
+                        }
+                    }
+                };
+            }
+
             _ => return Payload::Error {
                 code: "not_implemented".to_string(),
                 message: format!("ToolRequest not implemented in chaosgarden: {:?}", req),

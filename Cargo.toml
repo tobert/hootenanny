@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "crates/abc",
-    "crates/baton",
     "crates/cas",
     "crates/chaosgarden",
     "crates/holler",
@@ -14,6 +13,6 @@ members = [
 ]
 resolver = "2"
 
-# Override rzmq with fork containing ROUTER pipe coordinator fix
-[patch.crates-io]
-rzmq = { git = "https://github.com/tobert/rzmq", branch = "fix-router-pipe-coordinator" }
+[workspace.dependencies]
+tmq = "0.5"
+zmq = "0.10"
