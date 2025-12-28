@@ -1,3 +1,4 @@
+pub mod manual_schemas; // Hand-written schemas for llama.cpp compatibility
 pub mod native;
 pub mod responses;
 pub mod schema;

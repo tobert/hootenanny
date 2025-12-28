@@ -1,7 +1,12 @@
 //! Tool registry - list of all available tools
 //!
 //! This module provides tool metadata for discovery.
+//!
+//! Tools that have `#[serde(default)]` annotations use manual schemas from
+//! `manual_schemas` module to avoid emitting `default` fields that llama.cpp
+//! cannot parse. See that module for details on why each type needs manual schemas.
 
+use crate::api::manual_schemas;
 use crate::api::schema::*;
 use hooteproto::ToolInfo;
 use schemars::JsonSchema;
@@ -42,10 +47,11 @@ pub fn list_tools() -> Vec<ToolInfo> {
             input_schema: schema_for::<UploadFileRequest>(),
         },
         // Artifact Tools
+        // Uses manual schema: #[serde(default)] on tags, creator
         ToolInfo {
             name: "artifact_upload".to_string(),
             description: "Upload file and create artifact".to_string(),
-            input_schema: schema_for::<ArtifactUploadRequest>(),
+            input_schema: manual_schemas::artifact_upload_request(),
         },
         ToolInfo {
             name: "artifact_list".to_string(),
@@ -58,10 +64,11 @@ pub fn list_tools() -> Vec<ToolInfo> {
             input_schema: schema_for::<ArtifactGetRequest>(),
         },
         // SoundFont Tools
+        // Uses manual schema: #[serde(default)] on include_drum_map
         ToolInfo {
             name: "soundfont_inspect".to_string(),
             description: "Inspect SoundFont presets".to_string(),
-            input_schema: schema_for::<SoundfontInspectRequest>(),
+            input_schema: manual_schemas::soundfont_inspect_request(),
         },
         // Job Tools
         ToolInfo {
@@ -84,10 +91,11 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Cancel a running job".to_string(),
             input_schema: schema_for::<CancelJobRequest>(),
         },
+        // Uses manual schema: #[serde(default)] on job_ids
         ToolInfo {
             name: "job_poll".to_string(),
             description: "Poll for job completion".to_string(),
-            input_schema: schema_for::<PollRequest>(),
+            input_schema: manual_schemas::poll_request(),
         },
         ToolInfo {
             name: "job_sleep".to_string(),
@@ -95,10 +103,11 @@ pub fn list_tools() -> Vec<ToolInfo> {
             input_schema: schema_for::<SleepRequest>(),
         },
         // Graph Tools
+        // Uses manual schema: #[serde(default)] on hints
         ToolInfo {
             name: "graph_bind".to_string(),
             description: "Bind an identity to a device".to_string(),
-            input_schema: schema_for::<GraphBindRequest>(),
+            input_schema: manual_schemas::graph_bind_request(),
         },
         ToolInfo {
             name: "graph_tag".to_string(),
@@ -115,15 +124,17 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Find identities".to_string(),
             input_schema: schema_for::<GraphFindRequest>(),
         },
+        // Uses manual schema: #[serde(default)] on include_metadata, include_annotations
         ToolInfo {
             name: "graph_context".to_string(),
             description: "Get graph context for LLM".to_string(),
-            input_schema: schema_for::<GraphContextRequest>(),
+            input_schema: manual_schemas::graph_context_request(),
         },
+        // Uses manual schema: #[serde(default)] on variables
         ToolInfo {
             name: "graph_query".to_string(),
             description: "Execute Trustfall query on graph".to_string(),
-            input_schema: schema_for::<GraphQueryRequest>(),
+            input_schema: manual_schemas::graph_query_request(),
         },
         // ABC Tools
         ToolInfo {
@@ -162,10 +173,11 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Set tempo".to_string(),
             input_schema: schema_for::<super::tools::garden::GardenSetTempoRequest>(),
         },
+        // Uses manual schema: #[serde(default)] on variables
         ToolInfo {
             name: "garden_query".to_string(),
             description: "Query garden state".to_string(),
-            input_schema: schema_for::<super::tools::garden::GardenQueryRequest>(),
+            input_schema: manual_schemas::garden_query_request(),
         },
         // Config Tools
         ToolInfo {
@@ -174,15 +186,17 @@ pub fn list_tools() -> Vec<ToolInfo> {
             input_schema: schema_for::<super::tools::config::ConfigGetRequest>(),
         },
         // Generation Tools
+        // Uses manual schema: #[serde(default)] on inference, as_loop, tags, num_variations, creator
         ToolInfo {
             name: "sample".to_string(),
             description: "Generate MIDI from scratch".to_string(),
-            input_schema: schema_for::<super::native::SampleRequest>(),
+            input_schema: manual_schemas::sample_request(),
         },
+        // Uses manual schema: #[serde(default)] on inference, tags, num_variations, creator
         ToolInfo {
             name: "extend".to_string(),
             description: "Continue existing MIDI content".to_string(),
-            input_schema: schema_for::<super::native::extend::ExtendRequest>(),
+            input_schema: manual_schemas::extend_request(),
         },
         ToolInfo {
             name: "schedule".to_string(),
@@ -262,10 +276,11 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Get current vibeweaver session state".to_string(),
             input_schema: schema_for::<WeaveSessionRequest>(),
         },
+        // Uses manual schema: #[serde(default)] on clear_session
         ToolInfo {
             name: "weave_reset".to_string(),
             description: "Reset vibeweaver kernel".to_string(),
-            input_schema: schema_for::<WeaveResetRequest>(),
+            input_schema: manual_schemas::weave_reset_request(),
         },
         ToolInfo {
             name: "weave_help".to_string(),
