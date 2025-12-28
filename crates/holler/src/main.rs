@@ -45,8 +45,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Test connectivity to a ZMQ backend
+    ///
+    /// Example: holler ping tcp://localhost:5580
+    #[command(after_help = "EXAMPLES:\n    holler ping tcp://localhost:5580\n    holler ping tcp://192.168.1.10:5580 -t 10000")]
     Ping {
-        /// ZMQ endpoint (e.g., tcp://127.0.0.1:5570)
+        /// ZMQ endpoint URL (must be tcp://host:port format)
+        #[arg(value_name = "URL")]
         endpoint: String,
 
         /// Timeout in milliseconds

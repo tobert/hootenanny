@@ -6,8 +6,25 @@ use hooteproto::request::{JobStatusRequest, JobListRequest, JobPollRequest, Tool
 
 use crate::client::Client;
 
+/// Validate that an endpoint looks like a ZMQ URI
+fn validate_endpoint(endpoint: &str) -> Result<()> {
+    if !endpoint.starts_with("tcp://") && !endpoint.starts_with("ipc://") {
+        bail!(
+            "Invalid endpoint: '{}'\n\n\
+             ZMQ endpoints must be URIs like:\n  \
+             tcp://localhost:5580\n  \
+             tcp://192.168.1.10:5580\n  \
+             ipc:///tmp/hootenanny.sock\n\n\
+             Hootenanny default: tcp://localhost:5580",
+            endpoint
+        );
+    }
+    Ok(())
+}
+
 /// Test connectivity with a Ping/Pong exchange
 pub async fn ping(endpoint: &str, timeout_ms: u64) -> Result<()> {
+    validate_endpoint(endpoint)?;
     let client = Client::connect(endpoint, timeout_ms).await?;
 
     let start = std::time::Instant::now();
@@ -33,6 +50,7 @@ pub async fn ping(endpoint: &str, timeout_ms: u64) -> Result<()> {
 
 /// Send a raw JSON payload and print the response
 pub async fn send(endpoint: &str, json: &str, timeout_ms: u64) -> Result<()> {
+    validate_endpoint(endpoint)?;
     let payload: Payload = serde_json::from_str(json)
         .context("Failed to parse JSON as Payload")?;
 
@@ -47,6 +65,7 @@ pub async fn send(endpoint: &str, json: &str, timeout_ms: u64) -> Result<()> {
 
 /// Get status of a specific job
 pub async fn job_status(endpoint: &str, job_id: &str, timeout_ms: u64) -> Result<()> {
+    validate_endpoint(endpoint)?;
     let payload = Payload::ToolRequest(ToolRequest::JobStatus(JobStatusRequest {
         job_id: job_id.to_string(),
     }));
@@ -72,6 +91,7 @@ pub async fn job_status(endpoint: &str, job_id: &str, timeout_ms: u64) -> Result
 
 /// List all jobs
 pub async fn job_list(endpoint: &str, status: Option<&str>, timeout_ms: u64) -> Result<()> {
+    validate_endpoint(endpoint)?;
     let payload = Payload::ToolRequest(ToolRequest::JobList(JobListRequest {
         status: status.map(|s| s.to_string()),
     }));
@@ -102,6 +122,7 @@ pub async fn job_poll(
     timeout_ms: u64,
     mode: &str,
 ) -> Result<()> {
+    validate_endpoint(endpoint)?;
     // Mode is "any" or "all" string in CLI
     let payload = Payload::ToolRequest(ToolRequest::JobPoll(JobPollRequest {
         job_ids,
