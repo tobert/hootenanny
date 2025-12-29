@@ -65,6 +65,66 @@ All tools use consistent prefixes for discoverability:
 | `agent_chat_*` | LLM sub-agents | `agent_chat_new`, `agent_chat_send` |
 | `weave_*` | Python kernel (vibeweaver) | `weave_eval`, `weave_session`, `weave_reset` |
 
+### Adding New Tools & Cap'n Proto Schemas
+
+When adding new tools or modifying the protocol, follow this checklist to ensure cargo properly rebuilds:
+
+#### Adding a New Schema File
+
+1. Create `crates/hooteproto/schemas/newschema.capnp`
+2. **Update `build.rs`** - Add both the file reference AND the rerun directive:
+   ```rust
+   // In the schemas array:
+   "schemas/newschema.capnp",
+   ```
+3. Add the generated module to `lib.rs`:
+   ```rust
+   pub mod newschema_capnp {
+       include!(concat!(env!("OUT_DIR"), "/newschema_capnp.rs"));
+   }
+   ```
+
+#### Modifying Existing Schemas
+
+When you change a `.capnp` file, cargo should automatically rebuild thanks to `build.rs` watching each file individually. If it doesn't rebuild:
+
+```bash
+# Force rebuild of hooteproto
+cargo clean -p hooteproto && cargo build -p hooteproto
+```
+
+**Why this matters:** Cargo's directory watching (`rerun-if-changed=schemas/`) only detects file additions/removals, not content changes. We explicitly list each schema file to ensure content changes trigger rebuilds.
+
+#### Adding a New Tool (Full Checklist)
+
+1. **Schema** (`crates/hooteproto/schemas/tools.capnp`)
+   - Add request struct (e.g., `struct MyToolRequest { ... }`)
+   - Add variant to `ToolRequest` union with next available ordinal
+
+2. **Rust Types** (`crates/hooteproto/src/request.rs`)
+   - Add `MyToolRequest` struct with serde derives
+   - Add `MyTool(MyToolRequest)` variant to `ToolRequest` enum
+   - Implement `tool_name()` and `timing()` for the variant
+
+3. **Serialization** (`crates/hooteproto/src/conversion.rs`)
+   - Add serialization in `request_to_capnp_tool_request()`
+   - Add deserialization in `capnp_tool_request_to_request()`
+
+4. **Response** (if tool returns data)
+   - Add response struct to `schemas/responses.capnp`
+   - Add Rust type to `crates/hooteproto/src/responses.rs`
+   - Add serialization/deserialization in `conversion.rs`
+
+5. **MCP Dispatch** (`crates/holler/src/dispatch.rs`)
+   - Add JSON args struct (e.g., `struct MyToolArgs { ... }`)
+   - Add match arm in `json_to_payload()` for `"my_tool"`
+
+6. **Typed Dispatcher** (`crates/hootenanny/src/api/typed_dispatcher.rs`)
+   - Add match arm in `dispatch_async()` or `dispatch_fire_and_forget()` based on timing
+
+7. **Tool Schema** (`crates/hootenanny/src/api/tools_registry.rs`)
+   - Add to `list_tools()` with JSON schema for MCP discovery
+
 ## 🔮 Trustfall: The Unified Query Layer
 
 **All graph queries go through Trustfall.** The `audio-graph-mcp` crate provides a Trustfall adapter that exposes a unified schema for querying:

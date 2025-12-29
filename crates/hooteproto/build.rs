@@ -1,17 +1,26 @@
 fn main() {
-    println!("cargo:rerun-if-changed=schemas/");
+    // Watch each schema file individually - directory watching only catches add/remove,
+    // not content changes
+    let schemas = [
+        "schemas/common.capnp",
+        "schemas/jobs.capnp",
+        "schemas/tools.capnp",
+        "schemas/streams.capnp",
+        "schemas/responses.capnp",
+        "schemas/envelope.capnp",
+        "schemas/garden.capnp",
+        "schemas/broadcast.capnp",
+        "schemas/vibeweaver.capnp",
+    ];
 
-    capnpc::CompilerCommand::new()
-        .src_prefix("schemas")
-        .file("schemas/common.capnp")
-        .file("schemas/jobs.capnp")
-        .file("schemas/tools.capnp")
-        .file("schemas/streams.capnp")
-        .file("schemas/responses.capnp")
-        .file("schemas/envelope.capnp")
-        .file("schemas/garden.capnp")
-        .file("schemas/broadcast.capnp")
-        .file("schemas/vibeweaver.capnp")
-        .run()
-        .expect("capnp compile failed");
+    for schema in &schemas {
+        println!("cargo:rerun-if-changed={}", schema);
+    }
+
+    let mut cmd = capnpc::CompilerCommand::new();
+    cmd.src_prefix("schemas");
+    for schema in &schemas {
+        cmd.file(schema);
+    }
+    cmd.run().expect("capnp compile failed");
 }

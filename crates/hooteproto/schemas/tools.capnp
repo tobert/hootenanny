@@ -115,6 +115,12 @@ struct ToolRequest {
     getToolHelp @71 :GetToolHelp;
     schedule @72 :Schedule;
     analyze @73 :Analyze;
+
+    # === Native High-Level Tools ===
+    nativeSample @75 :NativeSample;
+    nativeExtend @76 :NativeExtend;
+    nativeBridge @77 :NativeBridge;
+    nativeProject @78 :NativeProject;
   }
 }
 
@@ -420,4 +426,44 @@ struct Analyze {
   encoding @0 :Common.Encoding;
   tasks @1 :List(Common.AnalysisTask);
   zeroShotLabels @2 :List(Text);  # Labels for zero-shot classification (if task includes zeroShot)
+}
+
+# === Native High-Level Tool Types ===
+
+# Sample from generative space
+struct NativeSample {
+  space @0 :Common.Space;
+  inference @1 :Common.InferenceContext;
+  numVariations @2 :UInt32;
+  prompt @3 :Text;
+  seed @4 :Common.Encoding;     # Optional seed encoding
+  hasSeed @5 :Bool;             # Whether seed is set
+  asLoop @6 :Bool;
+  metadata @7 :Common.ArtifactMetadata;
+}
+
+# Extend existing content
+struct NativeExtend {
+  encoding @0 :Common.Encoding;
+  space @1 :Common.Space;
+  hasSpace @2 :Bool;            # Whether space is explicitly set
+  inference @3 :Common.InferenceContext;
+  numVariations @4 :UInt32;
+  metadata @5 :Common.ArtifactMetadata;
+}
+
+# Bridge between sections
+struct NativeBridge {
+  from @0 :Common.Encoding;
+  to @1 :Common.Encoding;
+  hasTo @2 :Bool;               # Whether 'to' is set
+  inference @3 :Common.InferenceContext;
+  metadata @4 :Common.ArtifactMetadata;
+}
+
+# Project to different format
+struct NativeProject {
+  encoding @0 :Common.Encoding;
+  target @1 :Common.ProjectionTarget;
+  metadata @2 :Common.ArtifactMetadata;
 }

@@ -155,7 +155,7 @@ impl ServerHandler for ZmqHandler {
                 .map(serde_json::Value::Object)
                 .unwrap_or(serde_json::Value::Null);
 
-            info!(tool = %name, "Tool call via ZMQ");
+            info!(tool = %name, args = ?arguments, "📥 Tool call received");
 
             let backend = {
                 let backends_guard = self.backends.read().await;
@@ -172,8 +172,12 @@ impl ServerHandler for ZmqHandler {
 
             // Convert JSON args to typed Payload (JSON boundary is here in holler)
             let payload = match dispatch::json_to_payload(name, arguments) {
-                Ok(p) => p,
+                Ok(p) => {
+                    debug!("✅ JSON to Payload conversion succeeded for {}", name);
+                    p
+                }
                 Err(e) => {
+                    warn!("❌ JSON to Payload conversion failed for {}: {}", name, e);
                     return Err(McpError::invalid_params(
                         format!("Failed to parse arguments for {}: {}", name, e),
                         None,
@@ -181,6 +185,7 @@ impl ServerHandler for ZmqHandler {
                 }
             };
 
+            debug!("📤 Sending {} to backend", name);
             match backend.request(payload).await {
                 Ok(Payload::TypedResponse(envelope)) => {
                     let result = envelope.to_json();

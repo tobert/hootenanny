@@ -91,3 +91,41 @@ enum AnalysisTask {
   mood @4;
   zeroShot @5;
 }
+
+# Generative spaces for sample/extend/bridge tools
+enum Space {
+  orpheus @0;
+  orpheusChildren @1;
+  orpheusMonoMelodies @2;
+  orpheusLoops @3;
+  orpheusBridge @4;
+  musicGen @5;
+  yue @6;
+  abc @7;
+}
+
+# Inference parameters for generative models
+struct InferenceContext {
+  temperature @0 :Float32;
+  topP @1 :Float32;
+  topK @2 :UInt32;
+  seed @3 :UInt64;
+  maxTokens @4 :UInt32;
+  durationSeconds @5 :Float32;
+  guidanceScale @6 :Float32;
+  variant @7 :Text;
+}
+
+# Target format for content projection
+struct ProjectionTarget {
+  union {
+    audio :group {
+      soundfontHash @0 :Text;
+      sampleRate @1 :UInt32;
+    }
+    midi :group {
+      channel @2 :UInt8;
+      velocity @3 :UInt8;
+    }
+  }
+}

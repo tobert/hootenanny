@@ -485,6 +485,10 @@ impl HootClient {
         traceparent: &Option<String>,
     ) -> Result<Vec<Bytes>> {
         let message = payload_to_capnp_envelope(request_id, payload)
+            .map_err(|e| {
+                tracing::error!("Capnp encoding failed for {:?}: {}", payload, e);
+                e
+            })
             .context("Failed to encode payload")?;
         let body_bytes = capnp::serialize::write_message_to_words(&message);
 
