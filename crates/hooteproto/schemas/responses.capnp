@@ -90,6 +90,14 @@ struct ToolResponse {
 
     # CAS Stats
     casStats @45 :CasStatsResponse;
+
+    # Project Result
+    projectResult @46 :ProjectResultResponse;
+
+    # Graph Results
+    graphBind @47 :GraphBindResponse;
+    graphTag @48 :GraphTagResponse;
+    graphConnect @49 :GraphConnectResponse;
   }
 }
 
@@ -560,10 +568,42 @@ struct ScheduleResultResponse {
 # =============================================================================
 
 struct AnalyzeResultResponse {
-  taskResults @0 :List(AnalysisTaskResult);
+  contentHash @0 :Text;
+  results @1 :Text;           # JSON - analysis results vary by task
+  summary @2 :Text;
+  artifactId @3 :Text;        # Empty if not stored
 }
 
-struct AnalysisTaskResult {
-  task @0 :Text;
-  result @1 :Text;            # JSON - analysis results vary by task
+# =============================================================================
+# Project Response
+# =============================================================================
+
+struct ProjectResultResponse {
+  artifactId @0 :Text;
+  contentHash @1 :Text;
+  projectionType @2 :Text;
+  durationSeconds @3 :Float64;  # 0.0 if not audio
+  sampleRate @4 :UInt32;        # 0 if not audio
+}
+
+# =============================================================================
+# Graph Responses
+# =============================================================================
+
+struct GraphBindResponse {
+  identityId @0 :Text;
+  name @1 :Text;
+  hintsCount @2 :UInt32;
+}
+
+struct GraphTagResponse {
+  identityId @0 :Text;
+  tag @1 :Text;
+}
+
+struct GraphConnectResponse {
+  fromIdentity @0 :Text;
+  fromPort @1 :Text;
+  toIdentity @2 :Text;
+  toPort @3 :Text;
 }

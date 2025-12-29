@@ -634,18 +634,52 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             }
         }
 
-        // Native tool requests - TODO: add capnp schema support
-        ToolRequest::Sample(_) => {
-            return Err(capnp::Error::failed("ToolRequest::Sample capnp not yet implemented".to_string()));
+        // Native high-level tool requests
+        ToolRequest::Sample(req) => {
+            let mut s = builder.reborrow().init_native_sample();
+            s.set_space(space_to_capnp(&req.space));
+            inference_to_capnp(s.reborrow().init_inference(), &req.inference);
+            s.set_num_variations(req.num_variations.unwrap_or(1));
+            s.set_prompt(req.prompt.as_deref().unwrap_or(""));
+            if let Some(ref seed) = req.seed {
+                s.set_has_seed(true);
+                encoding_to_capnp(s.reborrow().init_seed(), seed);
+            } else {
+                s.set_has_seed(false);
+            }
+            s.set_as_loop(req.as_loop);
+            set_artifact_metadata(&mut s.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
         }
-        ToolRequest::Extend(_) => {
-            return Err(capnp::Error::failed("ToolRequest::Extend capnp not yet implemented".to_string()));
+        ToolRequest::Extend(req) => {
+            let mut e = builder.reborrow().init_native_extend();
+            encoding_to_capnp(e.reborrow().init_encoding(), &req.encoding);
+            if let Some(ref space) = req.space {
+                e.set_has_space(true);
+                e.set_space(space_to_capnp(space));
+            } else {
+                e.set_has_space(false);
+            }
+            inference_to_capnp(e.reborrow().init_inference(), &req.inference);
+            e.set_num_variations(req.num_variations.unwrap_or(1));
+            set_artifact_metadata(&mut e.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
         }
-        ToolRequest::Bridge(_) => {
-            return Err(capnp::Error::failed("ToolRequest::Bridge capnp not yet implemented".to_string()));
+        ToolRequest::Bridge(req) => {
+            let mut b = builder.reborrow().init_native_bridge();
+            encoding_to_capnp(b.reborrow().init_from(), &req.from);
+            if let Some(ref to) = req.to {
+                b.set_has_to(true);
+                encoding_to_capnp(b.reborrow().init_to(), to);
+            } else {
+                b.set_has_to(false);
+            }
+            inference_to_capnp(b.reborrow().init_inference(), &req.inference);
+            set_artifact_metadata(&mut b.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
         }
-        ToolRequest::Project(_) => {
-            return Err(capnp::Error::failed("ToolRequest::Project capnp not yet implemented".to_string()));
+        ToolRequest::Project(req) => {
+            let mut p = builder.reborrow().init_native_project();
+            encoding_to_capnp(p.reborrow().init_encoding(), &req.encoding);
+            projection_target_to_capnp(p.reborrow().init_target(), &req.target);
+            set_artifact_metadata(&mut p.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
         }
 
         ToolRequest::Ping => {
@@ -1089,6 +1123,63 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
             }))
         }
 
+        // Native high-level tools
+        tools_capnp::tool_request::NativeSample(s) => {
+            let s = s?;
+            let m = s.get_metadata()?;
+            Ok(ToolRequest::Sample(SampleRequest {
+                space: capnp_to_space(s.get_space()?),
+                inference: capnp_to_inference(s.get_inference()?)?,
+                num_variations: Some(s.get_num_variations()).filter(|&v| v != 0),
+                prompt: capnp_optional_string(s.get_prompt()?),
+                seed: if s.get_has_seed() { Some(capnp_to_encoding(s.get_seed()?)?) } else { None },
+                as_loop: s.get_as_loop(),
+                variation_set_id: capnp_optional_string(m.get_variation_set_id()?),
+                parent_id: capnp_optional_string(m.get_parent_id()?),
+                tags: capnp_string_list(m.get_tags()?),
+                creator: capnp_optional_string(m.get_creator()?),
+            }))
+        }
+        tools_capnp::tool_request::NativeExtend(e) => {
+            let e = e?;
+            let m = e.get_metadata()?;
+            Ok(ToolRequest::Extend(ExtendRequest {
+                encoding: capnp_to_encoding(e.get_encoding()?)?,
+                space: if e.get_has_space() { Some(capnp_to_space(e.get_space()?)) } else { None },
+                inference: capnp_to_inference(e.get_inference()?)?,
+                num_variations: Some(e.get_num_variations()).filter(|&v| v != 0),
+                variation_set_id: capnp_optional_string(m.get_variation_set_id()?),
+                parent_id: capnp_optional_string(m.get_parent_id()?),
+                tags: capnp_string_list(m.get_tags()?),
+                creator: capnp_optional_string(m.get_creator()?),
+            }))
+        }
+        tools_capnp::tool_request::NativeBridge(b) => {
+            let b = b?;
+            let m = b.get_metadata()?;
+            Ok(ToolRequest::Bridge(BridgeRequest {
+                from: capnp_to_encoding(b.get_from()?)?,
+                to: if b.get_has_to() { Some(capnp_to_encoding(b.get_to()?)?) } else { None },
+                inference: capnp_to_inference(b.get_inference()?)?,
+                variation_set_id: capnp_optional_string(m.get_variation_set_id()?),
+                parent_id: capnp_optional_string(m.get_parent_id()?),
+                tags: capnp_string_list(m.get_tags()?),
+                creator: capnp_optional_string(m.get_creator()?),
+            }))
+        }
+        tools_capnp::tool_request::NativeProject(p) => {
+            let p = p?;
+            let m = p.get_metadata()?;
+            Ok(ToolRequest::Project(ProjectRequest {
+                encoding: capnp_to_encoding(p.get_encoding()?)?,
+                target: capnp_to_projection_target(p.get_target()?)?,
+                variation_set_id: capnp_optional_string(m.get_variation_set_id()?),
+                parent_id: capnp_optional_string(m.get_parent_id()?),
+                tags: capnp_string_list(m.get_tags()?),
+                creator: capnp_optional_string(m.get_creator()?),
+            }))
+        }
+
         _ => Err(capnp::Error::failed("Unsupported ToolRequest variant".to_string())),
     }
 }
@@ -1223,6 +1314,103 @@ fn analysis_task_to_capnp(task: &AnalysisTask) -> common_capnp::AnalysisTask {
         AnalysisTask::Genre => common_capnp::AnalysisTask::Genre,
         AnalysisTask::Mood => common_capnp::AnalysisTask::Mood,
         AnalysisTask::ZeroShot { .. } => common_capnp::AnalysisTask::ZeroShot,
+    }
+}
+
+// =============================================================================
+// Native Tool Helper Functions
+// =============================================================================
+
+/// Helper: Convert Rust Space to capnp Space
+fn space_to_capnp(space: &crate::Space) -> common_capnp::Space {
+    match space {
+        crate::Space::Orpheus => common_capnp::Space::Orpheus,
+        crate::Space::OrpheusChildren => common_capnp::Space::OrpheusChildren,
+        crate::Space::OrpheusMonoMelodies => common_capnp::Space::OrpheusMonoMelodies,
+        crate::Space::OrpheusLoops => common_capnp::Space::OrpheusLoops,
+        crate::Space::OrpheusBridge => common_capnp::Space::OrpheusBridge,
+        crate::Space::MusicGen => common_capnp::Space::MusicGen,
+        crate::Space::Yue => common_capnp::Space::Yue,
+        crate::Space::Abc => common_capnp::Space::Abc,
+    }
+}
+
+/// Helper: Convert capnp Space to Rust Space
+fn capnp_to_space(space: common_capnp::Space) -> crate::Space {
+    match space {
+        common_capnp::Space::Orpheus => crate::Space::Orpheus,
+        common_capnp::Space::OrpheusChildren => crate::Space::OrpheusChildren,
+        common_capnp::Space::OrpheusMonoMelodies => crate::Space::OrpheusMonoMelodies,
+        common_capnp::Space::OrpheusLoops => crate::Space::OrpheusLoops,
+        common_capnp::Space::OrpheusBridge => crate::Space::OrpheusBridge,
+        common_capnp::Space::MusicGen => crate::Space::MusicGen,
+        common_capnp::Space::Yue => crate::Space::Yue,
+        common_capnp::Space::Abc => crate::Space::Abc,
+    }
+}
+
+/// Helper: Convert Rust InferenceContext to capnp InferenceContext
+fn inference_to_capnp(mut builder: common_capnp::inference_context::Builder, inference: &crate::InferenceContext) {
+    builder.set_temperature(inference.temperature.unwrap_or(0.0));
+    builder.set_top_p(inference.top_p.unwrap_or(0.0));
+    builder.set_top_k(inference.top_k.unwrap_or(0));
+    builder.set_seed(inference.seed.unwrap_or(0));
+    builder.set_max_tokens(inference.max_tokens.unwrap_or(0));
+    builder.set_duration_seconds(inference.duration_seconds.unwrap_or(0.0));
+    builder.set_guidance_scale(inference.guidance_scale.unwrap_or(0.0));
+    builder.set_variant(inference.variant.as_deref().unwrap_or(""));
+}
+
+/// Helper: Convert capnp InferenceContext to Rust InferenceContext
+fn capnp_to_inference(reader: common_capnp::inference_context::Reader) -> capnp::Result<crate::InferenceContext> {
+    Ok(crate::InferenceContext {
+        temperature: Some(reader.get_temperature()).filter(|&v| v != 0.0),
+        top_p: Some(reader.get_top_p()).filter(|&v| v != 0.0),
+        top_k: Some(reader.get_top_k()).filter(|&v| v != 0),
+        seed: Some(reader.get_seed()).filter(|&v| v != 0),
+        max_tokens: Some(reader.get_max_tokens()).filter(|&v| v != 0),
+        duration_seconds: Some(reader.get_duration_seconds()).filter(|&v| v != 0.0),
+        guidance_scale: Some(reader.get_guidance_scale()).filter(|&v| v != 0.0),
+        variant: {
+            let v = reader.get_variant()?.to_str()?;
+            if v.is_empty() { None } else { Some(v.to_string()) }
+        },
+    })
+}
+
+/// Helper: Convert Rust ProjectionTarget to capnp ProjectionTarget
+fn projection_target_to_capnp(builder: common_capnp::projection_target::Builder, target: &crate::ProjectionTarget) {
+    match target {
+        crate::ProjectionTarget::Audio { soundfont_hash, sample_rate } => {
+            let mut a = builder.init_audio();
+            a.set_soundfont_hash(soundfont_hash);
+            a.set_sample_rate(sample_rate.unwrap_or(44100));
+        }
+        crate::ProjectionTarget::Midi { channel, velocity } => {
+            let mut m = builder.init_midi();
+            m.set_channel(channel.unwrap_or(0));
+            m.set_velocity(velocity.unwrap_or(80));
+        }
+    }
+}
+
+/// Helper: Convert capnp ProjectionTarget to Rust ProjectionTarget
+fn capnp_to_projection_target(reader: common_capnp::projection_target::Reader) -> capnp::Result<crate::ProjectionTarget> {
+    match reader.which()? {
+        common_capnp::projection_target::Audio(a) => {
+            let a = a;
+            Ok(crate::ProjectionTarget::Audio {
+                soundfont_hash: a.get_soundfont_hash()?.to_str()?.to_string(),
+                sample_rate: Some(a.get_sample_rate()).filter(|&v| v != 0),
+            })
+        }
+        common_capnp::projection_target::Midi(m) => {
+            let m = m;
+            Ok(crate::ProjectionTarget::Midi {
+                channel: Some(m.get_channel()).filter(|&v| v != 0),
+                velocity: Some(m.get_velocity()).filter(|&v| v != 0),
+            })
+        }
     }
 }
 
@@ -1679,24 +1867,22 @@ fn response_to_capnp_tool_response(
             b.set_count(r.count as u64);
         }
         ToolResponse::GraphBind(r) => {
-            // Reuse graph_identity structure
-            let mut b = builder.reborrow().init_graph_identity();
-            b.set_id(&r.identity_id);
+            let mut b = builder.reborrow().init_graph_bind();
+            b.set_identity_id(&r.identity_id);
             b.set_name(&r.name);
-            b.set_created_at(0); // Not tracked in bind response
+            b.set_hints_count(r.hints_count as u32);
         }
         ToolResponse::GraphTag(r) => {
-            let msg = format!("Tagged {} with {}", r.identity_id, r.tag);
-            builder.reborrow().init_ack().set_message(&msg);
+            let mut b = builder.reborrow().init_graph_tag();
+            b.set_identity_id(&r.identity_id);
+            b.set_tag(&r.tag);
         }
         ToolResponse::GraphConnect(r) => {
-            let mut b = builder.reborrow().init_graph_connection();
-            b.set_connection_id(""); // Not tracked
+            let mut b = builder.reborrow().init_graph_connect();
             b.set_from_identity(&r.from_identity);
             b.set_from_port(&r.from_port);
             b.set_to_identity(&r.to_identity);
             b.set_to_port(&r.to_port);
-            b.set_transport("");
         }
 
         // Config
@@ -1768,12 +1954,21 @@ fn response_to_capnp_tool_response(
             b.set_artifact_id(&r.artifact_id);
         }
 
-        // Native tool responses - TODO: add capnp schema support
-        ToolResponse::AnalyzeResult(_) => {
-            return Err(capnp::Error::failed("ToolResponse::AnalyzeResult capnp not yet implemented".to_string()));
+        // Native tool responses
+        ToolResponse::AnalyzeResult(r) => {
+            let mut b = builder.reborrow().init_analyze_result();
+            b.set_content_hash(&r.content_hash);
+            b.set_results(&serde_json::to_string(&r.results).unwrap_or_default());
+            b.set_summary(&r.summary);
+            b.set_artifact_id(r.artifact_id.as_deref().unwrap_or(""));
         }
-        ToolResponse::ProjectResult(_) => {
-            return Err(capnp::Error::failed("ToolResponse::ProjectResult capnp not yet implemented".to_string()));
+        ToolResponse::ProjectResult(r) => {
+            let mut b = builder.reborrow().init_project_result();
+            b.set_artifact_id(&r.artifact_id);
+            b.set_content_hash(&r.content_hash);
+            b.set_projection_type(&r.projection_type);
+            b.set_duration_seconds(r.duration_seconds.unwrap_or(0.0));
+            b.set_sample_rate(r.sample_rate.unwrap_or(0));
         }
     }
     Ok(())
@@ -2464,10 +2659,60 @@ fn capnp_tool_response_to_response(
             }))
         }
 
-        // New response types added in responses.capnp but not yet fully implemented
-        Which::ToolHelp(_) |
-        Which::AnalyzeResult(_) => {
-            Err(capnp::Error::failed("Unimplemented response type".to_string()))
+        Which::ToolHelp(_) => {
+            // ToolHelp exists in capnp schema but not in Rust ToolResponse enum
+            Err(capnp::Error::failed("ToolHelp response type not implemented in Rust".to_string()))
+        }
+
+        Which::AnalyzeResult(r) => {
+            let r = r?;
+            let artifact_id = r.get_artifact_id()?.to_string()?;
+            Ok(ToolResponse::AnalyzeResult(AnalyzeResultResponse {
+                content_hash: r.get_content_hash()?.to_string()?,
+                results: serde_json::from_str(r.get_results()?.to_str()?).unwrap_or_default(),
+                summary: r.get_summary()?.to_string()?,
+                artifact_id: if artifact_id.is_empty() { None } else { Some(artifact_id) },
+            }))
+        }
+
+        Which::ProjectResult(r) => {
+            let r = r?;
+            let duration = r.get_duration_seconds();
+            let sample_rate = r.get_sample_rate();
+            Ok(ToolResponse::ProjectResult(ProjectResultResponse {
+                artifact_id: r.get_artifact_id()?.to_string()?,
+                content_hash: r.get_content_hash()?.to_string()?,
+                projection_type: r.get_projection_type()?.to_string()?,
+                duration_seconds: if duration > 0.0 { Some(duration) } else { None },
+                sample_rate: if sample_rate > 0 { Some(sample_rate) } else { None },
+            }))
+        }
+
+        Which::GraphBind(r) => {
+            let r = r?;
+            Ok(ToolResponse::GraphBind(GraphBindResponse {
+                identity_id: r.get_identity_id()?.to_string()?,
+                name: r.get_name()?.to_string()?,
+                hints_count: r.get_hints_count() as usize,
+            }))
+        }
+
+        Which::GraphTag(r) => {
+            let r = r?;
+            Ok(ToolResponse::GraphTag(GraphTagResponse {
+                identity_id: r.get_identity_id()?.to_string()?,
+                tag: r.get_tag()?.to_string()?,
+            }))
+        }
+
+        Which::GraphConnect(r) => {
+            let r = r?;
+            Ok(ToolResponse::GraphConnect(GraphConnectResponse {
+                from_identity: r.get_from_identity()?.to_string()?,
+                from_port: r.get_from_port()?.to_string()?,
+                to_identity: r.get_to_identity()?.to_string()?,
+                to_port: r.get_to_port()?.to_string()?,
+            }))
         }
     }
 }
@@ -2502,5 +2747,42 @@ fn capnp_to_weave_output_type(output_type: responses_capnp::WeaveOutputType) -> 
     match output_type {
         responses_capnp::WeaveOutputType::Expression => WeaveOutputType::Expression,
         responses_capnp::WeaveOutputType::Statement => WeaveOutputType::Statement,
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Payload, Space, InferenceContext, request::SampleRequest};
+    use uuid::Uuid;
+
+    #[test]
+    fn test_sample_request_serialization() {
+        let req = SampleRequest {
+            space: Space::Orpheus,
+            inference: InferenceContext {
+                temperature: Some(1.0),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                max_tokens: Some(512),
+                duration_seconds: None,
+                guidance_scale: None,
+                variant: None,
+            },
+            num_variations: Some(1),
+            prompt: None,
+            seed: None,
+            as_loop: false,
+            variation_set_id: None,
+            parent_id: None,
+            tags: vec!["test".to_string()],
+            creator: Some("claude".to_string()),
+        };
+        
+        let payload = Payload::ToolRequest(crate::request::ToolRequest::Sample(req));
+        let request_id = Uuid::new_v4();
+        
+        let result = payload_to_capnp_envelope(request_id, &payload);
+        assert!(result.is_ok(), "Serialization failed: {:?}", result.err());
     }
 }
