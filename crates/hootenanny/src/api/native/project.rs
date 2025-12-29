@@ -5,43 +5,18 @@
 //! - ABC notation to MIDI
 //! - Audio format conversions (future)
 
-use crate::api::native::types::{Encoding, OutputType, ProjectionTarget};
 use crate::api::responses::{JobSpawnResponse, JobStatus};
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::mcp_tools::rustysynth::{inspect_soundfont, render_midi_to_wav};
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
 use hooteproto::responses::{AudioFormat, AudioGeneratedResponse, ToolResponse};
-use hooteproto::{ToolError, ToolOutput, ToolResult};
+use hooteproto::{Encoding, OutputType, ProjectionTarget, ToolError, ToolOutput, ToolResult};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-fn default_creator() -> Option<String> {
-    Some("unknown".to_string())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct ProjectRequest {
-    #[schemars(description = "Source content to project")]
-    pub encoding: Encoding,
-
-    #[schemars(description = "Target format/space")]
-    pub target: ProjectionTarget,
-
-    #[schemars(description = "Variation set ID for grouping")]
-    pub variation_set_id: Option<String>,
-
-    #[schemars(description = "Parent artifact ID")]
-    pub parent_id: Option<String>,
-
-    #[schemars(description = "Tags for organizing")]
-    #[serde(default)]
-    pub tags: Vec<String>,
-
-    #[schemars(description = "Creator identifier")]
-    #[serde(default = "default_creator")]
-    pub creator: Option<String>,
-}
+// Re-export from hooteproto for backwards compatibility
+pub use hooteproto::request::ProjectRequest;
 
 /// Response from project tool
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]

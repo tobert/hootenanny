@@ -3,63 +3,18 @@
 //! This implements the model-native `sample()` API that abstracts different generative
 //! models (Orpheus, MusicGen, YuE) behind a unified interface based on the `Space` parameter.
 
-use crate::api::native::types::{Encoding, InferenceContext, Space};
 use crate::api::responses::{JobSpawnResponse, JobStatus};
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::mcp_tools::local_models::OrpheusGenerateParams;
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
 use hooteproto::responses::{AudioFormat, AudioGeneratedResponse, OrpheusGeneratedResponse, ToolResponse};
-use hooteproto::{ToolError, ToolOutput, ToolResult};
-use serde::{Deserialize, Serialize};
+use hooteproto::{Encoding, Space, ToolError, ToolOutput, ToolResult};
 use std::sync::Arc;
 use tracing;
 
-fn default_one() -> Option<u32> {
-    Some(1)
-}
-
-fn default_creator() -> Option<String> {
-    Some("unknown".to_string())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct SampleRequest {
-    #[schemars(description = "Generative space to sample from")]
-    pub space: Space,
-
-    #[schemars(description = "Inference parameters")]
-    #[serde(default)]
-    pub inference: InferenceContext,
-
-    #[schemars(description = "Number of variations to generate (default: 1)")]
-    #[serde(default = "default_one")]
-    pub num_variations: Option<u32>,
-
-    #[schemars(description = "Text prompt (for prompted spaces like musicgen, yue)")]
-    pub prompt: Option<String>,
-
-    #[schemars(description = "Seed encoding to condition on")]
-    pub seed: Option<Encoding>,
-
-    #[schemars(description = "Generate as loopable pattern (orpheus only)")]
-    #[serde(default)]
-    pub as_loop: bool,
-
-    #[schemars(description = "Variation set ID for grouping")]
-    pub variation_set_id: Option<String>,
-
-    #[schemars(description = "Parent artifact ID for refinements")]
-    pub parent_id: Option<String>,
-
-    #[schemars(description = "Tags for organizing")]
-    #[serde(default)]
-    pub tags: Vec<String>,
-
-    #[schemars(description = "Creator identifier")]
-    #[serde(default = "default_creator")]
-    pub creator: Option<String>,
-}
+// Re-export from hooteproto for backwards compatibility
+pub use hooteproto::request::SampleRequest;
 
 /// Look up an artifact by its ID and return the content hash
 fn artifact_to_hash<S: ArtifactStore>(store: &S, artifact_id: &str) -> Option<String> {

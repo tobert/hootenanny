@@ -2918,25 +2918,10 @@ impl EventDualityServer {
         &self,
         request: hooteproto::request::SampleRequest,
     ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
-        use crate::api::native::sample::SampleRequest as NativeSampleRequest;
         use hooteproto::responses::ToolResponse;
 
-        // Convert hooteproto types to native types
-        let native_request = NativeSampleRequest {
-            space: proto_to_native_space(request.space),
-            inference: proto_to_native_inference(request.inference),
-            num_variations: request.num_variations,
-            prompt: request.prompt,
-            seed: request.seed.map(proto_to_native_encoding),
-            as_loop: request.as_loop,
-            variation_set_id: request.variation_set_id,
-            parent_id: request.parent_id,
-            tags: request.tags,
-            creator: request.creator,
-        };
-
-        // Call the existing implementation
-        let result = self.sample(native_request).await?;
+        // Native modules now use hooteproto types directly
+        let result = self.sample(request).await?;
 
         // Extract job_id from the ToolOutput data
         let job_id = result.data.get("job_id")
@@ -2954,23 +2939,10 @@ impl EventDualityServer {
         &self,
         request: hooteproto::request::ExtendRequest,
     ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
-        use crate::api::native::extend::ExtendRequest as NativeExtendRequest;
         use hooteproto::responses::ToolResponse;
 
-        // Convert hooteproto types to native types
-        let native_request = NativeExtendRequest {
-            encoding: proto_to_native_encoding(request.encoding),
-            space: request.space.map(proto_to_native_space),
-            inference: proto_to_native_inference(request.inference),
-            num_variations: request.num_variations,
-            variation_set_id: request.variation_set_id,
-            parent_id: request.parent_id,
-            tags: request.tags,
-            creator: request.creator,
-        };
-
-        // Call the existing implementation
-        let result = self.extend(native_request).await?;
+        // Native modules now use hooteproto types directly
+        let result = self.extend(request).await?;
 
         // Extract job_id from the ToolOutput data
         let job_id = result.data.get("job_id")
@@ -2988,22 +2960,10 @@ impl EventDualityServer {
         &self,
         request: hooteproto::request::BridgeRequest,
     ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
-        use crate::api::native::bridge::BridgeRequest as NativeBridgeRequest;
         use hooteproto::responses::ToolResponse;
 
-        // Convert hooteproto types to native types
-        let native_request = NativeBridgeRequest {
-            from: proto_to_native_encoding(request.from),
-            to: request.to.map(proto_to_native_encoding),
-            inference: proto_to_native_inference(request.inference),
-            variation_set_id: request.variation_set_id,
-            parent_id: request.parent_id,
-            tags: request.tags,
-            creator: request.creator,
-        };
-
-        // Call the existing implementation
-        let result = self.bridge(native_request).await?;
+        // Native modules now use hooteproto types directly
+        let result = self.bridge(request).await?;
 
         // Extract job_id from the ToolOutput data
         let job_id = result.data.get("job_id")
@@ -3021,21 +2981,10 @@ impl EventDualityServer {
         &self,
         request: hooteproto::request::ProjectRequest,
     ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
-        use crate::api::native::project::ProjectRequest as NativeProjectRequest;
         use hooteproto::responses::ToolResponse;
 
-        // Convert hooteproto types to native types
-        let native_request = NativeProjectRequest {
-            encoding: proto_to_native_encoding(request.encoding),
-            target: proto_to_native_projection_target(request.target),
-            variation_set_id: request.variation_set_id,
-            parent_id: request.parent_id,
-            tags: request.tags,
-            creator: request.creator,
-        };
-
-        // Call the existing implementation
-        let result = self.project(native_request).await?;
+        // Native modules now use hooteproto types directly
+        let result = self.project(request).await?;
 
         // project() returns immediately for ABC→MIDI (sync) or spawns a job for MIDI→audio (async)
         // Extract job_id if it's an async projection, otherwise extract artifact_id
@@ -3166,60 +3115,3 @@ impl EventDualityServer {
     }
 }
 
-// =============================================================================
-// Conversion Helpers: hooteproto → native types
-// =============================================================================
-
-use crate::api::native::types as native;
-
-/// Convert hooteproto::Space to native::Space
-fn proto_to_native_space(space: hooteproto::Space) -> native::Space {
-    match space {
-        hooteproto::Space::Orpheus => native::Space::Orpheus,
-        hooteproto::Space::OrpheusChildren => native::Space::OrpheusChildren,
-        hooteproto::Space::OrpheusMonoMelodies => native::Space::OrpheusMonoMelodies,
-        hooteproto::Space::OrpheusLoops => native::Space::OrpheusLoops,
-        hooteproto::Space::OrpheusBridge => native::Space::OrpheusBridge,
-        hooteproto::Space::MusicGen => native::Space::MusicGen,
-        hooteproto::Space::Yue => native::Space::Yue,
-        hooteproto::Space::Abc => native::Space::Abc,
-    }
-}
-
-/// Convert hooteproto::InferenceContext to native::InferenceContext
-fn proto_to_native_inference(ctx: hooteproto::InferenceContext) -> native::InferenceContext {
-    native::InferenceContext {
-        temperature: ctx.temperature,
-        top_p: ctx.top_p,
-        top_k: ctx.top_k,
-        seed: ctx.seed,
-        max_tokens: ctx.max_tokens,
-        duration_seconds: ctx.duration_seconds,
-        guidance_scale: ctx.guidance_scale,
-        variant: ctx.variant,
-    }
-}
-
-/// Convert hooteproto::Encoding to native::Encoding
-fn proto_to_native_encoding(enc: hooteproto::Encoding) -> native::Encoding {
-    match enc {
-        hooteproto::Encoding::Midi { artifact_id } => native::Encoding::Midi { artifact_id },
-        hooteproto::Encoding::Audio { artifact_id } => native::Encoding::Audio { artifact_id },
-        hooteproto::Encoding::Abc { notation } => native::Encoding::Abc { notation },
-        hooteproto::Encoding::Hash { content_hash, format } => {
-            native::Encoding::Hash { content_hash, format }
-        }
-    }
-}
-
-/// Convert hooteproto::ProjectionTarget to native::ProjectionTarget
-fn proto_to_native_projection_target(target: hooteproto::ProjectionTarget) -> native::ProjectionTarget {
-    match target {
-        hooteproto::ProjectionTarget::Audio { soundfont_hash, sample_rate } => {
-            native::ProjectionTarget::Audio { soundfont_hash, sample_rate }
-        }
-        hooteproto::ProjectionTarget::Midi { channel, velocity } => {
-            native::ProjectionTarget::Midi { channel, velocity }
-        }
-    }
-}

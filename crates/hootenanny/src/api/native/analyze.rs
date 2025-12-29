@@ -4,43 +4,13 @@
 //! analysis models (Orpheus classifier, BeatThis, CLAP) based on the content type
 //! and requested analysis tasks.
 
-use crate::api::native::types::Encoding;
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::ArtifactStore;
-use hooteproto::{ToolError, ToolOutput, ToolResult};
-use serde::{Deserialize, Serialize};
+use hooteproto::{AnalysisTask, Encoding, OutputType, ToolError, ToolOutput, ToolResult};
 use tracing;
 
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AnalysisTask {
-    #[schemars(description = "Classify MIDI content (orpheus)")]
-    Classify,
-
-    #[schemars(description = "Detect beats in audio")]
-    Beats,
-
-    #[schemars(description = "Extract CLAP embeddings")]
-    Embeddings,
-
-    #[schemars(description = "Classify genre")]
-    Genre,
-
-    #[schemars(description = "Classify mood")]
-    Mood,
-
-    #[schemars(description = "Zero-shot classification with custom labels")]
-    ZeroShot { labels: Vec<String> },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AnalyzeRequest {
-    #[schemars(description = "Content to analyze")]
-    pub encoding: Encoding,
-
-    #[schemars(description = "Analysis tasks to run")]
-    pub tasks: Vec<AnalysisTask>,
-}
+// Re-export from hooteproto for backwards compatibility
+pub use hooteproto::request::AnalyzeRequest;
 
 /// Look up an artifact by its ID and return the content hash
 fn artifact_to_hash<S: ArtifactStore>(store: &S, artifact_id: &str) -> Option<String> {
@@ -110,7 +80,6 @@ impl EventDualityServer {
         }
 
         // Validate task compatibility with content type
-        use crate::api::native::types::OutputType;
         match output_type {
             OutputType::Midi => {
                 if !beat_tasks.is_empty() {

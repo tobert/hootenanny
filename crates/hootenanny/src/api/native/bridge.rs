@@ -3,47 +3,17 @@
 //! This implements the model-native `bridge()` API for creating transitions
 //! between musical sections using the Orpheus bridge model.
 
-use crate::api::native::types::{Encoding, InferenceContext};
 use crate::api::responses::{JobSpawnResponse, JobStatus};
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
 use hooteproto::responses::{OrpheusGeneratedResponse, ToolResponse};
-use hooteproto::{ToolError, ToolOutput, ToolResult};
-use serde::{Deserialize, Serialize};
+use hooteproto::{Encoding, ToolError, ToolOutput, ToolResult};
 use std::sync::Arc;
 use tracing;
 
-fn default_creator() -> Option<String> {
-    Some("unknown".to_string())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct BridgeRequest {
-    #[schemars(description = "Starting content (section A)")]
-    pub from: Encoding,
-
-    #[schemars(description = "Target content (section B) - optional, for future A->B bridging")]
-    pub to: Option<Encoding>,
-
-    #[schemars(description = "Inference parameters")]
-    #[serde(default)]
-    pub inference: InferenceContext,
-
-    #[schemars(description = "Variation set ID for grouping")]
-    pub variation_set_id: Option<String>,
-
-    #[schemars(description = "Parent artifact ID for refinements")]
-    pub parent_id: Option<String>,
-
-    #[schemars(description = "Tags for organizing")]
-    #[serde(default)]
-    pub tags: Vec<String>,
-
-    #[schemars(description = "Creator identifier")]
-    #[serde(default = "default_creator")]
-    pub creator: Option<String>,
-}
+// Re-export from hooteproto for backwards compatibility
+pub use hooteproto::request::BridgeRequest;
 
 /// Look up an artifact by its ID and return the content hash
 fn artifact_to_hash<S: ArtifactStore>(store: &S, artifact_id: &str) -> anyhow::Result<String> {
