@@ -212,8 +212,65 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             Ok(Payload::ToolRequest(ToolRequest::JobSleep(request::JobSleepRequest { milliseconds: p.milliseconds })))
         }
 
-        // === Orpheus Tools ===
-        "sample" | "orpheus_generate" => {
+        // === Native Tools (high-level abstraction) ===
+        "sample" => {
+            let args = preprocess_encoding_field(args);
+            let p: SampleArgs = serde_json::from_value(args).context("Invalid sample arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::Sample(request::SampleRequest {
+                space: p.space,
+                inference: p.inference.unwrap_or_default(),
+                num_variations: p.num_variations,
+                prompt: p.prompt,
+                seed: p.seed,
+                as_loop: p.as_loop.unwrap_or(false),
+                variation_set_id: p.variation_set_id,
+                parent_id: p.parent_id,
+                tags: p.tags.unwrap_or_default(),
+                creator: p.creator,
+            })))
+        }
+        "extend" => {
+            let args = preprocess_encoding_field(args);
+            let p: ExtendArgs = serde_json::from_value(args).context("Invalid extend arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::Extend(request::ExtendRequest {
+                encoding: p.encoding,
+                space: p.space,
+                inference: p.inference.unwrap_or_default(),
+                num_variations: p.num_variations,
+                variation_set_id: p.variation_set_id,
+                parent_id: p.parent_id,
+                tags: p.tags.unwrap_or_default(),
+                creator: p.creator,
+            })))
+        }
+        "bridge" => {
+            let args = preprocess_encoding_field(args);
+            let p: BridgeArgs = serde_json::from_value(args).context("Invalid bridge arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::Bridge(request::BridgeRequest {
+                from: p.from,
+                to: p.to,
+                inference: p.inference.unwrap_or_default(),
+                variation_set_id: p.variation_set_id,
+                parent_id: p.parent_id,
+                tags: p.tags.unwrap_or_default(),
+                creator: p.creator,
+            })))
+        }
+        "project" => {
+            let args = preprocess_encoding_field(args);
+            let p: ProjectArgs = serde_json::from_value(args).context("Invalid project arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::Project(request::ProjectRequest {
+                encoding: p.encoding,
+                target: p.target,
+                variation_set_id: p.variation_set_id,
+                parent_id: p.parent_id,
+                tags: p.tags.unwrap_or_default(),
+                creator: p.creator,
+            })))
+        }
+
+        // === Orpheus Tools (model-specific) ===
+        "orpheus_generate" => {
             let p: OrpheusGenerateArgs = serde_json::from_value(args).context("Invalid orpheus_generate arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::OrpheusGenerate(request::OrpheusGenerateRequest {
                 model: p.model,
@@ -227,7 +284,7 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 creator: p.creator,
             })))
         }
-        "extend" | "orpheus_continue" => {
+        "orpheus_continue" => {
             let p: OrpheusContinueArgs = serde_json::from_value(args).context("Invalid orpheus_continue arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::OrpheusContinue(request::OrpheusContinueRequest {
                 input_hash: p.input_hash,
@@ -242,7 +299,7 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 creator: p.creator,
             })))
         }
-        "bridge" | "orpheus_bridge" => {
+        "orpheus_bridge" => {
             let p: OrpheusBridgeArgs = serde_json::from_value(args).context("Invalid orpheus_bridge arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::OrpheusBridge(request::OrpheusBridgeRequest {
                 section_a_hash: p.section_a_hash,
@@ -422,7 +479,7 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
         }
 
         // === MIDI/Audio Tools ===
-        "project" | "convert_midi_to_wav" => {
+        "convert_midi_to_wav" => {
             let p: ConvertMidiToWavArgs = serde_json::from_value(args).context("Invalid convert_midi_to_wav arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::MidiToWav(request::MidiToWavRequest {
                 input_hash: p.input_hash,
@@ -888,6 +945,53 @@ struct ScheduleArgs {
 struct AnalyzeArgs {
     encoding: hooteproto::Encoding,
     tasks: Vec<hooteproto::AnalysisTask>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SampleArgs {
+    space: hooteproto::Space,
+    inference: Option<hooteproto::InferenceContext>,
+    num_variations: Option<u32>,
+    prompt: Option<String>,
+    seed: Option<hooteproto::Encoding>,
+    as_loop: Option<bool>,
+    variation_set_id: Option<String>,
+    parent_id: Option<String>,
+    tags: Option<Vec<String>>,
+    creator: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExtendArgs {
+    encoding: hooteproto::Encoding,
+    space: Option<hooteproto::Space>,
+    inference: Option<hooteproto::InferenceContext>,
+    num_variations: Option<u32>,
+    variation_set_id: Option<String>,
+    parent_id: Option<String>,
+    tags: Option<Vec<String>>,
+    creator: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BridgeArgs {
+    from: hooteproto::Encoding,
+    to: Option<hooteproto::Encoding>,
+    inference: Option<hooteproto::InferenceContext>,
+    variation_set_id: Option<String>,
+    parent_id: Option<String>,
+    tags: Option<Vec<String>>,
+    creator: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectArgs {
+    encoding: hooteproto::Encoding,
+    target: hooteproto::ProjectionTarget,
+    variation_set_id: Option<String>,
+    parent_id: Option<String>,
+    tags: Option<Vec<String>>,
+    creator: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

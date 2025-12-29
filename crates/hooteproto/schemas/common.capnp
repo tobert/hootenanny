@@ -89,4 +89,5 @@ enum AnalysisTask {
   embeddings @2;
   genre @3;
   mood @4;
+  zeroShot @5;
 }

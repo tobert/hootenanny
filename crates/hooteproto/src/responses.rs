@@ -104,6 +104,12 @@ pub enum ToolResponse {
 
     // === Timeline Scheduling ===
     Scheduled(ScheduledResponse),
+
+    // === Native Tools ===
+    /// Response from analyze tool (multiple analysis tasks)
+    AnalyzeResult(AnalyzeResultResponse),
+    /// Response from project tool (format conversion)
+    ProjectResult(ProjectResultResponse),
 }
 
 // =============================================================================
@@ -724,6 +730,38 @@ pub struct ScheduledResponse {
     pub position: f64,
     pub duration: f64,
     pub artifact_id: String,
+}
+
+// =============================================================================
+// Native Tool Responses
+// =============================================================================
+
+/// Response from the analyze tool with multiple analysis results.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnalyzeResultResponse {
+    /// Content hash of the analyzed content
+    pub content_hash: String,
+    /// Analysis results keyed by task type
+    pub results: serde_json::Value,
+    /// Human-readable summary of results
+    pub summary: String,
+    /// Optional artifact ID if content is stored
+    pub artifact_id: Option<String>,
+}
+
+/// Response from the project tool for format conversion.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectResultResponse {
+    /// Artifact ID of the projected content
+    pub artifact_id: String,
+    /// Content hash of the projected content
+    pub content_hash: String,
+    /// Type of projection performed (e.g., "midi_to_audio", "abc_to_midi")
+    pub projection_type: String,
+    /// Optional duration in seconds (for audio projections)
+    pub duration_seconds: Option<f64>,
+    /// Optional sample rate (for audio projections)
+    pub sample_rate: Option<u32>,
 }
 
 // =============================================================================

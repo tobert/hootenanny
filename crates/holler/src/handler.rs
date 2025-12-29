@@ -52,6 +52,16 @@ pub async fn refresh_tools_into(cache: &ToolCache, backends: &Arc<RwLock<Backend
     count
 }
 
+/// Native tool names - high-level abstractions over model-specific tools.
+pub const NATIVE_TOOLS: &[&str] = &[
+    "sample",
+    "extend",
+    "analyze",
+    "bridge",
+    "project",
+    "schedule",
+];
+
 /// MCP Handler that forwards tool calls to ZMQ backends.
 ///
 /// Maintains a cached list of tools that can be refreshed dynamically
@@ -61,6 +71,8 @@ pub struct ZmqHandler {
     backends: Arc<RwLock<BackendPool>>,
     /// Cached tool list - shared across handler instances
     cached_tools: ToolCache,
+    /// Only expose native tools
+    native_only: bool,
 }
 
 impl ZmqHandler {
@@ -69,6 +81,7 @@ impl ZmqHandler {
         Self {
             backends,
             cached_tools: new_tool_cache(),
+            native_only: false,
         }
     }
 
@@ -76,10 +89,11 @@ impl ZmqHandler {
     ///
     /// Use this when you need multiple handlers to share the same tool list
     /// (e.g., for recovery callbacks to update tools visible to MCP clients).
-    pub fn with_shared_cache(backends: Arc<RwLock<BackendPool>>, cache: ToolCache) -> Self {
+    pub fn with_shared_cache(backends: Arc<RwLock<BackendPool>>, cache: ToolCache, native_only: bool) -> Self {
         Self {
             backends,
             cached_tools: cache,
+            native_only,
         }
     }
 
@@ -114,7 +128,14 @@ impl ServerHandler for ZmqHandler {
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         async move {
-            let tools = self.cached_tools.read().await.clone();
+            let mut tools = self.cached_tools.read().await.clone();
+
+            // Filter to native tools only if requested
+            if self.native_only {
+                tools.retain(|t| NATIVE_TOOLS.contains(&t.name.as_ref()));
+                debug!("Native-only mode: exposing {} tools", tools.len());
+            }
+
             Ok(ListToolsResult {
                 tools,
                 next_cursor: None,

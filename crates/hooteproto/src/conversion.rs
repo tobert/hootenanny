@@ -633,7 +633,21 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
                 t.set(i as u32, analysis_task_to_capnp(task));
             }
         }
-        
+
+        // Native tool requests - TODO: add capnp schema support
+        ToolRequest::Sample(_) => {
+            return Err(capnp::Error::failed("ToolRequest::Sample capnp not yet implemented".to_string()));
+        }
+        ToolRequest::Extend(_) => {
+            return Err(capnp::Error::failed("ToolRequest::Extend capnp not yet implemented".to_string()));
+        }
+        ToolRequest::Bridge(_) => {
+            return Err(capnp::Error::failed("ToolRequest::Bridge capnp not yet implemented".to_string()));
+        }
+        ToolRequest::Project(_) => {
+            return Err(capnp::Error::failed("ToolRequest::Project capnp not yet implemented".to_string()));
+        }
+
         ToolRequest::Ping => {
             // Should be handled by payload_to_capnp_payload
             return Err(capnp::Error::failed("ToolRequest::Ping passed to tool_request builder (should use envelope)".to_string()));
@@ -1058,10 +1072,16 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
         }
         tools_capnp::tool_request::Analyze(a) => {
             let a = a?;
+            // Read zero-shot labels (shared across all ZeroShot tasks)
+            let zero_shot_labels = if a.has_zero_shot_labels() {
+                capnp_string_list(a.get_zero_shot_labels()?)
+            } else {
+                Vec::new()
+            };
             let mut tasks = Vec::new();
             let tr = a.get_tasks()?;
             for i in 0..tr.len() {
-                tasks.push(capnp_to_analysis_task(tr.get(i)?));
+                tasks.push(capnp_to_analysis_task(tr.get(i)?, zero_shot_labels.clone()));
             }
             Ok(ToolRequest::Analyze(AnalyzeRequest {
                 encoding: capnp_to_encoding(a.get_encoding()?)?,
@@ -1181,17 +1201,20 @@ fn encoding_to_capnp(mut builder: common_capnp::encoding::Builder, encoding: &En
 }
 
 /// Helper: Convert capnp AnalysisTask to Rust AnalysisTask
-fn capnp_to_analysis_task(task: common_capnp::AnalysisTask) -> AnalysisTask {
+/// Note: ZeroShot labels must be populated separately from zeroShotLabels field
+fn capnp_to_analysis_task(task: common_capnp::AnalysisTask, zero_shot_labels: Vec<String>) -> AnalysisTask {
     match task {
         common_capnp::AnalysisTask::Classify => AnalysisTask::Classify,
         common_capnp::AnalysisTask::Beats => AnalysisTask::Beats,
         common_capnp::AnalysisTask::Embeddings => AnalysisTask::Embeddings,
         common_capnp::AnalysisTask::Genre => AnalysisTask::Genre,
         common_capnp::AnalysisTask::Mood => AnalysisTask::Mood,
+        common_capnp::AnalysisTask::ZeroShot => AnalysisTask::ZeroShot { labels: zero_shot_labels },
     }
 }
 
 /// Helper: Convert Rust AnalysisTask to capnp AnalysisTask
+/// Note: ZeroShot labels are handled separately via zeroShotLabels field
 fn analysis_task_to_capnp(task: &AnalysisTask) -> common_capnp::AnalysisTask {
     match task {
         AnalysisTask::Classify => common_capnp::AnalysisTask::Classify,
@@ -1199,6 +1222,7 @@ fn analysis_task_to_capnp(task: &AnalysisTask) -> common_capnp::AnalysisTask {
         AnalysisTask::Embeddings => common_capnp::AnalysisTask::Embeddings,
         AnalysisTask::Genre => common_capnp::AnalysisTask::Genre,
         AnalysisTask::Mood => common_capnp::AnalysisTask::Mood,
+        AnalysisTask::ZeroShot { .. } => common_capnp::AnalysisTask::ZeroShot,
     }
 }
 
@@ -1742,6 +1766,14 @@ fn response_to_capnp_tool_response(
             b.set_position(r.position);
             b.set_duration(r.duration);
             b.set_artifact_id(&r.artifact_id);
+        }
+
+        // Native tool responses - TODO: add capnp schema support
+        ToolResponse::AnalyzeResult(_) => {
+            return Err(capnp::Error::failed("ToolResponse::AnalyzeResult capnp not yet implemented".to_string()));
+        }
+        ToolResponse::ProjectResult(_) => {
+            return Err(capnp::Error::failed("ToolResponse::ProjectResult capnp not yet implemented".to_string()));
         }
     }
     Ok(())
@@ -2432,7 +2464,7 @@ fn capnp_tool_response_to_response(
             }))
         }
 
-        // New response types added in responses.capnp but not yet in Rust
+        // New response types added in responses.capnp but not yet fully implemented
         Which::ToolHelp(_) |
         Which::AnalyzeResult(_) => {
             Err(capnp::Error::failed("Unimplemented response type".to_string()))

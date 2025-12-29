@@ -478,7 +478,7 @@ pub enum Encoding {
 }
 
 /// Analysis task for the analyze tool.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AnalysisTask {
     /// Classify content type/characteristics
@@ -491,6 +491,289 @@ pub enum AnalysisTask {
     Genre,
     /// Detect mood/energy
     Mood,
+    /// Zero-shot classification with custom labels
+    ZeroShot { labels: Vec<String> },
+}
+
+/// Generative model space for sampling operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Space {
+    /// Base Orpheus MIDI model
+    Orpheus,
+    /// Orpheus trained on children's music
+    OrpheusChildren,
+    /// Orpheus mono melodies
+    OrpheusMonoMelodies,
+    /// Orpheus loop generation
+    OrpheusLoops,
+    /// Orpheus section bridging
+    OrpheusBridge,
+    /// MusicGen audio model
+    MusicGen,
+    /// YuE lyrics-to-song
+    Yue,
+    /// ABC notation space
+    Abc,
+}
+
+/// Inference parameters for generative models.
+///
+/// Not all parameters apply to all models:
+/// - Orpheus: temperature, top_p, max_tokens, variant
+/// - MusicGen: temperature, top_k, top_p, duration_seconds, guidance_scale
+/// - YuE: variant (genre), max_tokens, seed
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct InferenceContext {
+    /// Sampling temperature (0.0 = deterministic, higher = more random)
+    pub temperature: Option<f32>,
+    /// Top-p (nucleus) sampling threshold
+    pub top_p: Option<f32>,
+    /// Top-k sampling (MusicGen)
+    pub top_k: Option<u32>,
+    /// Random seed for reproducibility
+    pub seed: Option<u64>,
+    /// Maximum tokens to generate (Orpheus, YuE)
+    pub max_tokens: Option<u32>,
+    /// Target duration in seconds (MusicGen)
+    pub duration_seconds: Option<f32>,
+    /// Classifier-free guidance scale (MusicGen)
+    pub guidance_scale: Option<f32>,
+    /// Model variant (e.g., "base", "children", genre for YuE)
+    pub variant: Option<String>,
+}
+
+/// Target format for content projection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProjectionTarget {
+    /// Project to audio via SoundFont rendering
+    Audio {
+        /// SoundFont content hash for rendering
+        soundfont_hash: String,
+        /// Output sample rate (default: 44100)
+        sample_rate: Option<u32>,
+    },
+    /// Project to MIDI (e.g., from ABC notation)
+    Midi {
+        /// MIDI channel (default: 0)
+        channel: Option<u8>,
+        /// Note velocity (default: 80)
+        velocity: Option<u8>,
+    },
+}
+
+// =============================================================================
+// Output Types and Impl Blocks for Native Tools
+// =============================================================================
+
+/// Output format type produced by generative operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputType {
+    /// MIDI format (symbolic music events)
+    Midi,
+    /// Audio format (PCM waveform)
+    Audio,
+    /// Symbolic notation (ABC, MusicXML, etc.)
+    Symbolic,
+}
+
+/// Validation error for inference parameters.
+#[derive(Debug, Clone)]
+pub struct ValidationError {
+    pub field: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.field, self.message)
+    }
+}
+
+impl std::error::Error for ValidationError {}
+
+/// Return type for Orpheus model parameters: (variant, temperature, top_p, max_tokens)
+pub type OrpheusParams = (Option<String>, Option<f32>, Option<f32>, Option<u32>);
+
+/// Return type for MusicGen parameters: (temperature, top_p, top_k, guidance_scale, duration_seconds)
+pub type MusicGenParams = (Option<f32>, Option<f32>, Option<u32>, Option<f32>, Option<f32>);
+
+impl Space {
+    /// Returns the output type produced by this space.
+    pub fn output_type(&self) -> OutputType {
+        match self {
+            Space::Orpheus
+            | Space::OrpheusChildren
+            | Space::OrpheusMonoMelodies
+            | Space::OrpheusLoops
+            | Space::OrpheusBridge => OutputType::Midi,
+            Space::MusicGen | Space::Yue => OutputType::Audio,
+            Space::Abc => OutputType::Symbolic,
+        }
+    }
+
+    /// Returns true if this space supports continuation/extension operations.
+    pub fn supports_continuation(&self) -> bool {
+        match self {
+            Space::Orpheus
+            | Space::OrpheusChildren
+            | Space::OrpheusMonoMelodies
+            | Space::OrpheusLoops => true,
+            Space::OrpheusBridge | Space::MusicGen | Space::Yue | Space::Abc => false,
+        }
+    }
+
+    /// Returns the underlying model variant string used by the generative backend.
+    pub fn model_variant(&self) -> Option<&str> {
+        match self {
+            Space::Orpheus => Some("base"),
+            Space::OrpheusChildren => Some("children"),
+            Space::OrpheusMonoMelodies => Some("mono_melodies"),
+            Space::OrpheusLoops => None, // Uses dedicated loops endpoint
+            Space::OrpheusBridge => Some("bridge"),
+            Space::MusicGen => None, // MusicGen has its own model selection
+            Space::Yue => None,      // YuE doesn't expose model variants
+            Space::Abc => None,      // ABC is symbolic, not model-based
+        }
+    }
+}
+
+impl InferenceContext {
+    /// Validate parameter ranges
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if let Some(temp) = self.temperature {
+            if !(0.0..=2.0).contains(&temp) {
+                return Err(ValidationError {
+                    field: "temperature".to_string(),
+                    message: format!("must be between 0.0 and 2.0, got {}", temp),
+                });
+            }
+        }
+
+        if let Some(top_p) = self.top_p {
+            if !(0.0..=1.0).contains(&top_p) {
+                return Err(ValidationError {
+                    field: "top_p".to_string(),
+                    message: format!("must be between 0.0 and 1.0, got {}", top_p),
+                });
+            }
+        }
+
+        if let Some(duration) = self.duration_seconds {
+            if duration <= 0.0 {
+                return Err(ValidationError {
+                    field: "duration_seconds".to_string(),
+                    message: format!("must be greater than 0.0, got {}", duration),
+                });
+            }
+        }
+
+        if let Some(guidance) = self.guidance_scale {
+            if guidance < 0.0 {
+                return Err(ValidationError {
+                    field: "guidance_scale".to_string(),
+                    message: format!("must be non-negative, got {}", guidance),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Merge with defaults for orpheus models
+    fn with_orpheus_defaults(&self) -> Self {
+        Self {
+            temperature: self.temperature.or(Some(1.0)),
+            top_p: self.top_p.or(Some(0.95)),
+            top_k: self.top_k,
+            seed: self.seed,
+            max_tokens: self.max_tokens.or(Some(1024)),
+            duration_seconds: self.duration_seconds,
+            guidance_scale: self.guidance_scale,
+            variant: self.variant.clone(),
+        }
+    }
+
+    /// Merge with defaults for musicgen
+    fn with_musicgen_defaults(&self) -> Self {
+        Self {
+            temperature: self.temperature.or(Some(1.0)),
+            top_p: self.top_p.or(Some(0.9)),
+            top_k: self.top_k.or(Some(250)),
+            seed: self.seed,
+            max_tokens: self.max_tokens,
+            duration_seconds: self.duration_seconds.or(Some(10.0)),
+            guidance_scale: self.guidance_scale.or(Some(3.0)),
+            variant: self.variant.clone(),
+        }
+    }
+
+    /// Convert to parameters for orpheus tools
+    ///
+    /// Returns: (variant, temperature, top_p, max_tokens)
+    pub fn to_orpheus_params(&self) -> OrpheusParams {
+        let defaults = self.with_orpheus_defaults();
+        (
+            defaults.variant,
+            defaults.temperature,
+            defaults.top_p,
+            defaults.max_tokens,
+        )
+    }
+
+    /// Convert to parameters for musicgen
+    ///
+    /// Returns: (temperature, top_p, top_k, guidance_scale, duration_seconds)
+    pub fn to_musicgen_params(&self) -> MusicGenParams {
+        let defaults = self.with_musicgen_defaults();
+        (
+            defaults.temperature,
+            defaults.top_p,
+            defaults.top_k,
+            defaults.guidance_scale,
+            defaults.duration_seconds,
+        )
+    }
+}
+
+impl Encoding {
+    /// Returns the output type of this encoding.
+    pub fn output_type(&self) -> OutputType {
+        match self {
+            Encoding::Midi { .. } => OutputType::Midi,
+            Encoding::Audio { .. } => OutputType::Audio,
+            Encoding::Abc { .. } => OutputType::Symbolic,
+            Encoding::Hash { format, .. } => {
+                if format.contains("midi") {
+                    OutputType::Midi
+                } else if format.contains("audio") || format.contains("wav") {
+                    OutputType::Audio
+                } else {
+                    OutputType::Symbolic
+                }
+            }
+        }
+    }
+
+    /// Returns the artifact ID if this encoding references one.
+    pub fn artifact_id(&self) -> Option<&str> {
+        match self {
+            Encoding::Midi { artifact_id } | Encoding::Audio { artifact_id } => {
+                Some(artifact_id.as_str())
+            }
+            Encoding::Abc { .. } | Encoding::Hash { .. } => None,
+        }
+    }
+
+    /// Returns the content hash if this encoding is a hash reference.
+    pub fn content_hash(&self) -> Option<&str> {
+        match self {
+            Encoding::Hash { content_hash, .. } => Some(content_hash.as_str()),
+            _ => None,
+        }
+    }
 }
 
 /// Broadcast messages via PUB/SUB

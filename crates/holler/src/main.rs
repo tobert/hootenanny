@@ -85,13 +85,27 @@ enum Commands {
         /// Show loaded configuration and exit
         #[arg(long)]
         show_config: bool,
+
+        /// Only expose native tools (sample, extend, analyze, bridge, project, schedule)
+        ///
+        /// This mode provides a focused, high-level interface for model-native
+        /// operations without exposing the full tool surface.
+        #[arg(long)]
+        native_only: bool,
     },
 
     /// Run MCP server over stdio (for Claude Code)
     ///
     /// This transport is simpler than HTTP and works well with
     /// Claude Code and other stdio-based MCP clients.
-    Mcp,
+    Mcp {
+        /// Only expose native tools (sample, extend, analyze, bridge, project, schedule)
+        ///
+        /// This mode provides a focused, high-level interface for model-native
+        /// operations without exposing the full tool surface.
+        #[arg(long)]
+        native_only: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -140,7 +154,7 @@ async fn main() -> Result<()> {
     // For mcp (stdio), use stderr logging (stdout is for MCP protocol)
     // For CLI commands, use simple tracing
     let use_otel = matches!(cli.command, Commands::Serve { .. });
-    let use_stderr = matches!(cli.command, Commands::Mcp);
+    let use_stderr = matches!(cli.command, Commands::Mcp { .. });
 
     if use_stderr {
         // Stdio transport: log to stderr to keep stdout clean for MCP
@@ -186,7 +200,7 @@ async fn main() -> Result<()> {
                 commands::job_poll(&endpoint, job_ids, timeout, &mode).await?;
             }
         },
-        Commands::Serve { show_config } => {
+        Commands::Serve { show_config, native_only } => {
             // Load configuration from files + env
             let (config, sources) = HootConfig::load_with_sources_from(cli.config.as_deref())
                 .context("Failed to load configuration")?;
@@ -218,23 +232,32 @@ async fn main() -> Result<()> {
             if !sources.env_overrides.is_empty() {
                 tracing::info!("   Environment overrides: {:?}", sources.env_overrides);
             }
+            if native_only {
+                tracing::info!("🎯 Native-only mode: exposing only native tools");
+            }
 
             serve::run(serve::ServeConfig {
                 port: config.infra.gateway.http_port,
                 hootenanny: config.infra.gateway.hootenanny,
                 hootenanny_pub: Some(config.infra.gateway.hootenanny_pub),
                 timeout_ms: config.infra.gateway.timeout_ms,
+                native_only,
             })
             .await?;
         }
-        Commands::Mcp => {
+        Commands::Mcp { native_only } => {
             // Load configuration for hootenanny endpoint
             let (config, _) = HootConfig::load_with_sources_from(cli.config.as_deref())
                 .context("Failed to load configuration")?;
 
+            if native_only {
+                eprintln!("🎯 Native-only mode: exposing only native tools");
+            }
+
             stdio::run(stdio::StdioConfig {
                 hootenanny: config.infra.gateway.hootenanny,
                 timeout_ms: config.infra.gateway.timeout_ms,
+                native_only,
             })
             .await?;
         }

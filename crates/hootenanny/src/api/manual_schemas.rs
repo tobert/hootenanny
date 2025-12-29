@@ -506,6 +506,225 @@ pub fn garden_set_monitor_request() -> Value {
     })
 }
 
+/// Manual schema for `BridgeRequest`.
+///
+/// Reason: `#[serde(default)]` on inference, tags, creator.
+pub fn bridge_request() -> Value {
+    json!({
+        "type": "object",
+        "required": ["from"],
+        "properties": {
+            "from": {
+                "description": "Starting content (section A)",
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": { "const": "midi" },
+                            "artifact_id": { "type": "string" }
+                        },
+                        "required": ["type", "artifact_id"]
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": { "const": "audio" },
+                            "artifact_id": { "type": "string" }
+                        },
+                        "required": ["type", "artifact_id"]
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": { "const": "hash" },
+                            "content_hash": { "type": "string" },
+                            "format": { "type": "string" }
+                        },
+                        "required": ["type", "content_hash", "format"]
+                    }
+                ]
+            },
+            "to": {
+                "description": "Target content (section B) - optional for A->B bridging",
+                "oneOf": [
+                    { "type": "null" },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": { "const": "midi" },
+                            "artifact_id": { "type": "string" }
+                        },
+                        "required": ["type", "artifact_id"]
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": { "const": "hash" },
+                            "content_hash": { "type": "string" },
+                            "format": { "type": "string" }
+                        },
+                        "required": ["type", "content_hash", "format"]
+                    }
+                ]
+            },
+            "inference": {
+                "type": "object",
+                "description": "Inference parameters",
+                "properties": {
+                    "temperature": { "type": "number", "description": "Sampling temperature 0.0-2.0" },
+                    "top_p": { "type": "number", "description": "Nucleus sampling 0.0-1.0" },
+                    "max_tokens": { "type": "integer", "description": "Max tokens to generate" }
+                }
+            },
+            "variation_set_id": { "type": "string" },
+            "parent_id": { "type": "string" },
+            "tags": { "type": "array", "items": { "type": "string" } },
+            "creator": { "type": "string" }
+        }
+    })
+}
+
+/// Manual schema for `ProjectRequest`.
+///
+/// Reason: `#[serde(default)]` on tags, creator.
+pub fn project_request() -> Value {
+    json!({
+        "type": "object",
+        "required": ["encoding", "target"],
+        "properties": {
+            "encoding": {
+                "description": "Source content to project",
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": { "const": "midi" },
+                            "artifact_id": { "type": "string" }
+                        },
+                        "required": ["type", "artifact_id"]
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": { "const": "abc" },
+                            "notation": { "type": "string" }
+                        },
+                        "required": ["type", "notation"]
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": { "const": "hash" },
+                            "content_hash": { "type": "string" },
+                            "format": { "type": "string" }
+                        },
+                        "required": ["type", "content_hash", "format"]
+                    }
+                ]
+            },
+            "target": {
+                "description": "Target format for projection",
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": { "const": "audio" },
+                            "soundfont_hash": { "type": "string", "description": "SoundFont CAS hash" },
+                            "sample_rate": { "type": "integer", "description": "Output sample rate" }
+                        },
+                        "required": ["type", "soundfont_hash"]
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": { "const": "midi" },
+                            "channel": { "type": "integer", "description": "MIDI channel 0-15" },
+                            "velocity": { "type": "integer", "description": "Note velocity 1-127" }
+                        },
+                        "required": ["type"]
+                    }
+                ]
+            },
+            "variation_set_id": { "type": "string" },
+            "parent_id": { "type": "string" },
+            "tags": { "type": "array", "items": { "type": "string" } },
+            "creator": { "type": "string" }
+        }
+    })
+}
+
+/// Manual schema for `AnalyzeRequest`.
+///
+/// Reason: Uses tagged enum for tasks with ZeroShot variant.
+pub fn analyze_request() -> Value {
+    json!({
+        "type": "object",
+        "required": ["encoding", "tasks"],
+        "properties": {
+            "encoding": {
+                "description": "Content to analyze",
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": { "const": "midi" },
+                            "artifact_id": { "type": "string" }
+                        },
+                        "required": ["type", "artifact_id"]
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": { "const": "audio" },
+                            "artifact_id": { "type": "string" }
+                        },
+                        "required": ["type", "artifact_id"]
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": { "const": "hash" },
+                            "content_hash": { "type": "string" },
+                            "format": { "type": "string" }
+                        },
+                        "required": ["type", "content_hash", "format"]
+                    }
+                ]
+            },
+            "tasks": {
+                "type": "array",
+                "description": "Analysis tasks to run",
+                "items": {
+                    "oneOf": [
+                        { "const": "classify", "description": "Classify MIDI content" },
+                        { "const": "beats", "description": "Detect beats and downbeats" },
+                        { "const": "embeddings", "description": "Extract CLAP embeddings" },
+                        { "const": "genre", "description": "Classify genre" },
+                        { "const": "mood", "description": "Classify mood/energy" },
+                        {
+                            "type": "object",
+                            "description": "Zero-shot classification with custom labels",
+                            "properties": {
+                                "zero_shot": {
+                                    "type": "object",
+                                    "properties": {
+                                        "labels": {
+                                            "type": "array",
+                                            "items": { "type": "string" }
+                                        }
+                                    },
+                                    "required": ["labels"]
+                                }
+                            },
+                            "required": ["zero_shot"]
+                        }
+                    ]
+                }
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

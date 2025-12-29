@@ -208,6 +208,14 @@ pub enum ToolRequest {
     Schedule(ScheduleRequest),
     /// Analyze content
     Analyze(AnalyzeRequest),
+    /// Sample from a generative space
+    Sample(SampleRequest),
+    /// Extend existing content
+    Extend(ExtendRequest),
+    /// Create bridge transitions between sections
+    Bridge(BridgeRequest),
+    /// Project content to a different format
+    Project(ProjectRequest),
 
     // ==========================================================================
     // Admin
@@ -258,6 +266,8 @@ impl ToolRequest {
             | Self::OrpheusBridge(_)
             | Self::OrpheusLoops(_) => ToolTiming::AsyncMedium,
             Self::Analyze(_) => ToolTiming::AsyncMedium,
+            Self::Sample(_) | Self::Extend(_) | Self::Bridge(_) => ToolTiming::AsyncMedium,
+            Self::Project(_) => ToolTiming::AsyncMedium,
 
             // AsyncLong - long running, client manages
             Self::MusicgenGenerate(_) => ToolTiming::AsyncLong,
@@ -350,6 +360,10 @@ impl ToolRequest {
             Self::SampleLlm(_) => "sample_llm",
             Self::Schedule(_) => "schedule",
             Self::Analyze(_) => "analyze",
+            Self::Sample(_) => "sample",
+            Self::Extend(_) => "extend",
+            Self::Bridge(_) => "bridge",
+            Self::Project(_) => "project",
             Self::Ping => "ping",
             Self::ListTools => "list_tools",
         }
@@ -852,10 +866,141 @@ pub struct ScheduleRequest {
     pub rate: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AnalyzeRequest {
     pub encoding: crate::Encoding,
     pub tasks: Vec<crate::AnalysisTask>,
+}
+
+fn default_one() -> Option<u32> {
+    Some(1)
+}
+
+fn default_creator() -> Option<String> {
+    Some("unknown".to_string())
+}
+
+/// Request to sample from a generative space.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SampleRequest {
+    /// Generative space to sample from
+    pub space: crate::Space,
+
+    /// Inference parameters
+    #[serde(default)]
+    pub inference: crate::InferenceContext,
+
+    /// Number of variations to generate (default: 1)
+    #[serde(default = "default_one")]
+    pub num_variations: Option<u32>,
+
+    /// Text prompt (for prompted spaces like musicgen, yue)
+    pub prompt: Option<String>,
+
+    /// Seed encoding to condition on
+    pub seed: Option<crate::Encoding>,
+
+    /// Generate as loopable pattern (orpheus only)
+    #[serde(default)]
+    pub as_loop: bool,
+
+    /// Variation set ID for grouping
+    pub variation_set_id: Option<String>,
+
+    /// Parent artifact ID for refinements
+    pub parent_id: Option<String>,
+
+    /// Tags for organizing
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    /// Creator identifier
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
+}
+
+/// Request to extend existing content.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ExtendRequest {
+    /// Content to continue from
+    pub encoding: crate::Encoding,
+
+    /// Space to use (inferred from encoding if omitted)
+    pub space: Option<crate::Space>,
+
+    /// Inference parameters
+    #[serde(default)]
+    pub inference: crate::InferenceContext,
+
+    /// Number of variations to generate (default: 1)
+    #[serde(default = "default_one")]
+    pub num_variations: Option<u32>,
+
+    /// Variation set ID for grouping
+    pub variation_set_id: Option<String>,
+
+    /// Parent artifact ID for refinements
+    pub parent_id: Option<String>,
+
+    /// Tags for organizing
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    /// Creator identifier
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
+}
+
+/// Request to create a bridge transition between sections.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct BridgeRequest {
+    /// Starting content (section A)
+    pub from: crate::Encoding,
+
+    /// Target content (section B) - optional for A->B bridging
+    pub to: Option<crate::Encoding>,
+
+    /// Inference parameters
+    #[serde(default)]
+    pub inference: crate::InferenceContext,
+
+    /// Variation set ID for grouping
+    pub variation_set_id: Option<String>,
+
+    /// Parent artifact ID for refinements
+    pub parent_id: Option<String>,
+
+    /// Tags for organizing
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    /// Creator identifier
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
+}
+
+/// Request to project content to a different format.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectRequest {
+    /// Source content to project
+    pub encoding: crate::Encoding,
+
+    /// Target format/space
+    pub target: crate::ProjectionTarget,
+
+    /// Variation set ID for grouping
+    pub variation_set_id: Option<String>,
+
+    /// Parent artifact ID
+    pub parent_id: Option<String>,
+
+    /// Tags for organizing
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    /// Creator identifier
+    #[serde(default = "default_creator")]
+    pub creator: Option<String>,
 }
 
 // =============================================================================

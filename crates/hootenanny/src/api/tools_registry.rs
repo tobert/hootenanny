@@ -198,6 +198,24 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Continue existing MIDI content".to_string(),
             input_schema: manual_schemas::extend_request(),
         },
+        // Uses manual schema: #[serde(default)] on inference, tags, creator
+        ToolInfo {
+            name: "bridge".to_string(),
+            description: "Create bridge transitions between MIDI sections".to_string(),
+            input_schema: manual_schemas::bridge_request(),
+        },
+        // Uses manual schema: #[serde(default)] on tags, creator
+        ToolInfo {
+            name: "project".to_string(),
+            description: "Project content to different format (MIDI→audio, ABC→MIDI)".to_string(),
+            input_schema: manual_schemas::project_request(),
+        },
+        // Uses manual schema: tagged enum for tasks with ZeroShot
+        ToolInfo {
+            name: "analyze".to_string(),
+            description: "Run analysis tasks on content (classify, beats, genre, mood, embeddings)".to_string(),
+            input_schema: manual_schemas::analyze_request(),
+        },
         ToolInfo {
             name: "schedule".to_string(),
             description: "Schedule content on timeline".to_string(),

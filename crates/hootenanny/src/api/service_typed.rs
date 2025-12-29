@@ -2902,4 +2902,83 @@ impl EventDualityServer {
             tool: "clap_analyze".to_string(),
         })
     }
+
+    // =========================================================================
+    // Native Tools (typed wrappers)
+    // These forward to the existing native implementations but use hooteproto types.
+    // =========================================================================
+
+    /// Sample from a generative space.
+    ///
+    /// This is the high-level unified interface that dispatches to:
+    /// - Orpheus for MIDI generation
+    /// - MusicGen for audio generation
+    /// - YuE for lyrics-to-song
+    pub async fn sample_typed(
+        &self,
+        _request: hooteproto::request::SampleRequest,
+    ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
+        // TODO: Convert hooteproto::SampleRequest to native::SampleRequest and call self.sample()
+        // Then convert ToolOutput back to ToolResponse::OrpheusGenerated or AudioGenerated
+        Err(ToolError::internal(
+            "sample_typed: Native tool refactoring in progress. \
+             Use orpheus_generate, musicgen_generate, or yue_generate directly for now.",
+        ))
+    }
+
+    /// Extend existing content.
+    ///
+    /// Continues from the given encoding using the appropriate model.
+    pub async fn extend_typed(
+        &self,
+        _request: hooteproto::request::ExtendRequest,
+    ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
+        // TODO: Convert hooteproto::ExtendRequest to native::ExtendRequest and call self.extend()
+        Err(ToolError::internal(
+            "extend_typed: Native tool refactoring in progress. \
+             Use orpheus_continue directly for now.",
+        ))
+    }
+
+    /// Create bridge transitions between sections.
+    ///
+    /// Uses Orpheus bridge model to create smooth transitions.
+    pub async fn bridge_typed(
+        &self,
+        _request: hooteproto::request::BridgeRequest,
+    ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
+        // TODO: Convert hooteproto::BridgeRequest to native::BridgeRequest and call self.bridge()
+        Err(ToolError::internal(
+            "bridge_typed: Native tool refactoring in progress. \
+             Use orpheus_bridge directly for now.",
+        ))
+    }
+
+    /// Project content to a different format.
+    ///
+    /// Handles MIDI→audio (via SoundFont), ABC→MIDI, etc.
+    pub async fn project_typed(
+        &self,
+        _request: hooteproto::request::ProjectRequest,
+    ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
+        // TODO: Convert hooteproto::ProjectRequest to native::ProjectRequest and call self.project()
+        Err(ToolError::internal(
+            "project_typed: Native tool refactoring in progress. \
+             Use convert_midi_to_wav or abc_to_midi directly for now.",
+        ))
+    }
+
+    /// Run analysis tasks on content.
+    ///
+    /// Dispatches to Orpheus classifier, BeatThis, CLAP based on content type.
+    pub async fn analyze_typed(
+        &self,
+        _request: hooteproto::request::AnalyzeRequest,
+    ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
+        // TODO: Convert hooteproto::AnalyzeRequest to native::AnalyzeRequest and call self.analyze()
+        Err(ToolError::internal(
+            "analyze_typed: Native tool refactoring in progress. \
+             Use orpheus_classify, beatthis_analyze, or clap_analyze directly for now.",
+        ))
+    }
 }

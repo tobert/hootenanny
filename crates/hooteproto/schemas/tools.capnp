@@ -419,4 +419,5 @@ struct Schedule {
 struct Analyze {
   encoding @0 :Common.Encoding;
   tasks @1 :List(Common.AnalysisTask);
+  zeroShotLabels @2 :List(Text);  # Labels for zero-shot classification (if task includes zeroShot)
 }
