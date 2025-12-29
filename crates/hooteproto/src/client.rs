@@ -353,6 +353,9 @@ pub struct HootClient {
     config: ClientConfig,
     cmd_tx: mpsc::Sender<ReactorCommand>,
     pub health: Arc<HealthTracker>,
+    /// ZMQ context must outlive the socket - keep it alive here
+    #[allow(dead_code)]
+    context: ZmqContext,
 }
 
 impl HootClient {
@@ -396,6 +399,7 @@ impl HootClient {
             config,
             cmd_tx,
             health,
+            context,
         })
     }
 
