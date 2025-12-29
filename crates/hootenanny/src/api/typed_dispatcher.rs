@@ -344,6 +344,14 @@ impl TypedDispatcher {
                 }
             }
 
+            // === Timeline Scheduling ===
+            ToolRequest::Schedule(req) => {
+                match self.server.schedule_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::Scheduled(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+
             // === MIDI to WAV ===
             ToolRequest::MidiToWav(req) => {
                 match self

@@ -4,6 +4,7 @@
 //! No JSON involved - these serialize directly to Cap'n Proto.
 
 use crate::timing::ToolTiming;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// All tool requests. Discriminated by `tool` field in serialized form.
@@ -842,7 +843,7 @@ pub struct SampleLlmRequest {
 // Model-Native Request Types
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ScheduleRequest {
     pub encoding: crate::Encoding,
     pub at: f64,

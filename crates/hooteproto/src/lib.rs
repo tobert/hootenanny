@@ -162,6 +162,7 @@ pub use request::ToolRequest;
 pub use responses::ToolResponse;
 pub use timing::ToolTiming;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -463,7 +464,7 @@ pub struct ToolHelp {
 /// - Type-safe ZMQ transport without JSON
 /// - Cap'n Proto serialization
 /// - Validation at protocol boundaries
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Encoding {
     /// MIDI content via artifact ID

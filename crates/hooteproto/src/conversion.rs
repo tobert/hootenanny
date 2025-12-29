@@ -1734,6 +1734,15 @@ fn response_to_capnp_tool_response(
             b.set_help(&r.help);
             b.set_topic(r.topic.as_deref().unwrap_or(""));
         }
+        ToolResponse::Scheduled(r) => {
+            let mut b = builder.reborrow().init_schedule_result();
+            b.set_success(r.success);
+            b.set_message(&r.message);
+            b.set_region_id(&r.region_id);
+            b.set_position(r.position);
+            b.set_duration(r.duration);
+            b.set_artifact_id(&r.artifact_id);
+        }
     }
     Ok(())
 }
@@ -2411,9 +2420,20 @@ fn capnp_tool_response_to_response(
             }))
         }
 
+        Which::ScheduleResult(r) => {
+            let r = r?;
+            Ok(ToolResponse::Scheduled(ScheduledResponse {
+                success: r.get_success(),
+                message: r.get_message()?.to_string()?,
+                region_id: r.get_region_id()?.to_string()?,
+                position: r.get_position(),
+                duration: r.get_duration(),
+                artifact_id: r.get_artifact_id()?.to_string()?,
+            }))
+        }
+
         // New response types added in responses.capnp but not yet in Rust
         Which::ToolHelp(_) |
-        Which::ScheduleResult(_) |
         Which::AnalyzeResult(_) => {
             Err(capnp::Error::failed("Unimplemented response type".to_string()))
         }

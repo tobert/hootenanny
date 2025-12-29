@@ -101,6 +101,9 @@ pub enum ToolResponse {
     WeaveSession(WeaveSessionResponse),
     WeaveReset(WeaveResetResponse),
     WeaveHelp(WeaveHelpResponse),
+
+    // === Timeline Scheduling ===
+    Scheduled(ScheduledResponse),
 }
 
 // =============================================================================
@@ -706,6 +709,21 @@ pub struct WeaveResetResponse {
 pub struct WeaveHelpResponse {
     pub help: String,
     pub topic: Option<String>,
+}
+
+// =============================================================================
+// Timeline Scheduling
+// =============================================================================
+
+/// Response from scheduling content on the timeline
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScheduledResponse {
+    pub success: bool,
+    pub message: String,
+    pub region_id: String,
+    pub position: f64,
+    pub duration: f64,
+    pub artifact_id: String,
 }
 
 // =============================================================================

@@ -547,9 +547,12 @@ struct ToolHelpResponse {
 # =============================================================================
 
 struct ScheduleResultResponse {
-  scheduled @0 :Bool;
-  regionId @1 :Text;
-  message @2 :Text;
+  success @0 :Bool;
+  message @1 :Text;
+  regionId @2 :Text;
+  position @3 :Float64;
+  duration @4 :Float64;
+  artifactId @5 :Text;
 }
 
 # =============================================================================
