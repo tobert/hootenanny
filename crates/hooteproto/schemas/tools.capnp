@@ -12,6 +12,7 @@ struct ToolRequest {
     casInspect @1 :CasInspect;
     casGet @2 :CasGet;
     casUploadFile @3 :CasUploadFile;
+    casStats @74 :Void;
 
     # === Orpheus Tools ===
     orpheusGenerate @4 :OrpheusGenerate;
