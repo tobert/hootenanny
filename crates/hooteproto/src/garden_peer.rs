@@ -183,33 +183,40 @@ impl GardenPeer {
         config: LazyPirateConfig,
     ) -> Result<Self> {
         let session = Uuid::new_v4();
+        let session_short = &session.to_string()[..8]; // First 8 chars for unique identity
 
         debug!("Creating sockets for chaosgarden session {}", session);
 
         let context = ZmqContext::new();
 
+        // Create unique identities per session to avoid ROUTER routing conflicts
+        let control_id = format!("garden-control-{}", session_short);
+        let shell_id = format!("garden-shell-{}", session_short);
+        let heartbeat_id = format!("garden-hb-{}", session_short);
+        let query_id = format!("garden-query-{}", session_short);
+
         // Create and connect all sockets, then split them
         let control = create_dealer_and_connect(
             &context,
             &endpoints.control,
-            b"garden-control",
+            control_id.as_bytes(),
             "control",
         )?;
 
         let shell =
-            create_dealer_and_connect(&context, &endpoints.shell, b"garden-shell", "shell")?;
+            create_dealer_and_connect(&context, &endpoints.shell, shell_id.as_bytes(), "shell")?;
 
         let iopub = create_subscriber_and_connect(&context, &endpoints.iopub, "iopub")?;
 
         let heartbeat = create_dealer_and_connect(
             &context,
             &endpoints.heartbeat,
-            b"garden-heartbeat",
+            heartbeat_id.as_bytes(),
             "heartbeat",
         )?;
 
         let query =
-            create_dealer_and_connect(&context, &endpoints.query, b"garden-query", "query")?;
+            create_dealer_and_connect(&context, &endpoints.query, query_id.as_bytes(), "query")?;
 
         info!("Connected to chaosgarden, session={}", session);
 

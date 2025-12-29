@@ -2916,14 +2916,35 @@ impl EventDualityServer {
     /// - YuE for lyrics-to-song
     pub async fn sample_typed(
         &self,
-        _request: hooteproto::request::SampleRequest,
+        request: hooteproto::request::SampleRequest,
     ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
-        // TODO: Convert hooteproto::SampleRequest to native::SampleRequest and call self.sample()
-        // Then convert ToolOutput back to ToolResponse::OrpheusGenerated or AudioGenerated
-        Err(ToolError::internal(
-            "sample_typed: Native tool refactoring in progress. \
-             Use orpheus_generate, musicgen_generate, or yue_generate directly for now.",
-        ))
+        use crate::api::native::sample::SampleRequest as NativeSampleRequest;
+        use hooteproto::responses::ToolResponse;
+
+        // Convert hooteproto types to native types
+        let native_request = NativeSampleRequest {
+            space: proto_to_native_space(request.space),
+            inference: proto_to_native_inference(request.inference),
+            num_variations: request.num_variations,
+            prompt: request.prompt,
+            seed: request.seed.map(proto_to_native_encoding),
+            as_loop: request.as_loop,
+            variation_set_id: request.variation_set_id,
+            parent_id: request.parent_id,
+            tags: request.tags,
+            creator: request.creator,
+        };
+
+        // Call the existing implementation
+        let result = self.sample(native_request).await?;
+
+        // Extract job_id from the ToolOutput data
+        let job_id = result.data.get("job_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        Ok(ToolResponse::job_started(job_id, "sample"))
     }
 
     /// Extend existing content.
@@ -2931,13 +2952,33 @@ impl EventDualityServer {
     /// Continues from the given encoding using the appropriate model.
     pub async fn extend_typed(
         &self,
-        _request: hooteproto::request::ExtendRequest,
+        request: hooteproto::request::ExtendRequest,
     ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
-        // TODO: Convert hooteproto::ExtendRequest to native::ExtendRequest and call self.extend()
-        Err(ToolError::internal(
-            "extend_typed: Native tool refactoring in progress. \
-             Use orpheus_continue directly for now.",
-        ))
+        use crate::api::native::extend::ExtendRequest as NativeExtendRequest;
+        use hooteproto::responses::ToolResponse;
+
+        // Convert hooteproto types to native types
+        let native_request = NativeExtendRequest {
+            encoding: proto_to_native_encoding(request.encoding),
+            space: request.space.map(proto_to_native_space),
+            inference: proto_to_native_inference(request.inference),
+            num_variations: request.num_variations,
+            variation_set_id: request.variation_set_id,
+            parent_id: request.parent_id,
+            tags: request.tags,
+            creator: request.creator,
+        };
+
+        // Call the existing implementation
+        let result = self.extend(native_request).await?;
+
+        // Extract job_id from the ToolOutput data
+        let job_id = result.data.get("job_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        Ok(ToolResponse::job_started(job_id, "extend"))
     }
 
     /// Create bridge transitions between sections.
@@ -2945,13 +2986,32 @@ impl EventDualityServer {
     /// Uses Orpheus bridge model to create smooth transitions.
     pub async fn bridge_typed(
         &self,
-        _request: hooteproto::request::BridgeRequest,
+        request: hooteproto::request::BridgeRequest,
     ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
-        // TODO: Convert hooteproto::BridgeRequest to native::BridgeRequest and call self.bridge()
-        Err(ToolError::internal(
-            "bridge_typed: Native tool refactoring in progress. \
-             Use orpheus_bridge directly for now.",
-        ))
+        use crate::api::native::bridge::BridgeRequest as NativeBridgeRequest;
+        use hooteproto::responses::ToolResponse;
+
+        // Convert hooteproto types to native types
+        let native_request = NativeBridgeRequest {
+            from: proto_to_native_encoding(request.from),
+            to: request.to.map(proto_to_native_encoding),
+            inference: proto_to_native_inference(request.inference),
+            variation_set_id: request.variation_set_id,
+            parent_id: request.parent_id,
+            tags: request.tags,
+            creator: request.creator,
+        };
+
+        // Call the existing implementation
+        let result = self.bridge(native_request).await?;
+
+        // Extract job_id from the ToolOutput data
+        let job_id = result.data.get("job_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        Ok(ToolResponse::job_started(job_id, "bridge"))
     }
 
     /// Project content to a different format.
@@ -2959,26 +3019,207 @@ impl EventDualityServer {
     /// Handles MIDI→audio (via SoundFont), ABC→MIDI, etc.
     pub async fn project_typed(
         &self,
-        _request: hooteproto::request::ProjectRequest,
+        request: hooteproto::request::ProjectRequest,
     ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
-        // TODO: Convert hooteproto::ProjectRequest to native::ProjectRequest and call self.project()
-        Err(ToolError::internal(
-            "project_typed: Native tool refactoring in progress. \
-             Use convert_midi_to_wav or abc_to_midi directly for now.",
-        ))
+        use crate::api::native::project::ProjectRequest as NativeProjectRequest;
+        use hooteproto::responses::ToolResponse;
+
+        // Convert hooteproto types to native types
+        let native_request = NativeProjectRequest {
+            encoding: proto_to_native_encoding(request.encoding),
+            target: proto_to_native_projection_target(request.target),
+            variation_set_id: request.variation_set_id,
+            parent_id: request.parent_id,
+            tags: request.tags,
+            creator: request.creator,
+        };
+
+        // Call the existing implementation
+        let result = self.project(native_request).await?;
+
+        // project() returns immediately for ABC→MIDI (sync) or spawns a job for MIDI→audio (async)
+        // Extract job_id if it's an async projection, otherwise extract artifact_id
+        if let Some(job_id) = result.data.get("job_id").and_then(|v| v.as_str()) {
+            Ok(ToolResponse::job_started(job_id.to_string(), "project"))
+        } else if let Some(artifact_id) = result.data.get("artifact_id").and_then(|v| v.as_str()) {
+            // Sync projection (ABC→MIDI) - return project result response
+            let content_hash = result.data.get("content_hash")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let projection_type = result.data.get("projection_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            Ok(ToolResponse::ProjectResult(hooteproto::responses::ProjectResultResponse {
+                artifact_id: artifact_id.to_string(),
+                content_hash,
+                projection_type,
+                duration_seconds: None,
+                sample_rate: None,
+            }))
+        } else {
+            Err(ToolError::internal("Project result missing expected fields"))
+        }
     }
 
     /// Run analysis tasks on content.
     ///
     /// Dispatches to Orpheus classifier, BeatThis, CLAP based on content type.
+    /// Note: BeatThis and CLAP are async operations that return job_id for polling.
     pub async fn analyze_typed(
         &self,
-        _request: hooteproto::request::AnalyzeRequest,
+        request: hooteproto::request::AnalyzeRequest,
     ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
-        // TODO: Convert hooteproto::AnalyzeRequest to native::AnalyzeRequest and call self.analyze()
-        Err(ToolError::internal(
-            "analyze_typed: Native tool refactoring in progress. \
-             Use orpheus_classify, beatthis_analyze, or clap_analyze directly for now.",
-        ))
+        use hooteproto::responses::{AnalyzeResultResponse, ToolResponse};
+
+        // Dispatch based on content type and tasks
+        let encoding = &request.encoding;
+        let tasks = &request.tasks;
+
+        // For now, dispatch to the appropriate single-task analyzer
+        // A full implementation would combine results from multiple analyzers
+        let mut results = serde_json::Map::new();
+        let mut summaries = Vec::new();
+
+        for task in tasks {
+            match task {
+                hooteproto::AnalysisTask::Classify => {
+                    // Use orpheus_classify for MIDI (synchronous)
+                    if let hooteproto::Encoding::Midi { artifact_id } | hooteproto::Encoding::Hash { content_hash: artifact_id, .. } = encoding {
+                        match self.orpheus_classify_typed(artifact_id).await {
+                            Ok(resp) => {
+                                // OrpheusClassifiedResponse has `classifications: Vec<MidiClassification>`
+                                // Each classification has label and confidence
+                                let classifications: Vec<_> = resp.classifications.iter()
+                                    .map(|c| serde_json::json!({
+                                        "label": c.label,
+                                        "confidence": c.confidence
+                                    }))
+                                    .collect();
+
+                                // Get top classification for summary
+                                let top = resp.classifications.iter()
+                                    .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap_or(std::cmp::Ordering::Equal));
+
+                                results.insert("classify".to_string(), serde_json::json!({
+                                    "classifications": classifications,
+                                }));
+
+                                if let Some(top_class) = top {
+                                    summaries.push(format!("Classified as {} ({:.1}% confidence)",
+                                        top_class.label, top_class.confidence * 100.0));
+                                } else {
+                                    summaries.push("No classifications returned".to_string());
+                                }
+                            }
+                            Err(e) => summaries.push(format!("Classification failed: {:?}", e)),
+                        }
+                    }
+                }
+                hooteproto::AnalysisTask::Beats => {
+                    // BeatThis is async - spawn job and include job_id in results
+                    if let hooteproto::Encoding::Audio { artifact_id } | hooteproto::Encoding::Hash { content_hash: artifact_id, .. } = encoding {
+                        match self.beatthis_analyze_typed(Some(artifact_id.clone()), None, false).await {
+                            Ok(job_resp) => {
+                                results.insert("beats".to_string(), serde_json::json!({
+                                    "status": "job_started",
+                                    "job_id": job_resp.job_id,
+                                    "message": "Use job_poll to get results"
+                                }));
+                                summaries.push(format!("Beat analysis started (job {})", job_resp.job_id));
+                            }
+                            Err(e) => summaries.push(format!("Beat analysis failed: {:?}", e)),
+                        }
+                    }
+                }
+                hooteproto::AnalysisTask::Genre | hooteproto::AnalysisTask::Mood | hooteproto::AnalysisTask::Embeddings => {
+                    // CLAP is async - would need to spawn job
+                    summaries.push("CLAP analysis not yet implemented in analyze tool".to_string());
+                }
+                hooteproto::AnalysisTask::ZeroShot { labels: _ } => {
+                    // CLAP zero-shot is async
+                    summaries.push("Zero-shot analysis not yet implemented in analyze tool".to_string());
+                }
+            }
+        }
+
+        let content_hash = match encoding {
+            hooteproto::Encoding::Hash { content_hash, .. } => content_hash.clone(),
+            hooteproto::Encoding::Midi { artifact_id } | hooteproto::Encoding::Audio { artifact_id } => artifact_id.clone(),
+            hooteproto::Encoding::Abc { .. } => "inline_abc".to_string(),
+        };
+
+        // Extract artifact_id if the encoding has one
+        let artifact_id = match encoding {
+            hooteproto::Encoding::Midi { artifact_id } | hooteproto::Encoding::Audio { artifact_id } => Some(artifact_id.clone()),
+            _ => None,
+        };
+
+        Ok(ToolResponse::AnalyzeResult(AnalyzeResultResponse {
+            content_hash,
+            results: serde_json::Value::Object(results),
+            summary: summaries.join("; "),
+            artifact_id,
+        }))
+    }
+}
+
+// =============================================================================
+// Conversion Helpers: hooteproto → native types
+// =============================================================================
+
+use crate::api::native::types as native;
+
+/// Convert hooteproto::Space to native::Space
+fn proto_to_native_space(space: hooteproto::Space) -> native::Space {
+    match space {
+        hooteproto::Space::Orpheus => native::Space::Orpheus,
+        hooteproto::Space::OrpheusChildren => native::Space::OrpheusChildren,
+        hooteproto::Space::OrpheusMonoMelodies => native::Space::OrpheusMonoMelodies,
+        hooteproto::Space::OrpheusLoops => native::Space::OrpheusLoops,
+        hooteproto::Space::OrpheusBridge => native::Space::OrpheusBridge,
+        hooteproto::Space::MusicGen => native::Space::MusicGen,
+        hooteproto::Space::Yue => native::Space::Yue,
+        hooteproto::Space::Abc => native::Space::Abc,
+    }
+}
+
+/// Convert hooteproto::InferenceContext to native::InferenceContext
+fn proto_to_native_inference(ctx: hooteproto::InferenceContext) -> native::InferenceContext {
+    native::InferenceContext {
+        temperature: ctx.temperature,
+        top_p: ctx.top_p,
+        top_k: ctx.top_k,
+        seed: ctx.seed,
+        max_tokens: ctx.max_tokens,
+        duration_seconds: ctx.duration_seconds,
+        guidance_scale: ctx.guidance_scale,
+        variant: ctx.variant,
+    }
+}
+
+/// Convert hooteproto::Encoding to native::Encoding
+fn proto_to_native_encoding(enc: hooteproto::Encoding) -> native::Encoding {
+    match enc {
+        hooteproto::Encoding::Midi { artifact_id } => native::Encoding::Midi { artifact_id },
+        hooteproto::Encoding::Audio { artifact_id } => native::Encoding::Audio { artifact_id },
+        hooteproto::Encoding::Abc { notation } => native::Encoding::Abc { notation },
+        hooteproto::Encoding::Hash { content_hash, format } => {
+            native::Encoding::Hash { content_hash, format }
+        }
+    }
+}
+
+/// Convert hooteproto::ProjectionTarget to native::ProjectionTarget
+fn proto_to_native_projection_target(target: hooteproto::ProjectionTarget) -> native::ProjectionTarget {
+    match target {
+        hooteproto::ProjectionTarget::Audio { soundfont_hash, sample_rate } => {
+            native::ProjectionTarget::Audio { soundfont_hash, sample_rate }
+        }
+        hooteproto::ProjectionTarget::Midi { channel, velocity } => {
+            native::ProjectionTarget::Midi { channel, velocity }
+        }
     }
 }
