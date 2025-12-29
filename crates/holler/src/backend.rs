@@ -6,6 +6,7 @@ use anyhow::Result;
 use hooteproto::{ClientConfig, ConnectionState, HootClient, Payload};
 use std::sync::Arc;
 use tracing::info;
+use uuid::Uuid;
 
 /// Pool of backend connections
 ///
@@ -29,10 +30,16 @@ impl BackendPool {
     ///
     /// ZMQ's connect() is non-blocking, so the peer doesn't need to exist.
     /// The server can start immediately without waiting for the backend.
+    ///
+    /// Uses a unique identity per client to avoid ZMQ routing collisions when
+    /// multiple holler instances connect to the same hootenanny.
     pub async fn setup_hootenanny(&mut self, endpoint: &str, timeout_ms: u64) {
-        let config = ClientConfig::new("hootenanny", endpoint).with_timeout(timeout_ms);
+        // Generate unique identity to avoid collision with other holler instances
+        let identity = format!("holler-{}", Uuid::new_v4());
+        let config = ClientConfig::new(&identity, endpoint).with_timeout(timeout_ms);
         self.hootenanny_config = Some(config.clone()); // Store for recreation
         let client = HootClient::new(config).await;
+        info!("BackendPool: Created client with identity {}", identity);
         self.hootenanny = Some(client);
     }
 
