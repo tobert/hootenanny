@@ -370,8 +370,6 @@ impl GardenPeer {
         let frames = frame.to_frames();
         let multipart: Multipart = frames.iter().map(|f| f.to_vec()).collect::<Vec<_>>().into();
 
-        debug!("Sending shell request ({})", request_id);
-
         // Send
         {
             let mut tx = self.shell.tx.lock().await;
