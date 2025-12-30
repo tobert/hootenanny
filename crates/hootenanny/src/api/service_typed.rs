@@ -1,7 +1,7 @@
 //! Typed method implementations for EventDualityServer.
 //!
-//! These methods return typed response structs instead of `ToolResult`.
-//! They are used by the TypedDispatcher for the new protocol.
+//! These methods return typed ToolResponse variants directly.
+//! They are used by the TypedDispatcher for the Cap'n Proto protocol.
 
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::ArtifactStore;
@@ -2918,18 +2918,7 @@ impl EventDualityServer {
         &self,
         request: hooteproto::request::SampleRequest,
     ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
-        use hooteproto::responses::ToolResponse;
-
-        // Native modules now use hooteproto types directly
-        let result = self.sample(request).await?;
-
-        // Extract job_id from the ToolOutput data
-        let job_id = result.data.get("job_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        Ok(ToolResponse::job_started(job_id, "sample"))
+        self.sample(request).await
     }
 
     /// Extend existing content.
@@ -2939,18 +2928,7 @@ impl EventDualityServer {
         &self,
         request: hooteproto::request::ExtendRequest,
     ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
-        use hooteproto::responses::ToolResponse;
-
-        // Native modules now use hooteproto types directly
-        let result = self.extend(request).await?;
-
-        // Extract job_id from the ToolOutput data
-        let job_id = result.data.get("job_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        Ok(ToolResponse::job_started(job_id, "extend"))
+        self.extend(request).await
     }
 
     /// Create bridge transitions between sections.
@@ -2960,18 +2938,7 @@ impl EventDualityServer {
         &self,
         request: hooteproto::request::BridgeRequest,
     ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
-        use hooteproto::responses::ToolResponse;
-
-        // Native modules now use hooteproto types directly
-        let result = self.bridge(request).await?;
-
-        // Extract job_id from the ToolOutput data
-        let job_id = result.data.get("job_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        Ok(ToolResponse::job_started(job_id, "bridge"))
+        self.bridge(request).await
     }
 
     /// Project content to a different format.
@@ -2981,36 +2948,7 @@ impl EventDualityServer {
         &self,
         request: hooteproto::request::ProjectRequest,
     ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
-        use hooteproto::responses::ToolResponse;
-
-        // Native modules now use hooteproto types directly
-        let result = self.project(request).await?;
-
-        // project() returns immediately for ABC→MIDI (sync) or spawns a job for MIDI→audio (async)
-        // Extract job_id if it's an async projection, otherwise extract artifact_id
-        if let Some(job_id) = result.data.get("job_id").and_then(|v| v.as_str()) {
-            Ok(ToolResponse::job_started(job_id.to_string(), "project"))
-        } else if let Some(artifact_id) = result.data.get("artifact_id").and_then(|v| v.as_str()) {
-            // Sync projection (ABC→MIDI) - return project result response
-            let content_hash = result.data.get("content_hash")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let projection_type = result.data.get("projection_type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-
-            Ok(ToolResponse::ProjectResult(hooteproto::responses::ProjectResultResponse {
-                artifact_id: artifact_id.to_string(),
-                content_hash,
-                projection_type,
-                duration_seconds: None,
-                sample_rate: None,
-            }))
-        } else {
-            Err(ToolError::internal("Project result missing expected fields"))
-        }
+        self.project(request).await
     }
 
     // =========================================================================

@@ -183,42 +183,6 @@ pub struct ArtifactMetadata {
 }
 
 // ============================================================================
-// Tool Result Types (used by hootenanny, returned over ZMQ)
-// ============================================================================
-
-/// Successful tool output
-///
-/// Contains both a human-readable text summary and structured data for programmatic use.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolOutput {
-    /// Human-readable summary of what the tool did
-    pub text: String,
-    /// Structured data for programmatic use
-    pub data: serde_json::Value,
-}
-
-impl ToolOutput {
-    /// Create a new tool output with text and structured data
-    pub fn new(text: impl Into<String>, data: impl serde::Serialize) -> Self {
-        Self {
-            text: text.into(),
-            data: serde_json::to_value(data).unwrap_or(serde_json::Value::Null),
-        }
-    }
-
-    /// Create a tool output with only text (no structured data)
-    pub fn text_only(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            data: serde_json::Value::Null,
-        }
-    }
-}
-
-/// Result type for tool execution (uses typed ToolError from envelope module)
-pub type ToolResult = Result<ToolOutput, ToolError>;
-
-// ============================================================================
 // ZMQ Message Types
 // ============================================================================
 

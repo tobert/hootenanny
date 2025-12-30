@@ -5,26 +5,16 @@
 //! - ABC notation to MIDI
 //! - Audio format conversions (future)
 
-use hooteproto::responses::{JobSpawnResponse, JobState};
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::mcp_tools::rustysynth::{inspect_soundfont, render_midi_to_wav};
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
 use hooteproto::responses::{AudioFormat, AudioGeneratedResponse, ToolResponse};
-use hooteproto::{Encoding, OutputType, ProjectionTarget, ToolError, ToolOutput, ToolResult};
-use serde::{Deserialize, Serialize};
+use hooteproto::{Encoding, OutputType, ProjectionTarget, ToolError};
 use std::sync::Arc;
 
 // Re-export from hooteproto for backwards compatibility
 pub use hooteproto::request::ProjectRequest;
-
-/// Response from project tool
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct ProjectResponse {
-    pub artifact_id: String,
-    pub content_hash: String,
-    pub projection_type: String,
-}
 
 /// Artifact metadata for projection operations
 #[derive(Debug, Clone)]
@@ -61,7 +51,7 @@ impl EventDualityServer {
             artifact.id = tracing::field::Empty,
         )
     )]
-    pub async fn project(&self, request: ProjectRequest) -> ToolResult {
+    pub async fn project(&self, request: ProjectRequest) -> Result<ToolResponse, ToolError> {
         // Resolve source encoding to content hash and type
         let (source_hash, source_type) = self.resolve_encoding(&request.encoding).await?;
 
@@ -185,7 +175,7 @@ impl EventDualityServer {
         soundfont_hash: String,
         sample_rate: Option<u32>,
         metadata: ArtifactMetadata,
-    ) -> ToolResult {
+    ) -> Result<ToolResponse, ToolError> {
         let job_id = self.job_store.create_job("project_to_audio".to_string());
         tracing::Span::current().record("job.id", job_id.as_str());
 
@@ -308,18 +298,7 @@ impl EventDualityServer {
 
         self.job_store.store_handle(&job_id, handle);
 
-        let response = JobSpawnResponse {
-            job_id: job_id.as_str().to_string(),
-            status: JobState::Pending,
-            artifact_id: None,
-            content_hash: None,
-            message: Some("Projection to audio started".to_string()),
-        };
-
-        Ok(ToolOutput::new(
-            format!("Started projection job: {}", job_id.as_str()),
-            &response,
-        ))
+        Ok(ToolResponse::job_started(job_id.as_str().to_string(), "project"))
     }
 
     /// Project ABC notation to MIDI
@@ -329,7 +308,7 @@ impl EventDualityServer {
         channel: Option<u8>,
         velocity: Option<u8>,
         metadata: ArtifactMetadata,
-    ) -> ToolResult {
+    ) -> Result<ToolResponse, ToolError> {
         let parse_result = abc::parse(&abc_notation);
 
         if parse_result.has_errors() {
@@ -416,17 +395,14 @@ impl EventDualityServer {
             .flush()
             .map_err(|e| ToolError::internal(e.to_string()))?;
 
-        let response = ProjectResponse {
-            artifact_id: artifact_id.as_str().to_string(),
-            content_hash: midi_hash.clone(),
-            projection_type: "abc_to_midi".to_string(),
-        };
-
         tracing::Span::current().record("artifact.id", artifact_id.as_str());
 
-        Ok(ToolOutput::new(
-            format!("Projected ABC to MIDI: {}", artifact_id.as_str()),
-            &response,
-        ))
+        Ok(ToolResponse::ProjectResult(hooteproto::responses::ProjectResultResponse {
+            artifact_id: artifact_id.as_str().to_string(),
+            content_hash: midi_hash,
+            projection_type: "abc_to_midi".to_string(),
+            duration_seconds: None,
+            sample_rate: None,
+        }))
     }
 }

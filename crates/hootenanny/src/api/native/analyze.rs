@@ -6,7 +6,8 @@
 
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::ArtifactStore;
-use hooteproto::{AnalysisTask, Encoding, OutputType, ToolError, ToolOutput, ToolResult};
+use hooteproto::responses::ToolResponse;
+use hooteproto::{AnalysisTask, Encoding, OutputType, ToolError};
 use tracing;
 
 // Re-export from hooteproto for backwards compatibility
@@ -30,7 +31,7 @@ impl EventDualityServer {
             num_tasks = request.tasks.len(),
         )
     )]
-    pub async fn analyze(&self, request: AnalyzeRequest) -> ToolResult {
+    pub async fn analyze(&self, request: AnalyzeRequest) -> Result<ToolResponse, ToolError> {
         if request.tasks.is_empty() {
             return Err(ToolError::validation(
                 "invalid_params",
@@ -287,12 +288,11 @@ impl EventDualityServer {
             format!("Analysis: {}", summary_parts.join(", "))
         };
 
-        let response_body = serde_json::json!({
-            "content_hash": content_hash,
-            "results": results,
-            "summary": summary,
-        });
-
-        Ok(ToolOutput::new(summary, response_body))
+        Ok(ToolResponse::AnalyzeResult(hooteproto::responses::AnalyzeResultResponse {
+            content_hash,
+            results: serde_json::json!(results),
+            summary,
+            artifact_id: None,
+        }))
     }
 }

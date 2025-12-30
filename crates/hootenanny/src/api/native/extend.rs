@@ -7,8 +7,8 @@ use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::mcp_tools::local_models::OrpheusGenerateParams;
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
-use hooteproto::responses::{JobSpawnResponse, JobState, OrpheusGeneratedResponse, ToolResponse};
-use hooteproto::{Encoding, Space, ToolError, ToolOutput, ToolResult};
+use hooteproto::responses::{OrpheusGeneratedResponse, ToolResponse};
+use hooteproto::{Encoding, Space, ToolError};
 use std::sync::Arc;
 use tracing;
 
@@ -34,7 +34,7 @@ impl EventDualityServer {
             job.id = tracing::field::Empty,
         )
     )]
-    pub async fn extend(&self, request: ExtendRequest) -> ToolResult {
+    pub async fn extend(&self, request: ExtendRequest) -> Result<ToolResponse, ToolError> {
         // Resolve encoding to content hash
         let (content_hash, source_artifact_id) = {
             let store = self
@@ -234,20 +234,6 @@ impl EventDualityServer {
 
         self.job_store.store_handle(&job_id, handle);
 
-        let response = JobSpawnResponse {
-            job_id: job_id.as_str().to_string(),
-            status: JobState::Pending,
-            artifact_id: None,
-            content_hash: None,
-            message: Some(format!(
-                "Extension started in {:?} space. Use job_poll() to retrieve results.",
-                space
-            )),
-        };
-
-        Ok(ToolOutput::new(
-            format!("Started extend job: {}", job_id.as_str()),
-            &response,
-        ))
+        Ok(ToolResponse::job_started(job_id.as_str().to_string(), "extend"))
     }
 }

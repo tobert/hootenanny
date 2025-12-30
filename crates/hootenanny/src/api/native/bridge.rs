@@ -6,8 +6,8 @@
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
-use hooteproto::responses::{JobSpawnResponse, JobState, OrpheusGeneratedResponse, ToolResponse};
-use hooteproto::{Encoding, ToolError, ToolOutput, ToolResult};
+use hooteproto::responses::{OrpheusGeneratedResponse, ToolResponse};
+use hooteproto::{Encoding, ToolError};
 use std::sync::Arc;
 use tracing;
 
@@ -57,7 +57,7 @@ impl EventDualityServer {
             job.id = tracing::field::Empty,
         )
     )]
-    pub async fn bridge(&self, request: BridgeRequest) -> ToolResult {
+    pub async fn bridge(&self, request: BridgeRequest) -> Result<ToolResponse, ToolError> {
         // Validate inference context
         request
             .inference
@@ -216,19 +216,6 @@ impl EventDualityServer {
 
         self.job_store.store_handle(&job_id, handle);
 
-        let response = JobSpawnResponse {
-            job_id: job_id.as_str().to_string(),
-            status: JobState::Pending,
-            artifact_id: None,
-            content_hash: None,
-            message: Some(
-                "Bridge generation started. Use job_poll() to retrieve results.".to_string(),
-            ),
-        };
-
-        Ok(ToolOutput::new(
-            format!("Started bridge job: {}", job_id.as_str()),
-            &response,
-        ))
+        Ok(ToolResponse::job_started(job_id.as_str().to_string(), "bridge"))
     }
 }

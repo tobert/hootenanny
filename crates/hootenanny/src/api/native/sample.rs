@@ -7,8 +7,8 @@ use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::mcp_tools::local_models::OrpheusGenerateParams;
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
-use hooteproto::responses::{AudioFormat, AudioGeneratedResponse, JobSpawnResponse, JobState, OrpheusGeneratedResponse, ToolResponse};
-use hooteproto::{Encoding, Space, ToolError, ToolOutput, ToolResult};
+use hooteproto::responses::{AudioFormat, AudioGeneratedResponse, OrpheusGeneratedResponse, ToolResponse};
+use hooteproto::{Encoding, Space, ToolError};
 use std::sync::Arc;
 use tracing;
 
@@ -34,7 +34,7 @@ impl EventDualityServer {
             job.id = tracing::field::Empty,
         )
     )]
-    pub async fn sample(&self, request: SampleRequest) -> ToolResult {
+    pub async fn sample(&self, request: SampleRequest) -> Result<ToolResponse, ToolError> {
         // Validate inference context
         request
             .inference
@@ -149,21 +149,7 @@ impl EventDualityServer {
 
         self.job_store.store_handle(&job_id, handle);
 
-        let response = JobSpawnResponse {
-            job_id: job_id.as_str().to_string(),
-            status: JobState::Pending,
-            artifact_id: None,
-            content_hash: None,
-            message: Some(format!(
-                "Sample generation started in {:?} space. Use job_poll() to retrieve results.",
-                space
-            )),
-        };
-
-        Ok(ToolOutput::new(
-            format!("Started sample job: {}", job_id.as_str()),
-            &response,
-        ))
+        Ok(ToolResponse::job_started(job_id.as_str().to_string(), "sample"))
     }
 }
 
