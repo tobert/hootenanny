@@ -621,7 +621,7 @@ impl EventDualityServer {
             job_id: info.job_id.to_string(),
             status,
             source: info.source,
-            result: None, // TODO: Convert result to typed response
+            result: info.result.map(Box::new),
             error: info.error,
             created_at: info.created_at,
             started_at: info.started_at,
@@ -680,7 +680,7 @@ impl EventDualityServer {
                     job_id: info.job_id.to_string(),
                     status,
                     source: info.source,
-                    result: None,
+                    result: info.result.map(Box::new),
                     error: info.error,
                     created_at: info.created_at,
                     started_at: info.started_at,
@@ -1024,7 +1024,12 @@ impl EventDualityServer {
                 let tag_match = tag.is_none_or(|t| a.tags.iter().any(|at| at == t));
                 let creator_match = creator.is_none_or(|c| a.creator.as_str() == c);
                 let time_match = time_threshold.is_none_or(|threshold| a.created_at >= threshold);
-                let vibe_match = vibe_search.is_none(); // TODO: implement vibe search
+                let vibe_match = vibe_search.is_none_or(|v| {
+                    // Search for tags like "vibe:jazzy" matching the search term
+                    a.tags.iter().any(|t| {
+                        t.starts_with("vibe:") && t[5..].contains(v)
+                    })
+                });
                 tag_match && creator_match && time_match && vibe_match
             })
             .take(limit.unwrap_or(20))
@@ -1409,7 +1414,7 @@ impl EventDualityServer {
 
         let hints_count = device_hints.len();
         let identity = graph_bind(db, id, name, device_hints)
-            .map_err(|e| ToolError::internal(e))?;
+            .map_err(ToolError::internal)?;
 
         Ok(hooteproto::responses::GraphBindResponse {
             identity_id: identity.id.0,
@@ -1431,7 +1436,7 @@ impl EventDualityServer {
 
         // Add the single tag
         let _tags = graph_tag(db, identity_id, vec![(namespace.to_string(), value.to_string())], vec![])
-            .map_err(|e| ToolError::internal(e))?;
+            .map_err(ToolError::internal)?;
 
         Ok(hooteproto::responses::GraphTagResponse {
             identity_id: identity_id.to_string(),
@@ -1453,7 +1458,7 @@ impl EventDualityServer {
         let db = self.graph_adapter.db();
 
         let _conn = graph_connect(db, from_identity, from_port, to_identity, to_port, transport.as_deref())
-            .map_err(|e| ToolError::internal(e))?;
+            .map_err(ToolError::internal)?;
 
         Ok(hooteproto::responses::GraphConnectResponse {
             from_identity: from_identity.to_string(),
