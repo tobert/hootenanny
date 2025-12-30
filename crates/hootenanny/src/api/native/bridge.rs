@@ -3,11 +3,10 @@
 //! This implements the model-native `bridge()` API for creating transitions
 //! between musical sections using the Orpheus bridge model.
 
-use crate::api::responses::{JobSpawnResponse, JobStatus};
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
-use hooteproto::responses::{OrpheusGeneratedResponse, ToolResponse};
+use hooteproto::responses::{JobSpawnResponse, JobState, OrpheusGeneratedResponse, ToolResponse};
 use hooteproto::{Encoding, ToolError, ToolOutput, ToolResult};
 use std::sync::Arc;
 use tracing;
@@ -219,7 +218,7 @@ impl EventDualityServer {
 
         let response = JobSpawnResponse {
             job_id: job_id.as_str().to_string(),
-            status: JobStatus::Pending,
+            status: JobState::Pending,
             artifact_id: None,
             content_hash: None,
             message: Some(

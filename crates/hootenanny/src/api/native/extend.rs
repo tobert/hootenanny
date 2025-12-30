@@ -3,12 +3,11 @@
 //! This implements the model-native `extend()` API that continues/extends existing
 //! content using the appropriate continuation method for each space.
 
-use crate::api::responses::{JobSpawnResponse, JobStatus};
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::mcp_tools::local_models::OrpheusGenerateParams;
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
-use hooteproto::responses::{OrpheusGeneratedResponse, ToolResponse};
+use hooteproto::responses::{JobSpawnResponse, JobState, OrpheusGeneratedResponse, ToolResponse};
 use hooteproto::{Encoding, Space, ToolError, ToolOutput, ToolResult};
 use std::sync::Arc;
 use tracing;
@@ -237,7 +236,7 @@ impl EventDualityServer {
 
         let response = JobSpawnResponse {
             job_id: job_id.as_str().to_string(),
-            status: JobStatus::Pending,
+            status: JobState::Pending,
             artifact_id: None,
             content_hash: None,
             message: Some(format!(

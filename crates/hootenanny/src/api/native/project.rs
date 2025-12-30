@@ -5,7 +5,7 @@
 //! - ABC notation to MIDI
 //! - Audio format conversions (future)
 
-use crate::api::responses::{JobSpawnResponse, JobStatus};
+use hooteproto::responses::{JobSpawnResponse, JobState};
 use crate::api::service::EventDualityServer;
 use crate::artifact_store::{Artifact, ArtifactStore};
 use crate::mcp_tools::rustysynth::{inspect_soundfont, render_midi_to_wav};
@@ -310,7 +310,7 @@ impl EventDualityServer {
 
         let response = JobSpawnResponse {
             job_id: job_id.as_str().to_string(),
-            status: JobStatus::Pending,
+            status: JobState::Pending,
             artifact_id: None,
             content_hash: None,
             message: Some("Projection to audio started".to_string()),

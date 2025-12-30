@@ -201,6 +201,24 @@ pub struct JobStartedResponse {
     pub tool: String,
 }
 
+/// Response from tools that spawn async jobs (more detailed than JobStartedResponse)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobSpawnResponse {
+    /// Unique job identifier
+    pub job_id: String,
+    /// Current job status
+    pub status: JobState,
+    /// Artifact ID if job completed
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_id: Option<String>,
+    /// Content hash if job completed
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    /// Human-readable message
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum JobState {
