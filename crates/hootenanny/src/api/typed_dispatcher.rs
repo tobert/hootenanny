@@ -596,6 +596,93 @@ impl TypedDispatcher {
             | ToolRequest::WeaveReset(_)
             | ToolRequest::WeaveHelp(_) => self.dispatch_vibeweaver(request).await,
 
+            // === Garden Audio ===
+            ToolRequest::GardenAttachAudio(req) => {
+                match self.server.garden_attach_audio_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenAudioStatus(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::GardenDetachAudio => {
+                match self.server.garden_detach_audio_typed().await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenAudioStatus(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::GardenAudioStatus => {
+                match self.server.garden_audio_status_typed().await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenAudioStatus(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::GardenAttachInput(req) => {
+                match self.server.garden_attach_input_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenInputStatus(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::GardenDetachInput => {
+                match self.server.garden_detach_input_typed().await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenInputStatus(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::GardenInputStatus => {
+                match self.server.garden_input_status_typed().await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenInputStatus(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::GardenSetMonitor(req) => {
+                match self.server.garden_set_monitor_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenMonitorStatus(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+
+            // === Tool Help ===
+            ToolRequest::GetToolHelp(req) => {
+                match self.server.get_tool_help_typed(req.topic.as_deref()).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::ToolHelp(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+
+            // === Artifact Create ===
+            ToolRequest::ArtifactCreate(req) => {
+                match self.server.artifact_create_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::ArtifactCreated(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+
+            // === Resources (not yet implemented) ===
+            ToolRequest::ReadResource(_) => {
+                ResponseEnvelope::error(ToolError::internal(
+                    "read_resource not yet implemented in typed dispatcher. \
+                     Use the MCP resources protocol instead.",
+                ))
+            }
+            ToolRequest::ListResources => {
+                ResponseEnvelope::error(ToolError::internal(
+                    "list_resources not yet implemented in typed dispatcher. \
+                     Use the MCP resources protocol instead.",
+                ))
+            }
+
+            // === Completion/LLM (not yet implemented) ===
+            ToolRequest::Complete(_) => {
+                ResponseEnvelope::error(ToolError::internal(
+                    "complete not yet implemented in typed dispatcher",
+                ))
+            }
+            ToolRequest::SampleLlm(_) => {
+                ResponseEnvelope::error(ToolError::internal(
+                    "sample_llm not yet implemented in typed dispatcher. \
+                     Use the LLM tools from the agent chat subsystem instead.",
+                ))
+            }
+
             // === Admin ===
             ToolRequest::Ping => ResponseEnvelope::ack("pong"),
             ToolRequest::ListTools => {
@@ -608,17 +695,30 @@ impl TypedDispatcher {
                 }))
             }
 
-            // Fallback for tools not yet implemented
-            other => {
-                let tool_name = other.name();
-                tracing::warn!(
-                    tool = tool_name,
-                    "Tool not yet implemented in typed dispatcher"
-                );
-                ResponseEnvelope::error(ToolError::internal(format!(
-                    "Tool '{}' not yet implemented in typed dispatcher",
-                    tool_name
-                )))
+            // === FireAndForget tools (routed via dispatch_fire_and_forget) ===
+            // These should never reach dispatch_async, but Rust requires exhaustive matching.
+            ToolRequest::GardenPlay
+            | ToolRequest::GardenPause
+            | ToolRequest::GardenStop
+            | ToolRequest::GardenSeek(_)
+            | ToolRequest::GardenSetTempo(_)
+            | ToolRequest::GardenEmergencyPause
+            | ToolRequest::GardenCreateRegion(_)
+            | ToolRequest::GardenDeleteRegion(_)
+            | ToolRequest::GardenMoveRegion(_) => {
+                unreachable!(
+                    "FireAndForget tools should be routed via dispatch_fire_and_forget"
+                )
+            }
+
+            // === AsyncLong tools (routed via dispatch_async_return_job_id) ===
+            ToolRequest::MusicgenGenerate(_)
+            | ToolRequest::YueGenerate(_)
+            | ToolRequest::BeatthisAnalyze(_)
+            | ToolRequest::ClapAnalyze(_) => {
+                unreachable!(
+                    "AsyncLong tools should be routed via dispatch_async_return_job_id"
+                )
             }
         }
     }

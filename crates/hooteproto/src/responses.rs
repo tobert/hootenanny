@@ -102,6 +102,9 @@ pub enum ToolResponse {
     WeaveReset(WeaveResetResponse),
     WeaveHelp(WeaveHelpResponse),
 
+    // === Tool Help ===
+    ToolHelp(ToolHelpResponse),
+
     // === Timeline Scheduling ===
     Scheduled(ScheduledResponse),
 
@@ -731,6 +734,17 @@ pub struct WeaveResetResponse {
 /// Help documentation
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WeaveHelpResponse {
+    pub help: String,
+    pub topic: Option<String>,
+}
+
+// =============================================================================
+// Tool Help
+// =============================================================================
+
+/// Response for get_tool_help
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolHelpResponse {
     pub help: String,
     pub topic: Option<String>,
 }

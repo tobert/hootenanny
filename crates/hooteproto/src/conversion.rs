@@ -1941,6 +1941,11 @@ fn response_to_capnp_tool_response(
             b.set_help(&r.help);
             b.set_topic(r.topic.as_deref().unwrap_or(""));
         }
+        ToolResponse::ToolHelp(r) => {
+            let mut b = builder.reborrow().init_tool_help();
+            b.set_help(&r.help);
+            b.set_topic(r.topic.as_deref().unwrap_or(""));
+        }
         ToolResponse::Scheduled(r) => {
             let mut b = builder.reborrow().init_schedule_result();
             b.set_success(r.success);
@@ -2656,9 +2661,13 @@ fn capnp_tool_response_to_response(
             }))
         }
 
-        Which::ToolHelp(_) => {
-            // ToolHelp exists in capnp schema but not in Rust ToolResponse enum
-            Err(capnp::Error::failed("ToolHelp response type not implemented in Rust".to_string()))
+        Which::ToolHelp(r) => {
+            let r = r?;
+            let topic = r.get_topic()?.to_string()?;
+            Ok(ToolResponse::ToolHelp(ToolHelpResponse {
+                help: r.get_help()?.to_string()?,
+                topic: if topic.is_empty() { None } else { Some(topic) },
+            }))
         }
 
         Which::AnalyzeResult(r) => {

@@ -3013,6 +3013,292 @@ impl EventDualityServer {
         }
     }
 
+    // =========================================================================
+    // Garden Audio Tools
+    // =========================================================================
+
+    /// Attach PipeWire audio output.
+    pub async fn garden_attach_audio_typed(
+        &self,
+        request: hooteproto::request::GardenAttachAudioRequest,
+    ) -> Result<hooteproto::responses::GardenAudioStatusResponse, ToolError> {
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Not connected to chaosgarden. Start hootenanny with --chaosgarden=local or --chaosgarden=tcp://host:port",
+            )
+        })?;
+
+        use chaosgarden::ipc::ShellRequest;
+
+        match manager
+            .request(ShellRequest::AttachAudio {
+                device_name: request.device_name,
+                sample_rate: request.sample_rate,
+                latency_frames: request.latency_frames,
+            })
+            .await
+        {
+            Ok(chaosgarden::ipc::ShellReply::Ok { result: _ }) => {
+                // After attach, get current status
+                self.garden_audio_status_typed().await
+            }
+            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => Err(ToolError::internal(error)),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Attach audio failed: {}", e))),
+        }
+    }
+
+    /// Detach PipeWire audio output.
+    pub async fn garden_detach_audio_typed(
+        &self,
+    ) -> Result<hooteproto::responses::GardenAudioStatusResponse, ToolError> {
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Not connected to chaosgarden",
+            )
+        })?;
+
+        use chaosgarden::ipc::ShellRequest;
+
+        match manager.request(ShellRequest::DetachAudio).await {
+            Ok(chaosgarden::ipc::ShellReply::Ok { result: _ }) => {
+                self.garden_audio_status_typed().await
+            }
+            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => Err(ToolError::internal(error)),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Detach audio failed: {}", e))),
+        }
+    }
+
+    /// Get PipeWire audio output status.
+    pub async fn garden_audio_status_typed(
+        &self,
+    ) -> Result<hooteproto::responses::GardenAudioStatusResponse, ToolError> {
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Not connected to chaosgarden",
+            )
+        })?;
+
+        use chaosgarden::ipc::ShellRequest;
+
+        match manager.request(ShellRequest::GetAudioStatus).await {
+            Ok(chaosgarden::ipc::ShellReply::AudioStatus {
+                attached,
+                device_name,
+                sample_rate,
+                latency_frames,
+                callbacks,
+                samples_written,
+                underruns,
+                ..
+            }) => Ok(hooteproto::responses::GardenAudioStatusResponse {
+                attached,
+                device_name,
+                sample_rate,
+                latency_frames,
+                callbacks,
+                samples_written,
+                underruns,
+            }),
+            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => Err(ToolError::internal(error)),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Get audio status failed: {}", e))),
+        }
+    }
+
+    /// Attach PipeWire audio input for monitoring.
+    pub async fn garden_attach_input_typed(
+        &self,
+        request: hooteproto::request::GardenAttachInputRequest,
+    ) -> Result<hooteproto::responses::GardenInputStatusResponse, ToolError> {
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Not connected to chaosgarden",
+            )
+        })?;
+
+        use chaosgarden::ipc::ShellRequest;
+
+        match manager
+            .request(ShellRequest::AttachInput {
+                device_name: request.device_name,
+                sample_rate: request.sample_rate,
+            })
+            .await
+        {
+            Ok(chaosgarden::ipc::ShellReply::Ok { result: _ }) => {
+                self.garden_input_status_typed().await
+            }
+            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => Err(ToolError::internal(error)),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Attach input failed: {}", e))),
+        }
+    }
+
+    /// Detach PipeWire audio input.
+    pub async fn garden_detach_input_typed(
+        &self,
+    ) -> Result<hooteproto::responses::GardenInputStatusResponse, ToolError> {
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Not connected to chaosgarden",
+            )
+        })?;
+
+        use chaosgarden::ipc::ShellRequest;
+
+        match manager.request(ShellRequest::DetachInput).await {
+            Ok(chaosgarden::ipc::ShellReply::Ok { result: _ }) => {
+                self.garden_input_status_typed().await
+            }
+            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => Err(ToolError::internal(error)),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Detach input failed: {}", e))),
+        }
+    }
+
+    /// Get PipeWire audio input status.
+    pub async fn garden_input_status_typed(
+        &self,
+    ) -> Result<hooteproto::responses::GardenInputStatusResponse, ToolError> {
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Not connected to chaosgarden",
+            )
+        })?;
+
+        use chaosgarden::ipc::ShellRequest;
+
+        match manager.request(ShellRequest::GetInputStatus).await {
+            Ok(chaosgarden::ipc::ShellReply::InputStatus {
+                attached,
+                device_name,
+                sample_rate,
+                channels,
+                monitor_enabled,
+                monitor_gain,
+                callbacks,
+                samples_captured,
+                overruns,
+            }) => Ok(hooteproto::responses::GardenInputStatusResponse {
+                attached,
+                device_name,
+                sample_rate,
+                channels,
+                monitor_enabled,
+                monitor_gain,
+                callbacks,
+                samples_captured,
+                overruns,
+            }),
+            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => Err(ToolError::internal(error)),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Get input status failed: {}", e))),
+        }
+    }
+
+    /// Set monitor control (input passthrough to output).
+    pub async fn garden_set_monitor_typed(
+        &self,
+        request: hooteproto::request::GardenSetMonitorRequest,
+    ) -> Result<hooteproto::responses::GardenMonitorStatusResponse, ToolError> {
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Not connected to chaosgarden",
+            )
+        })?;
+
+        use chaosgarden::ipc::ShellRequest;
+
+        match manager
+            .request(ShellRequest::SetMonitor {
+                enabled: request.enabled,
+                gain: request.gain,
+            })
+            .await
+        {
+            Ok(chaosgarden::ipc::ShellReply::Ok { result }) => {
+                // Extract values from JSON result
+                let enabled = result.get("monitor_enabled")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(request.enabled.unwrap_or(false));
+                let gain = result.get("monitor_gain")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(request.gain.map(|g| g as f64).unwrap_or(1.0));
+                Ok(hooteproto::responses::GardenMonitorStatusResponse {
+                    enabled,
+                    gain,
+                })
+            }
+            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => Err(ToolError::internal(error)),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Set monitor failed: {}", e))),
+        }
+    }
+
+    // =========================================================================
+    // Utility Tools
+    // =========================================================================
+
+    /// Get tool help documentation.
+    pub async fn get_tool_help_typed(
+        &self,
+        topic: Option<&str>,
+    ) -> Result<hooteproto::responses::ToolHelpResponse, ToolError> {
+        let help_text = crate::api::tools::help::get_help(topic);
+        Ok(hooteproto::responses::ToolHelpResponse {
+            help: help_text,
+            topic: topic.map(|s| s.to_string()),
+        })
+    }
+
+    /// Create artifact from CAS hash.
+    pub async fn artifact_create_typed(
+        &self,
+        request: hooteproto::request::ArtifactCreateRequest,
+    ) -> Result<hooteproto::responses::ArtifactCreatedResponse, ToolError> {
+        use crate::artifact_store::Artifact;
+        use crate::types::{ArtifactId, ContentHash};
+
+        let content_hash = ContentHash::new(&request.cas_hash);
+        let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+        let creator = request.creator.unwrap_or_else(|| "unknown".to_string());
+
+        let artifact = Artifact::new(
+            artifact_id.clone(),
+            content_hash,
+            &creator,
+            request.metadata,
+        )
+        .with_tags(request.tags.clone());
+
+        let store = self
+            .artifact_store
+            .write()
+            .map_err(|_| ToolError::internal("Lock poisoned"))?;
+        store
+            .put(artifact)
+            .map_err(|e| ToolError::internal(e.to_string()))?;
+        store
+            .flush()
+            .map_err(|e| ToolError::internal(e.to_string()))?;
+
+        Ok(hooteproto::responses::ArtifactCreatedResponse {
+            artifact_id: artifact_id.as_str().to_string(),
+            content_hash: request.cas_hash,
+            tags: request.tags,
+            creator,
+        })
+    }
+
     /// Run analysis tasks on content.
     ///
     /// Dispatches to Orpheus classifier, BeatThis, CLAP based on content type.
