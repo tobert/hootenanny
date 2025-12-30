@@ -1565,8 +1565,7 @@ fn response_to_capnp_tool_response(
             b.set_timed_out(r.timed_out);
         }
         ToolResponse::JobPoll(r) => {
-            // Reuse job_poll_result structure
-            let mut b = builder.reborrow().init_job_poll_result();
+            let mut b = builder.reborrow().init_job_poll();
             let mut completed = b.reborrow().init_completed(r.completed.len() as u32);
             for (i, id) in r.completed.iter().enumerate() {
                 completed.set(i as u32, id);
@@ -1579,16 +1578,16 @@ fn response_to_capnp_tool_response(
             for (i, id) in r.pending.iter().enumerate() {
                 pending.set(i as u32, id);
             }
-            b.set_timed_out(r.reason == "timeout");
+            b.set_reason(&r.reason);
+            b.set_elapsed_ms(r.elapsed_ms);
         }
         ToolResponse::JobCancel(r) => {
-            // Use ack with structured message
-            let msg = format!("Job {} cancelled: {}", r.job_id, r.cancelled);
-            builder.reborrow().init_ack().set_message(&msg);
+            let mut b = builder.reborrow().init_job_cancel();
+            b.set_job_id(&r.job_id);
+            b.set_cancelled(r.cancelled);
         }
         ToolResponse::JobSleep(r) => {
-            let msg = format!("Slept for {}ms", r.slept_ms);
-            builder.reborrow().init_ack().set_message(&msg);
+            builder.reborrow().init_job_sleep().set_slept_ms(r.slept_ms);
         }
 
         // ABC Notation
@@ -1631,18 +1630,16 @@ fn response_to_capnp_tool_response(
             b.set_notes_count(r.notes_count as u64);
         }
         ToolResponse::AbcToMidi(r) => {
-            // Reuse artifact_created structure
-            let mut b = builder.reborrow().init_artifact_created();
+            let mut b = builder.reborrow().init_abc_to_midi();
             b.set_artifact_id(&r.artifact_id);
             b.set_content_hash(&r.content_hash);
-            b.set_creator("abc_to_midi");
         }
         ToolResponse::MidiToWav(r) => {
-            // Reuse artifact_created structure
-            let mut b = builder.reborrow().init_artifact_created();
+            let mut b = builder.reborrow().init_midi_to_wav();
             b.set_artifact_id(&r.artifact_id);
             b.set_content_hash(&r.content_hash);
-            b.set_creator("midi_to_wav");
+            b.set_sample_rate(r.sample_rate);
+            b.set_duration_secs(r.duration_secs.unwrap_or(0.0));
         }
 
         // SoundFont
@@ -2712,6 +2709,59 @@ fn capnp_tool_response_to_response(
                 from_port: r.get_from_port()?.to_string()?,
                 to_identity: r.get_to_identity()?.to_string()?,
                 to_port: r.get_to_port()?.to_string()?,
+            }))
+        }
+
+        // Extended Job responses
+        Which::JobPoll(r) => {
+            let r = r?;
+            let completed: Vec<String> = r.get_completed()?.iter()
+                .filter_map(|s| s.ok().and_then(|t| t.to_string().ok()))
+                .collect();
+            let failed: Vec<String> = r.get_failed()?.iter()
+                .filter_map(|s| s.ok().and_then(|t| t.to_string().ok()))
+                .collect();
+            let pending: Vec<String> = r.get_pending()?.iter()
+                .filter_map(|s| s.ok().and_then(|t| t.to_string().ok()))
+                .collect();
+            Ok(ToolResponse::JobPoll(JobPollResponse {
+                completed,
+                failed,
+                pending,
+                reason: r.get_reason()?.to_string()?,
+                elapsed_ms: r.get_elapsed_ms(),
+            }))
+        }
+        Which::JobCancel(r) => {
+            let r = r?;
+            Ok(ToolResponse::JobCancel(JobCancelResponse {
+                job_id: r.get_job_id()?.to_string()?,
+                cancelled: r.get_cancelled(),
+            }))
+        }
+        Which::JobSleep(r) => {
+            let r = r?;
+            Ok(ToolResponse::JobSleep(JobSleepResponse {
+                slept_ms: r.get_slept_ms(),
+            }))
+        }
+
+        // Audio Conversion responses
+        Which::AbcToMidi(r) => {
+            let r = r?;
+            Ok(ToolResponse::AbcToMidi(AbcToMidiResponse {
+                artifact_id: r.get_artifact_id()?.to_string()?,
+                content_hash: r.get_content_hash()?.to_string()?,
+            }))
+        }
+        Which::MidiToWav(r) => {
+            let r = r?;
+            let duration_secs = r.get_duration_secs();
+            Ok(ToolResponse::MidiToWav(MidiToWavResponse {
+                artifact_id: r.get_artifact_id()?.to_string()?,
+                content_hash: r.get_content_hash()?.to_string()?,
+                sample_rate: r.get_sample_rate(),
+                duration_secs: if duration_secs > 0.0 { Some(duration_secs) } else { None },
             }))
         }
     }

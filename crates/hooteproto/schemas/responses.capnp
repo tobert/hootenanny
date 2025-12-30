@@ -98,6 +98,15 @@ struct ToolResponse {
     graphBind @47 :GraphBindResponse;
     graphTag @48 :GraphTagResponse;
     graphConnect @49 :GraphConnectResponse;
+
+    # Job Extended (with full details)
+    jobPoll @50 :JobPollResponse;
+    jobCancel @51 :JobCancelResponse;
+    jobSleep @52 :JobSleepResponse;
+
+    # Audio Conversion
+    abcToMidi @53 :AbcToMidiResponse;
+    midiToWav @54 :MidiToWavResponse;
   }
 }
 
@@ -220,6 +229,23 @@ struct JobPollResultResponse {
   timedOut @3 :Bool;
 }
 
+struct JobPollResponse {
+  completed @0 :List(Text);
+  failed @1 :List(Text);
+  pending @2 :List(Text);
+  reason @3 :Text;
+  elapsedMs @4 :UInt64;
+}
+
+struct JobCancelResponse {
+  jobId @0 :Text;
+  cancelled @1 :Bool;
+}
+
+struct JobSleepResponse {
+  sleptMs @0 :UInt64;
+}
+
 # =============================================================================
 # ABC Notation Responses
 # =============================================================================
@@ -257,6 +283,22 @@ struct AbcConvertedResponse {
   contentHash @1 :Text;
   durationSeconds @2 :Float64;
   notesCount @3 :UInt64;
+}
+
+struct AbcToMidiResponse {
+  artifactId @0 :Text;
+  contentHash @1 :Text;
+}
+
+# =============================================================================
+# Audio Conversion Responses
+# =============================================================================
+
+struct MidiToWavResponse {
+  artifactId @0 :Text;
+  contentHash @1 :Text;
+  sampleRate @2 :UInt32;
+  durationSecs @3 :Float64;  # 0.0 if not known
 }
 
 # =============================================================================
