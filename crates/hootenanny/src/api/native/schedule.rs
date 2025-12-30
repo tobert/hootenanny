@@ -42,16 +42,16 @@ impl EventDualityServer {
             }
         }
 
-        // Resolve encoding to artifact_id
-        let artifact_id = match &request.encoding {
+        // Resolve encoding to artifact_id and extract duration from metadata
+        let (artifact_id, metadata_duration) = match &request.encoding {
             Encoding::Midi { artifact_id } | Encoding::Audio { artifact_id } => {
-                // Verify artifact exists
+                // Verify artifact exists and extract metadata
                 let store = self
                     .artifact_store
                     .read()
                     .map_err(|_| ToolError::internal("Lock poisoned on artifact_store"))?;
 
-                let _artifact = store
+                let artifact = store
                     .get(artifact_id)
                     .map_err(|e| ToolError::internal(format!("Failed to query artifact store: {}", e)))?
                     .ok_or_else(|| {
@@ -61,7 +61,17 @@ impl EventDualityServer {
                         )
                     })?;
 
-                artifact_id.clone()
+                // Try to extract duration from metadata
+                // Check common locations: duration_seconds, output.duration_seconds
+                let duration = artifact.metadata.get("duration_seconds")
+                    .and_then(|v| v.as_f64())
+                    .or_else(|| {
+                        artifact.metadata.get("output")
+                            .and_then(|o| o.get("duration_seconds"))
+                            .and_then(|v| v.as_f64())
+                    });
+
+                (artifact_id.clone(), duration)
             }
             Encoding::Hash { .. } => {
                 return Err(ToolError::validation(
@@ -77,9 +87,10 @@ impl EventDualityServer {
             }
         };
 
-        // Determine duration (default 4 beats = one measure at 4/4)
-        // TODO: Extract duration from MIDI/audio metadata
-        let duration = request.duration.unwrap_or(4.0);
+        // Use explicit duration if provided, otherwise try metadata, fallback to 4 beats
+        let duration = request.duration
+            .or(metadata_duration)
+            .unwrap_or(4.0);
 
         // Create region on timeline
         use chaosgarden::ipc::{Beat, Behavior, ShellRequest};
