@@ -3,15 +3,6 @@
 //! This allows minimal tool descriptions at startup while still providing
 //! rich documentation when needed.
 
-use hooteproto::{ToolOutput, ToolResult};
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct HelpRequest {
-    /// Tool name or category (e.g., "sample", "garden", "all")
-    pub topic: Option<String>,
-}
-
 /// Get help text for a topic
 pub fn get_help(topic: Option<&str>) -> String {
     match topic {
@@ -33,11 +24,6 @@ pub fn get_help(topic: Option<&str>) -> String {
         Some("inference") => INFERENCE_HELP.to_string(),
         Some(other) => format!("Unknown topic: '{}'. Try: sample, project, extend, bridge, analyze, schedule, garden, artifacts, jobs, graph, abc, soundfont, encoding, spaces, inference", other),
     }
-}
-
-pub async fn help(request: HelpRequest) -> ToolResult {
-    let text = get_help(request.topic.as_deref());
-    Ok(ToolOutput::text_only(text))
 }
 
 const OVERVIEW: &str = r#"# Holler MCP Tools
