@@ -381,6 +381,13 @@ pub enum ShellRequest {
         range: Option<(Beat, Beat)>,
     },
     GetPendingApprovals,
+    /// Full state snapshot for Trustfall query evaluation in hootenanny.
+    /// Returns GardenSnapshot via Cap'n Proto (not JSON).
+    GetSnapshot,
+    /// Get audio graph nodes and edges.
+    GetGraph,
+    /// Get I/O devices (outputs, inputs, MIDI).
+    GetIOState,
 
     // Stream capture commands
     StreamStart {

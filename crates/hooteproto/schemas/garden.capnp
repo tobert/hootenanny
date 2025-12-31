@@ -147,3 +147,276 @@ struct SetMonitor {
   gain @2 :Float32;
   gainSet @3 :Bool;     # true if gain was explicitly set
 }
+
+# === State Snapshot Types ===
+# These enable hootenanny to fetch chaosgarden state for local query evaluation,
+# keeping allocation-heavy Trustfall/GraphQL processing out of the RT process.
+
+# Request for full state snapshot
+struct GetSnapshotRequest {}
+
+# Full garden state - everything needed for Trustfall queries
+struct GardenSnapshot {
+  version @0 :UInt64;              # Monotonic version for cache invalidation
+  transport @1 :TransportState;    # Current playback state
+  regions @2 :List(RegionSnapshot);
+  nodes @3 :List(GraphNode);
+  edges @4 :List(GraphEdge);
+  latentJobs @5 :List(LatentJob);
+  pendingApprovals @6 :List(ApprovalInfo);
+  outputs @7 :List(AudioOutput);
+  inputs @8 :List(AudioInput);
+  midiDevices @9 :List(MidiDeviceInfo);
+  tempoMap @10 :TempoMapSnapshot;
+}
+
+# Region with all queryable fields
+struct RegionSnapshot {
+  id @0 :Text;                     # UUID
+  position @1 :Float64;            # Beat position
+  duration @2 :Float64;            # Duration in beats
+  behaviorType @3 :BehaviorType;
+  name @4 :Text;                   # Optional name
+  tags @5 :List(Text);
+
+  # For PlayContent behavior
+  contentHash @6 :Text;
+  contentType @7 :ContentTypeEnum;
+
+  # For Latent behavior
+  latentStatus @8 :LatentStatusEnum;
+  latentProgress @9 :Float32;
+  jobId @10 :Text;
+  generationTool @11 :Text;
+
+  # Computed/lifecycle flags
+  isResolved @12 :Bool;
+  isApproved @13 :Bool;
+  isPlayable @14 :Bool;
+  isAlive @15 :Bool;
+  isTombstoned @16 :Bool;
+}
+
+enum BehaviorType {
+  playContent @0;
+  latent @1;
+  applyProcessing @2;
+  emitTrigger @3;
+  custom @4;
+}
+
+enum ContentTypeEnum {
+  audio @0;
+  midi @1;
+  control @2;
+}
+
+enum LatentStatusEnum {
+  none @0;        # Not a latent region
+  pending @1;
+  running @2;
+  resolved @3;
+  approved @4;
+  rejected @5;
+  failed @6;
+}
+
+# Graph node with ports and capabilities
+struct GraphNode {
+  id @0 :Text;                     # UUID
+  name @1 :Text;
+  typeId @2 :Text;
+  inputs @3 :List(Port);
+  outputs @4 :List(Port);
+  latencySamples @5 :UInt32;
+  canRealtime @6 :Bool;
+  canOffline @7 :Bool;
+}
+
+struct Port {
+  name @0 :Text;
+  signalType @1 :SignalTypeEnum;
+}
+
+enum SignalTypeEnum {
+  audio @0;
+  midi @1;
+  control @2;
+  trigger @3;
+}
+
+# Graph edge (connection between nodes)
+struct GraphEdge {
+  sourceId @0 :Text;               # UUID
+  sourcePort @1 :Text;
+  destId @2 :Text;                 # UUID
+  destPort @3 :Text;
+}
+
+# Running latent job
+struct LatentJob {
+  id @0 :Text;                     # Job ID
+  regionId @1 :Text;               # UUID
+  tool @2 :Text;
+  progress @3 :Float32;
+}
+
+# Pending approval
+struct ApprovalInfo {
+  regionId @0 :Text;               # UUID
+  contentHash @1 :Text;
+  contentType @2 :ContentTypeEnum;
+}
+
+# Audio output device
+struct AudioOutput {
+  id @0 :Text;                     # UUID
+  name @1 :Text;
+  channels @2 :UInt8;
+  pwNodeId @3 :UInt32;             # 0 = not connected
+  hasPwNodeId @4 :Bool;
+}
+
+# Audio input device
+struct AudioInput {
+  id @0 :Text;                     # UUID
+  name @1 :Text;
+  channels @2 :UInt8;
+  portPattern @3 :Text;
+  pwNodeId @4 :UInt32;             # 0 = not connected
+  hasPwNodeId @5 :Bool;
+}
+
+# MIDI device
+struct MidiDeviceInfo {
+  id @0 :Text;                     # UUID
+  name @1 :Text;
+  direction @2 :MidiDirection;
+  pwNodeId @3 :UInt32;             # 0 = not connected
+  hasPwNodeId @4 :Bool;
+}
+
+enum MidiDirection {
+  input @0;
+  output @1;
+}
+
+# Tempo map for time conversions
+struct TempoMapSnapshot {
+  defaultTempo @0 :Float64;        # BPM
+  ticksPerBeat @1 :UInt32;
+  changes @2 :List(TempoChange);
+}
+
+struct TempoChange {
+  tick @0 :Int64;
+  tempo @1 :Float64;               # BPM
+}
+
+# === IOPub Events (Cap'n Proto version) ===
+# Replaces JSON IOPubEvent for efficient notification
+
+struct IOPubMessage {
+  version @0 :UInt64;              # State version after this event
+  timestamp @1 :UInt64;            # Unix millis
+  event @2 :IOPubEventUnion;
+}
+
+struct IOPubEventUnion {
+  union {
+    # State change (generic - invalidates cache)
+    stateChanged @0 :Void;
+
+    # Transport
+    playbackStarted @1 :Void;
+    playbackStopped @2 :Void;
+    playbackPosition @3 :PlaybackPositionEvent;
+
+    # Regions
+    regionCreated @4 :Text;        # region_id
+    regionDeleted @5 :Text;        # region_id
+    regionMoved @6 :RegionMovedEvent;
+
+    # Latent lifecycle
+    latentStarted @7 :LatentStartedEvent;
+    latentProgress @8 :LatentProgressEvent;
+    latentResolved @9 :LatentResolvedEvent;
+    latentFailed @10 :LatentFailedEvent;
+    latentApproved @11 :Text;      # region_id
+    latentRejected @12 :LatentRejectedEvent;
+
+    # Graph changes
+    nodeAdded @13 :NodeAddedEvent;
+    nodeRemoved @14 :Text;         # node_id
+    connectionMade @15 :ConnectionEvent;
+    connectionBroken @16 :ConnectionEvent;
+
+    # Audio I/O
+    audioAttached @17 :AudioAttachedEvent;
+    audioDetached @18 :Void;
+    audioUnderrun @19 :UInt64;     # count
+
+    # Errors
+    error @20 :ErrorEvent;
+    warning @21 :Text;             # message
+  }
+}
+
+struct PlaybackPositionEvent {
+  beat @0 :Float64;
+  second @1 :Float64;
+}
+
+struct RegionMovedEvent {
+  regionId @0 :Text;
+  newPosition @1 :Float64;
+}
+
+struct LatentStartedEvent {
+  regionId @0 :Text;
+  jobId @1 :Text;
+}
+
+struct LatentProgressEvent {
+  regionId @0 :Text;
+  progress @1 :Float32;
+}
+
+struct LatentResolvedEvent {
+  regionId @0 :Text;
+  artifactId @1 :Text;
+  contentHash @2 :Text;
+}
+
+struct LatentFailedEvent {
+  regionId @0 :Text;
+  error @1 :Text;
+}
+
+struct LatentRejectedEvent {
+  regionId @0 :Text;
+  reason @1 :Text;
+}
+
+struct NodeAddedEvent {
+  nodeId @0 :Text;
+  name @1 :Text;
+}
+
+struct ConnectionEvent {
+  sourceId @0 :Text;
+  sourcePort @1 :Text;
+  destId @2 :Text;
+  destPort @3 :Text;
+}
+
+struct AudioAttachedEvent {
+  deviceName @0 :Text;
+  sampleRate @1 :UInt32;
+  latencyFrames @2 :UInt32;
+}
+
+struct ErrorEvent {
+  error @0 :Text;
+  context @1 :Text;
+}

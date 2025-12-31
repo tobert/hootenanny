@@ -112,6 +112,7 @@ pub mod domain;
 pub mod envelope;
 pub mod frame;
 pub mod garden;
+pub mod garden_snapshot;
 pub mod metadata;
 pub mod params;
 pub mod request;
@@ -161,6 +162,13 @@ pub use metadata::{GenerationParams, Metrics, StoredMetadata};
 pub use request::ToolRequest;
 pub use responses::ToolResponse;
 pub use timing::ToolTiming;
+
+// Garden state snapshot types for query evaluation in hootenanny
+pub use garden_snapshot::{
+    ApprovalInfo, AudioInput, AudioOutput, BehaviorType, GardenSnapshot, GraphEdge,
+    GraphNode, IOPubEvent, IOPubMessage, LatentJob, LatentStatus, MediaType, MidiDeviceInfo,
+    MidiDirection, Port, RegionSnapshot, SignalType, TempoChange, TempoMapSnapshot, TransportSnapshot,
+};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
