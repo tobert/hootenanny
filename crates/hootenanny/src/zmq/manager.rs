@@ -269,6 +269,23 @@ impl GardenManager {
     pub async fn shutdown_daemon(&self) -> Result<ControlReply> {
         self.control(ControlRequest::Shutdown).await
     }
+
+    /// Get a state snapshot for local Trustfall query evaluation
+    ///
+    /// Returns a GardenSnapshot containing all queryable state from chaosgarden.
+    /// This snapshot can be used with GardenStateAdapter to evaluate queries locally.
+    pub async fn get_snapshot(&self) -> Result<hooteproto::GardenSnapshot> {
+        let reply = self.request(ShellRequest::GetSnapshot).await?;
+        match reply {
+            ShellReply::Snapshot { snapshot } => Ok(snapshot),
+            ShellReply::Error { error, .. } => {
+                anyhow::bail!("chaosgarden error: {}", error)
+            }
+            other => {
+                anyhow::bail!("unexpected reply: {:?}", other)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

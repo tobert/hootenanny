@@ -1147,13 +1147,15 @@ impl EventDualityServer {
     // =========================================================================
 
     /// Execute garden Trustfall query - typed response
+    ///
+    /// Queries are now evaluated locally in hootenanny using GardenStateAdapter.
+    /// State is fetched from chaosgarden as a snapshot, eliminating JSON/GraphQL
+    /// parsing from the real-time audio process.
     pub async fn garden_query_typed(
         &self,
         query: &str,
         variables: Option<&serde_json::Value>,
     ) -> Result<hooteproto::responses::GardenQueryResultResponse, ToolError> {
-        use chaosgarden::ipc::QueryReply;
-
         let manager = self.garden_manager.as_ref().ok_or_else(|| {
             ToolError::validation("not_connected", "Not connected to chaosgarden")
         })?;
@@ -1164,20 +1166,18 @@ impl EventDualityServer {
             .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default();
 
-        let reply = manager
-            .query(query, vars)
+        // Fetch snapshot from chaosgarden
+        let snapshot = manager
+            .get_snapshot()
             .await
-            .map_err(|e| ToolError::service("chaosgarden", "query_failed", e.to_string()))?;
+            .map_err(|e| ToolError::service("chaosgarden", "snapshot_failed", e.to_string()))?;
 
-        match reply {
-            QueryReply::Results { rows } => {
-                let count = rows.len();
-                Ok(hooteproto::responses::GardenQueryResultResponse { results: rows, count })
-            }
-            QueryReply::Error { error } => {
-                Err(ToolError::service("chaosgarden", "query_error", error))
-            }
-        }
+        // Execute query locally using the adapter
+        let rows = crate::api::garden_adapter::execute_query(snapshot, query, vars)
+            .map_err(|e| ToolError::service("trustfall", "query_error", e.to_string()))?;
+
+        let count = rows.len();
+        Ok(hooteproto::responses::GardenQueryResultResponse { results: rows, count })
     }
 
     // =========================================================================
