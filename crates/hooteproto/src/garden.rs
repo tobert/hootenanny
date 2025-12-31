@@ -7,12 +7,11 @@
 //!
 //! ## GardenEndpoints
 //!
-//! The 5-socket protocol is inspired by Jupyter's kernel architecture:
+//! The 4-socket protocol is inspired by Jupyter's kernel architecture:
 //! - **control**: Priority commands (shutdown, interrupt)
 //! - **shell**: Normal request/reply
 //! - **iopub**: Event broadcasts (publish/subscribe)
 //! - **heartbeat**: Liveness detection
-//! - **query**: Trustfall graph queries
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -33,9 +32,15 @@ pub const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(10);
 // Endpoint Configuration
 // ============================================================================
 
-/// Endpoint configuration for the 5-socket garden protocol.
+/// Endpoint configuration for the 4-socket garden protocol.
 ///
 /// Used by both peers (connect) and listeners (bind).
+///
+/// The 4-socket protocol is inspired by Jupyter's kernel architecture:
+/// - control: Priority commands (shutdown, interrupt)
+/// - shell: Normal request/reply (GetSnapshot, transport controls, etc.)
+/// - iopub: Event broadcasts (pub/sub for state changes)
+/// - heartbeat: Liveness detection
 #[derive(Debug, Clone)]
 pub struct GardenEndpoints {
     /// Control channel (DEALER/ROUTER) - urgent commands
@@ -46,8 +51,6 @@ pub struct GardenEndpoints {
     pub iopub: String,
     /// Heartbeat channel (REQ/REP) - liveness detection
     pub heartbeat: String,
-    /// Query channel (REQ/REP) - Trustfall queries
-    pub query: String,
 }
 
 impl GardenEndpoints {
@@ -64,7 +67,6 @@ impl GardenEndpoints {
             shell: format!("ipc://{}/chaosgarden-shell", dir),
             iopub: format!("ipc://{}/chaosgarden-iopub", dir),
             heartbeat: format!("ipc://{}/chaosgarden-hb", dir),
-            query: format!("ipc://{}/chaosgarden-query", dir),
         }
     }
 
@@ -75,14 +77,12 @@ impl GardenEndpoints {
     /// - shell: base_port + 1
     /// - iopub: base_port + 2
     /// - heartbeat: base_port + 3
-    /// - query: base_port + 4
     pub fn tcp(host: &str, base_port: u16) -> Self {
         Self {
             control: format!("tcp://{}:{}", host, base_port),
             shell: format!("tcp://{}:{}", host, base_port + 1),
             iopub: format!("tcp://{}:{}", host, base_port + 2),
             heartbeat: format!("tcp://{}:{}", host, base_port + 3),
-            query: format!("tcp://{}:{}", host, base_port + 4),
         }
     }
 
@@ -93,7 +93,6 @@ impl GardenEndpoints {
             shell: format!("inproc://{}-shell", prefix),
             iopub: format!("inproc://{}-iopub", prefix),
             heartbeat: format!("inproc://{}-hb", prefix),
-            query: format!("inproc://{}-query", prefix),
         }
     }
 
@@ -702,21 +701,6 @@ pub enum ExecutionState {
     Busy,
     Starting,
     ShuttingDown,
-}
-
-/// Query channel request
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueryRequest {
-    pub query: String,
-    pub variables: HashMap<String, serde_json::Value>,
-}
-
-/// Query channel reply
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum QueryReply {
-    Results { rows: Vec<serde_json::Value> },
-    Error { error: String },
 }
 
 #[cfg(test)]

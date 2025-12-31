@@ -1,6 +1,6 @@
 //! GardenListener - Server-side ZMQ socket infrastructure
 //!
-//! Binds and configures the 5-socket garden protocol for services like chaosgarden.
+//! Binds and configures the 4-socket garden protocol for services like chaosgarden.
 //! Uses centralized socket configuration from `socket_config` module so fixing
 //! socket issues here fixes them for all services.
 //!
@@ -85,12 +85,11 @@ where
 
 /// Bound socket set for garden protocol
 ///
-/// The 5-socket Jupyter-inspired protocol:
+/// The 4-socket Jupyter-inspired protocol:
 /// - `control`: ROUTER - Priority commands (shutdown, interrupt)
 /// - `shell`: ROUTER - Normal commands (transport, streams)
 /// - `iopub`: PUB - Event broadcasts (state changes, metrics)
 /// - `heartbeat`: ROUTER - Liveness detection (ROUTER for DEALER clients)
-/// - `query`: ROUTER - Trustfall queries (ROUTER for DEALER clients)
 pub struct GardenSockets {
     /// Priority command socket (ROUTER) - split into tx/rx
     pub control: SplitRouter,
@@ -100,8 +99,6 @@ pub struct GardenSockets {
     pub iopub: SplitPublisher,
     /// Liveness detection socket (ROUTER) - split into tx/rx
     pub heartbeat: SplitRouter,
-    /// Trustfall query socket (ROUTER) - split into tx/rx
-    pub query: SplitRouter,
 }
 
 impl GardenSockets {
@@ -114,7 +111,7 @@ impl GardenSockets {
 /// Server-side garden protocol listener
 ///
 /// Creates and binds ZMQ sockets with proper configuration for the
-/// Jupyter-inspired 5-socket protocol.
+/// Jupyter-inspired 4-socket protocol.
 pub struct GardenListener {
     endpoints: GardenEndpoints,
 }
@@ -155,17 +152,13 @@ impl GardenListener {
         let heartbeat = create_router_and_bind(&context, &self.endpoints.heartbeat, "heartbeat")?;
         info!("heartbeat socket bound to {}", self.endpoints.heartbeat);
 
-        let query = create_router_and_bind(&context, &self.endpoints.query, "query")?;
-        info!("query socket bound to {}", self.endpoints.query);
-
-        info!("garden listener ready (5 sockets bound)");
+        info!("garden listener ready (4 sockets bound)");
 
         Ok(GardenSockets {
             control: split_router(control),
             shell: split_router(shell),
             iopub: split_publisher(iopub),
             heartbeat: split_router(heartbeat),
-            query: split_router(query),
         })
     }
 

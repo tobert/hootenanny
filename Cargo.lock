@@ -531,7 +531,6 @@ dependencies = [
  "tokio-test",
  "tracing",
  "tracing-subscriber",
- "trustfall",
  "uuid",
  "zmq",
 ]

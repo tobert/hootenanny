@@ -28,9 +28,6 @@ cas = { path = "../cas" }
 # Graph (future use)
 petgraph = "0.6"
 
-# Query (future use)
-trustfall = "0.8"
-
 # Async
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"

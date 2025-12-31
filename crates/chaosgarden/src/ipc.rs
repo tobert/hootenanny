@@ -1,6 +1,6 @@
 //! ZeroMQ IPC Layer
 //!
-//! Implements the Jupyter-inspired 5-socket protocol for communication between
+//! Implements the Jupyter-inspired 4-socket protocol for communication between
 //! hootenanny (control plane) and chaosgarden (RT audio daemon).
 //!
 //! GardenEndpoints is now defined in hooteproto and re-exported here for

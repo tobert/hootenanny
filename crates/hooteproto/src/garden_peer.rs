@@ -1,6 +1,6 @@
 //! GardenPeer - ZMQ peer for connecting to chaosgarden daemon
 //!
-//! Connects to chaosgarden using the Jupyter-inspired 5-socket protocol over HOOT01 frames.
+//! Connects to chaosgarden using the Jupyter-inspired 4-socket protocol over HOOT01 frames.
 //!
 //! ## Usage
 //!
@@ -24,12 +24,11 @@
 //!
 //! All sockets use DEALER for consistent multipart HOOT01 framing:
 //! - control, shell: DEALER → ROUTER (chaosgarden)
-//! - heartbeat, query: DEALER → REP (chaosgarden)
+//! - heartbeat: DEALER → REP (chaosgarden)
 //! - iopub: SUB → PUB (chaosgarden)
 //!
 //! RECONNECT_IVL_MAX is capped at 60s to prevent runaway backoff.
 
-use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -46,18 +45,13 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::garden::{
-    ControlReply, ControlRequest, GardenEndpoints, IOPubEvent, Message, QueryReply, ShellReply,
+    ControlReply, ControlRequest, GardenEndpoints, IOPubEvent, Message, ShellReply,
     ShellRequest,
 };
-use crate::request::{GardenQueryRequest, ToolRequest};
-use crate::responses::ToolResponse;
 use crate::socket_config::{
     create_dealer_and_connect, create_subscriber_and_connect, Multipart, ZmqContext,
 };
-use crate::{
-    capnp_envelope_to_payload, envelope_capnp, payload_to_capnp_envelope, Command, ConnectionState,
-    ContentType, HootFrame, LazyPirateConfig, Payload, PROTOCOL_VERSION,
-};
+use crate::{Command, ConnectionState, ContentType, HootFrame, LazyPirateConfig, PROTOCOL_VERSION};
 
 /// Health tracking for GardenPeer
 struct GardenHealth {
@@ -149,7 +143,6 @@ pub struct GardenPeer {
     shell: Arc<SplitDealer>,
     iopub: Arc<SplitSubscriber>,
     heartbeat: Arc<SplitDealer>,
-    query: Arc<SplitDealer>,
     config: LazyPirateConfig,
     health: Arc<GardenHealth>,
     #[allow(dead_code)]
@@ -193,7 +186,6 @@ impl GardenPeer {
         let control_id = format!("garden-control-{}", session_short);
         let shell_id = format!("garden-shell-{}", session_short);
         let heartbeat_id = format!("garden-hb-{}", session_short);
-        let query_id = format!("garden-query-{}", session_short);
 
         // Create and connect all sockets, then split them
         let control = create_dealer_and_connect(
@@ -215,9 +207,6 @@ impl GardenPeer {
             "heartbeat",
         )?;
 
-        let query =
-            create_dealer_and_connect(&context, &endpoints.query, query_id.as_bytes(), "query")?;
-
         info!("Connected to chaosgarden, session={}", session);
 
         let health = Arc::new(GardenHealth::new());
@@ -237,7 +226,6 @@ impl GardenPeer {
             shell: Arc::new(split_dealer(shell)),
             iopub: Arc::new(split_subscriber(iopub)),
             heartbeat,
-            query: Arc::new(split_dealer(query)),
             config,
             health,
             keepalive_handle: Some(keepalive_handle),
@@ -467,142 +455,6 @@ impl GardenPeer {
 
         self.health.record_success();
         Ok(response_msg.content)
-    }
-
-    /// Execute a Trustfall query with Lazy Pirate retry logic.
-    pub async fn query(
-        &self,
-        query_str: &str,
-        variables: HashMap<String, serde_json::Value>,
-    ) -> Result<QueryReply> {
-        let max_attempts = self.config.max_retries + 1;
-        let mut attempts = 0;
-
-        loop {
-            attempts += 1;
-
-            match self.query_single_attempt(query_str, &variables).await {
-                Ok(reply) => {
-                    self.health.record_success();
-                    return Ok(reply);
-                }
-                Err(e) if attempts < max_attempts => {
-                    self.health.record_failure(self.config.max_failures);
-                    let backoff = self.config.backoff_for_attempt(attempts);
-                    warn!(
-                        "Query attempt {} failed: {}, retrying in {:?}...",
-                        attempts, e, backoff
-                    );
-                    tokio::time::sleep(backoff).await;
-                }
-                Err(e) => {
-                    self.health.record_failure(self.config.max_failures);
-                    return Err(e.context(format!("Query failed after {} attempts", attempts)));
-                }
-            }
-        }
-    }
-
-    async fn query_single_attempt(
-        &self,
-        query_str: &str,
-        variables: &HashMap<String, serde_json::Value>,
-    ) -> Result<QueryReply> {
-        let request_id = Uuid::new_v4();
-
-        let payload = Payload::ToolRequest(ToolRequest::GardenQuery(GardenQueryRequest {
-            query: query_str.to_string(),
-            variables: Some(serde_json::Value::Object(
-                variables
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
-            )),
-        }));
-
-        let message = payload_to_capnp_envelope(request_id, &payload)
-            .context("Failed to encode query payload")?;
-        let body_bytes = capnp::serialize::write_message_to_words(&message);
-
-        let frame = HootFrame {
-            command: Command::Request,
-            content_type: ContentType::CapnProto,
-            request_id,
-            service: "chaosgarden".to_string(),
-            traceparent: None,
-            body: Bytes::from(body_bytes),
-        };
-
-        let frames = frame.to_frames();
-        let multipart: Multipart = frames.iter().map(|f| f.to_vec()).collect::<Vec<_>>().into();
-
-        debug!("Sending query ({}) attempt", request_id);
-
-        // Send
-        {
-            let mut tx = self.query.tx.lock().await;
-            tokio::time::timeout(self.config.timeout, tx.send(multipart))
-                .await
-                .context("Query send timeout")??;
-        }
-
-        // Receive
-        let response = {
-            let mut rx = self.query.rx.lock().await;
-            tokio::time::timeout(self.config.timeout, rx.next())
-                .await
-                .context("Query response timeout")?
-                .ok_or_else(|| anyhow::anyhow!("Socket stream ended"))??
-        };
-
-        let response_frames: Vec<Bytes> = response
-            .into_iter()
-            .map(|m| Bytes::from(m.to_vec()))
-            .collect();
-
-        let response_frame =
-            HootFrame::from_frames(&response_frames).context("Failed to parse response frame")?;
-
-        if response_frame.content_type != ContentType::CapnProto {
-            anyhow::bail!(
-                "Expected CapnProto response, got {:?}",
-                response_frame.content_type
-            );
-        }
-
-        let reader = response_frame
-            .read_capnp()
-            .context("Failed to read Cap'n Proto message")?;
-        let envelope_reader = reader
-            .get_root::<envelope_capnp::envelope::Reader>()
-            .context("Failed to get envelope root")?;
-        let response_payload =
-            capnp_envelope_to_payload(envelope_reader).context("Failed to parse response payload")?;
-
-        match response_payload {
-            Payload::TypedResponse(envelope) => match envelope {
-                crate::ResponseEnvelope::Success { response } => match response {
-                    ToolResponse::GardenQueryResult(result) => Ok(QueryReply::Results {
-                        rows: result.results,
-                    }),
-                    other => anyhow::bail!("Unexpected response type: {:?}", other),
-                },
-                crate::ResponseEnvelope::Error(err) => Ok(QueryReply::Error {
-                    error: err.message(),
-                }),
-                other => anyhow::bail!("Unexpected envelope type: {:?}", other),
-            },
-            Payload::Error {
-                message, details, ..
-            } => Ok(QueryReply::Error {
-                error: if let Some(d) = details {
-                    format!("{}: {}", message, d)
-                } else {
-                    message
-                },
-            }),
-            other => anyhow::bail!("Unexpected payload type: {:?}", other),
-        }
     }
 
     /// Ping the daemon via heartbeat

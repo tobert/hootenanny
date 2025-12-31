@@ -12,7 +12,7 @@ use tokio_stream::Stream;
 use tracing::{debug, error, info, warn};
 
 use hooteproto::garden::{
-    Beat, ControlReply, ControlRequest, IOPubEvent, QueryReply, ShellReply, ShellRequest,
+    Beat, ControlReply, ControlRequest, IOPubEvent, ShellReply, ShellRequest,
 };
 use hooteproto::{GardenEndpoints, GardenPeer};
 
@@ -151,20 +151,6 @@ impl GardenManager {
             .context("not connected to chaosgarden")?;
 
         client.control(req).await
-    }
-
-    /// Execute a Trustfall query
-    pub async fn query(
-        &self,
-        query_str: &str,
-        variables: std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<QueryReply> {
-        let mut client_guard = self.client.write().await;
-        let client = client_guard
-            .as_mut()
-            .context("not connected to chaosgarden")?;
-
-        client.query(query_str, variables).await
     }
 
     /// Ping the daemon

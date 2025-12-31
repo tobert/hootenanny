@@ -5,9 +5,10 @@
 //! - Audio region playback via MemoryResolver
 //! - Latent lifecycle simulation (job → progress → resolve → approve)
 //! - Mix-in queue with crossfade scheduling
-//! - Advanced Trustfall queries
 //! - Capability registry
 //! - Render to WAV file
+//!
+//! Note: Trustfall queries have been moved to hootenanny (the control plane).
 //!
 //! Run with `--verbose` or `-v` for detailed ASCII visualizations.
 //! Use `--length <beats>` or `-l <beats>` to set render duration (default: 16).
@@ -17,13 +18,11 @@ use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 use chaosgarden::{
-    Beat, Capability, CapabilityRegistry, CapabilityRequirement, CapabilityUri,
-    ChaosgardenAdapter, CompiledGraph, ContentType, Graph, IOPubPublisher, LatentConfig,
-    LatentEvent, LatentManager, MemoryResolver, MixInStrategy, Participant, ParticipantKind,
-    PlaybackEngine, Region, TempoMap, Tick, Timeline,
+    Beat, Capability, CapabilityRegistry, CapabilityRequirement, CapabilityUri, CompiledGraph,
+    ContentType, Graph, IOPubPublisher, LatentConfig, LatentEvent, LatentManager, MemoryResolver,
+    MixInStrategy, Participant, ParticipantKind, PlaybackEngine, Region, Tick, Timeline,
 };
 use serde_json::json;
-use trustfall::{execute_query, FieldValue};
 use uuid::Uuid;
 
 // ============================================================================
@@ -592,127 +591,7 @@ async fn main() -> Result<()> {
     println!("   ✓ {} can generate content", generators.len());
 
     // ========================================================================
-    // PART 6: Advanced Trustfall queries
-    // ========================================================================
-    print_header("🔍 Querying with Trustfall...");
-
-    let query_graph = Graph::new();
-    let adapter = ChaosgardenAdapter::new(
-        Arc::new(RwLock::new(regions.clone())),
-        Arc::new(RwLock::new(query_graph)),
-        Arc::new(RwLock::new(TempoMap::new(120.0, Default::default()))),
-    )?;
-    let adapter = Arc::new(adapter);
-
-    type Variables = std::collections::BTreeMap<Arc<str>, FieldValue>;
-
-    // Query 1: All regions with behavior type
-    let query1 = r#"
-        query {
-            Region {
-                id @output
-                position @output
-                duration @output
-                behavior_type @output
-                is_playable @output
-            }
-        }
-    "#;
-
-    let results1: Vec<_> = execute_query(
-        adapter.schema(),
-        adapter.clone(),
-        query1,
-        Variables::new(),
-    )?.collect();
-
-    let playable_count = results1.iter().filter(|r| {
-        r.get(&Arc::from("is_playable")) == Some(&FieldValue::Boolean(true))
-    }).count();
-
-    if verbose {
-        println!("Query: All regions");
-        for result in &results1 {
-            let pos = result.get(&Arc::from("position")).and_then(|v| match v {
-                FieldValue::Float64(f) => Some(*f),
-                _ => None,
-            }).unwrap_or(0.0);
-            let behavior = result.get(&Arc::from("behavior_type")).and_then(|v| match v {
-                FieldValue::String(s) => Some(s.as_ref()),
-                _ => None,
-            }).unwrap_or("?");
-            let playable = result.get(&Arc::from("is_playable")) == Some(&FieldValue::Boolean(true));
-            println!("   - Beat {:.1}: {} {}", pos, behavior, if playable { "✓" } else { "○" });
-        }
-        println!();
-    }
-    println!("   ✓ {} regions ({} playable, {} latent)",
-        results1.len(), playable_count, results1.len() - playable_count);
-
-    // Query 2: Latent regions
-    let query2 = r#"
-        query {
-            LatentRegion {
-                name @output
-                position @output
-                latent_status @output
-                generation_tool @output
-            }
-        }
-    "#;
-
-    let results2: Vec<_> = execute_query(
-        adapter.schema(),
-        adapter.clone(),
-        query2,
-        Variables::new(),
-    )?.collect();
-
-    if verbose && !results2.is_empty() {
-        println!("Query: Latent regions");
-        for result in &results2 {
-            let name = result.get(&Arc::from("name")).and_then(|v| match v {
-                FieldValue::String(s) => Some(s.as_ref()),
-                _ => None,
-            }).unwrap_or("unnamed");
-            let status = result.get(&Arc::from("latent_status")).and_then(|v| match v {
-                FieldValue::String(s) => Some(s.as_ref()),
-                _ => None,
-            }).unwrap_or("?");
-            let tool = result.get(&Arc::from("generation_tool")).and_then(|v| match v {
-                FieldValue::String(s) => Some(s.as_ref()),
-                _ => None,
-            }).unwrap_or("?");
-            println!("   - \"{}\": {} via {}", name, status, tool);
-        }
-        println!();
-    }
-    println!("   ✓ {} latent region(s)", results2.len());
-
-    // Query 3: Time conversion
-    let query3 = r#"
-        query {
-            BeatToSecond(beat: 8.0) {
-                value @output
-            }
-        }
-    "#;
-
-    let results3: Vec<_> = execute_query(
-        adapter.schema(),
-        adapter.clone(),
-        query3,
-        Variables::new(),
-    )?.collect();
-
-    if let Some(result) = results3.first() {
-        if let Some(FieldValue::Float64(sec)) = result.get(&Arc::from("value")) {
-            println!("   ✓ Beat 8.0 = {:.2}s (tempo conversion)", sec);
-        }
-    }
-
-    // ========================================================================
-    // PART 7: Playback with audio
+    // PART 6: Playback with audio
     // ========================================================================
     print_header("🎵 Running playback engine...");
 
@@ -747,7 +626,7 @@ async fn main() -> Result<()> {
     engine.play();
 
     // ========================================================================
-    // PART 8: Render to WAV
+    // PART 7: Render to WAV
     // ========================================================================
     print_header("💾 Rendering to WAV file...");
 
@@ -791,7 +670,7 @@ async fn main() -> Result<()> {
     println!("   ✓ Rendered {} samples ({:.2}s) to {}", samples_written, duration_secs, output_path);
 
     // ========================================================================
-    // PART 9: Section hints summary
+    // PART 8: Section hints summary
     // ========================================================================
     if verbose {
         print_header("💡 Section hints for generation...");
@@ -823,7 +702,6 @@ async fn main() -> Result<()> {
         println!("  • playback     - PlaybackEngine with region→audio wiring");
         println!("  • nodes        - AudioFileNode, MemoryResolver");
         println!("  • latent       - LatentManager, lifecycle events, mix-in scheduling");
-        println!("  • query        - Trustfall adapter with advanced queries");
         println!("  • capabilities - CapabilityRegistry, Participant");
         println!();
     }

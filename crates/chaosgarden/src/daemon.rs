@@ -3,16 +3,13 @@
 //! Replaces StubHandler with actual state:
 //! - Transport state (playing, position, tempo)
 //! - Regions on the timeline
-//! - Trustfall queries over graph state
 //! - Latent lifecycle management
+//! - Snapshot export for external query evaluation
 
-use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
 
-use hooteproto::garden::QueryReply;
 use tracing::{debug, info, warn};
-use trustfall::execute_query;
 use uuid::Uuid;
 
 use crate::ipc::{
@@ -30,10 +27,7 @@ use crate::primitives::{Behavior, ContentType};
 use crate::stream_io::{
     SampleFormat, StreamDefinition, StreamFormat, StreamManager, StreamUri,
 };
-use crate::{
-    Beat, ChaosgardenAdapter, Graph, LatentConfig, LatentManager, Region, TempoMap, Tick,
-    TickClock,
-};
+use crate::{Beat, Graph, LatentConfig, LatentManager, Region, TempoMap, Tick, TickClock};
 
 /// Transport state
 #[derive(Debug, Clone, Default)]
@@ -92,10 +86,6 @@ pub struct GardenDaemon {
 
     // Active PipeWire input streams
     active_inputs: Arc<RwLock<std::collections::HashMap<crate::stream_io::StreamUri, crate::pipewire_input::PipeWireInputStream>>>,
-
-    // Query adapter - scaffolding for Trustfall queries (see 13-wire-daemon.md Phase 5)
-    #[allow(dead_code)]
-    query_adapter: Option<Arc<ChaosgardenAdapter>>,
 
     // Tick clock for position advancement via wall time
     tick_clock: Arc<RwLock<TickClock>>,
@@ -158,13 +148,6 @@ impl GardenDaemon {
         let stream_manager = Arc::new(StreamManager::new());
         let stream_publisher: Arc<dyn StreamEventPublisher> = Arc::new(NoOpStreamPublisher);
 
-        // Build query adapter
-        let query_adapter = ChaosgardenAdapter::new(
-            Arc::clone(&regions),
-            Arc::clone(&graph),
-            Arc::clone(&tempo_map),
-        ).ok().map(Arc::new);
-
         // Create tick clock for position advancement
         let tick_clock = Arc::new(RwLock::new(TickClock::new(Arc::clone(&tempo_map))));
 
@@ -184,7 +167,6 @@ impl GardenDaemon {
             stream_manager,
             stream_publisher,
             active_inputs: Arc::new(RwLock::new(std::collections::HashMap::new())),
-            query_adapter,
             tick_clock,
             audio_output: RwLock::new(None),
             monitor_input: RwLock::new(None),
@@ -985,47 +967,6 @@ impl GardenDaemon {
             .collect()
     }
 
-    /// Execute a Trustfall query against the garden state
-    pub fn execute_query(&self, query: &str, variables: &HashMap<String, serde_json::Value>) -> QueryReply {
-        let adapter = match &self.query_adapter {
-            Some(a) => Arc::clone(a),
-            None => {
-                return QueryReply::Error {
-                    error: "Query adapter not initialized".to_string(),
-                };
-            }
-        };
-
-        // Convert variables to FieldValue
-        let vars: std::collections::BTreeMap<Arc<str>, trustfall::FieldValue> = variables
-            .iter()
-            .map(|(k, v)| {
-                let field_value = json_to_field_value(v);
-                (Arc::from(k.as_str()), field_value)
-            })
-            .collect();
-
-        let schema = adapter.schema_arc();
-        match execute_query(&schema, adapter, query, vars) {
-            Ok(results) => {
-                let rows: Vec<serde_json::Value> = results
-                    .take(100)
-                    .map(|row| {
-                        let obj: serde_json::Map<String, serde_json::Value> = row
-                            .into_iter()
-                            .map(|(k, v)| (k.to_string(), field_value_to_json(&v)))
-                            .collect();
-                        serde_json::Value::Object(obj)
-                    })
-                    .collect();
-                QueryReply::Results { rows }
-            }
-            Err(e) => QueryReply::Error {
-                error: e.to_string(),
-            },
-        }
-    }
-
     /// Handle stream start command
     pub fn handle_stream_start(
         &self,
@@ -1537,55 +1478,6 @@ impl StreamEventPublisher for NoOpStreamPublisher {
 
     fn publish_stream_error(&self, _stream_uri: String, _error: String, _recoverable: bool) {
         // No-op for now - will wire to actual IOPub socket later
-    }
-}
-
-/// Convert JSON value to Trustfall FieldValue
-fn json_to_field_value(v: &serde_json::Value) -> trustfall::FieldValue {
-    match v {
-        serde_json::Value::Null => trustfall::FieldValue::Null,
-        serde_json::Value::Bool(b) => trustfall::FieldValue::Boolean(*b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                trustfall::FieldValue::Int64(i)
-            } else if let Some(u) = n.as_u64() {
-                trustfall::FieldValue::Uint64(u)
-            } else if let Some(f) = n.as_f64() {
-                trustfall::FieldValue::Float64(f)
-            } else {
-                trustfall::FieldValue::Null
-            }
-        }
-        serde_json::Value::String(s) => trustfall::FieldValue::String(s.clone().into()),
-        serde_json::Value::Array(arr) => {
-            let items: Vec<_> = arr.iter().map(json_to_field_value).collect();
-            trustfall::FieldValue::List(items.into())
-        }
-        serde_json::Value::Object(_) => {
-            // Trustfall doesn't support objects directly
-            trustfall::FieldValue::Null
-        }
-    }
-}
-
-/// Convert Trustfall FieldValue to JSON
-fn field_value_to_json(v: &trustfall::FieldValue) -> serde_json::Value {
-    match v {
-        trustfall::FieldValue::Null => serde_json::Value::Null,
-        trustfall::FieldValue::Boolean(b) => serde_json::Value::Bool(*b),
-        trustfall::FieldValue::Int64(i) => serde_json::Value::Number((*i).into()),
-        trustfall::FieldValue::Uint64(u) => serde_json::Value::Number((*u).into()),
-        trustfall::FieldValue::Float64(f) => {
-            serde_json::Number::from_f64(*f)
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null)
-        }
-        trustfall::FieldValue::String(s) => serde_json::Value::String(s.to_string()),
-        trustfall::FieldValue::List(items) => {
-            let arr: Vec<_> = items.iter().map(field_value_to_json).collect();
-            serde_json::Value::Array(arr)
-        }
-        _ => serde_json::Value::Null,
     }
 }
 

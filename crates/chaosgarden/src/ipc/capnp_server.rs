@@ -1,6 +1,6 @@
 //! Cap'n Proto-based ZMQ server for chaosgarden
 //!
-//! Implements the Jupyter-inspired 5-socket protocol with HOOT01 frames
+//! Implements the Jupyter-inspired 4-socket protocol with HOOT01 frames
 //! and Cap'n Proto envelope messages.
 //!
 //! Socket types:
@@ -8,7 +8,6 @@
 //! - shell (ROUTER): Normal commands (transport, streams)
 //! - iopub (PUB): Event broadcasts (state changes, metrics)
 //! - heartbeat (ROUTER): Liveness detection (ROUTER for DEALER clients)
-//! - query (ROUTER): Trustfall queries (ROUTER for DEALER clients)
 
 use anyhow::{Context as AnyhowContext, Result};
 use bytes::Bytes;
@@ -58,13 +57,13 @@ impl CapnpGardenServer {
 
     /// Run the server with the garden daemon handler
     pub async fn run(self, handler: Arc<GardenDaemon>) -> Result<()> {
-        // Bind all 5 sockets using GardenListener
+        // Bind all 4 sockets using GardenListener
         let listener = GardenListener::from_config(&self.config)
             .with_context(|| "Failed to create garden listener")?;
         let sockets = listener.bind()
             .with_context(|| "Failed to bind garden sockets")?;
 
-        info!("🎵 chaosgarden server ready (5 sockets bound)");
+        info!("🎵 chaosgarden server ready (4 sockets bound)");
 
         // Main event loop - handle all sockets concurrently
         loop {
@@ -131,25 +130,6 @@ impl CapnpGardenServer {
                         Some(Err(e)) => error!("Heartbeat socket recv error: {}", e),
                         None => {
                             warn!("Heartbeat socket stream ended");
-                            break;
-                        }
-                    }
-                }
-
-                // Query socket - Trustfall queries
-                msg = async {
-                    sockets.query.rx.lock().await.next().await
-                } => {
-                    match msg {
-                        Some(Ok(mp)) => {
-                            let frames = multipart_to_frames(mp);
-                            if let Err(e) = self.handle_query(&sockets.query, &handler, frames).await {
-                                error!("Error handling query: {}", e);
-                            }
-                        }
-                        Some(Err(e)) => error!("Query socket recv error: {}", e),
-                        None => {
-                            warn!("Query socket stream ended");
                             break;
                         }
                     }
@@ -327,94 +307,6 @@ impl CapnpGardenServer {
         Ok(())
     }
 
-    /// Handle Trustfall query messages (ROUTER socket)
-    async fn handle_query(
-        &self,
-        socket: &SplitRouter,
-        handler: &Arc<GardenDaemon>,
-        frames: Vec<Bytes>,
-    ) -> Result<()> {
-        // Extract identity frames (first frame(s) before HOOT01 from ROUTER socket)
-        // We'll get the proper identity from from_frames_with_identity, but need a fallback
-        let fallback_identity: Vec<Bytes> = frames.first().cloned().map(|f| vec![f]).unwrap_or_default();
-
-        // Check for HOOT01 frame
-        if !frames.iter().any(|f| f.as_ref() == PROTOCOL_VERSION) {
-            warn!("[query] Received non-HOOT01 message");
-            // Send error response with identity
-            let error_payload = Payload::Error {
-                code: "protocol_error".to_string(),
-                message: "Expected HOOT01 frame".to_string(),
-                details: None,
-            };
-            let error_msg = payload_to_capnp_envelope(Uuid::nil(), &error_payload)?;
-            let bytes = capnp::serialize::write_message_to_words(&error_msg);
-            let response_frame = HootFrame {
-                command: Command::Reply,
-                content_type: ContentType::CapnProto,
-                request_id: Uuid::nil(),
-                service: "chaosgarden".to_string(),
-                traceparent: None,
-                body: bytes.into(),
-            };
-            let reply = frames_to_multipart(&response_frame.to_frames_with_identity(&fallback_identity));
-            socket.tx.lock().await.send(reply).await
-                .with_context(|| "[query] Failed to send error response")?;
-            return Ok(());
-        }
-
-        // Parse with identity extraction
-        let (identity, frame) = HootFrame::from_frames_with_identity(&frames)?;
-
-        debug!(
-            "[query] HOOT01 {:?} request_id={}",
-            frame.command, frame.request_id
-        );
-
-        // Parse and dispatch query
-        let result_payload = match frame.read_capnp() {
-            Ok(reader) => match reader.get_root::<envelope_capnp::envelope::Reader>() {
-                Ok(envelope_reader) => {
-                    match capnp_envelope_to_payload(envelope_reader) {
-                        Ok(payload) => self.dispatch_payload(handler, payload).await,
-                        Err(e) => Payload::Error {
-                            code: "capnp_parse_error".to_string(),
-                            message: e.to_string(),
-                            details: None,
-                        },
-                    }
-                }
-                Err(e) => Payload::Error {
-                    code: "capnp_read_error".to_string(),
-                    message: e.to_string(),
-                    details: None,
-                },
-            },
-            Err(e) => Payload::Error {
-                code: "frame_parse_error".to_string(),
-                message: e.to_string(),
-                details: None,
-            },
-        };
-
-        // Send response with identity
-        let response_msg = payload_to_capnp_envelope(frame.request_id, &result_payload)?;
-        let bytes = capnp::serialize::write_message_to_words(&response_msg);
-        let response_frame = HootFrame {
-            command: Command::Reply,
-            content_type: ContentType::CapnProto,
-            request_id: frame.request_id,
-            service: "chaosgarden".to_string(),
-            traceparent: None,
-            body: bytes.into(),
-        };
-        let reply = frames_to_multipart(&response_frame.to_frames_with_identity(&identity));
-        socket.tx.lock().await.send(reply).await
-            .with_context(|| "[query] Failed to send response")?;
-
-        Ok(())
-    }
-
     /// Dispatch a Payload to the appropriate handler
     async fn dispatch_payload(&self, handler: &Arc<GardenDaemon>, payload: Payload) -> Payload {
         match payload {
@@ -542,30 +434,12 @@ impl CapnpGardenServer {
             ToolRequest::GardenInputStatus => ShellRequest::GetInputStatus,
             ToolRequest::GardenSetMonitor(r) => ShellRequest::SetMonitor { enabled: r.enabled, gain: r.gain },
 
-            // GardenQuery bypasses ShellRequest - directly executes Trustfall query
-            ToolRequest::GardenQuery(r) => {
-                use std::collections::HashMap;
-                let vars: HashMap<String, serde_json::Value> = r.variables
-                    .and_then(|v| v.as_object().cloned())
-                    .map(|m| m.into_iter().collect())
-                    .unwrap_or_default();
-                let result = handler.execute_query(&r.query, &vars);
-                return match result {
-                    hooteproto::garden::QueryReply::Results { rows } => {
-                        Payload::TypedResponse(ResponseEnvelope::success(
-                            ToolResponse::GardenQueryResult(hooteproto::responses::GardenQueryResultResponse {
-                                results: rows,
-                                count: 0, // Could count rows but already consumed
-                            })
-                        ))
-                    }
-                    hooteproto::garden::QueryReply::Error { error } => {
-                        Payload::Error {
-                            code: "query_error".to_string(),
-                            message: error,
-                            details: None,
-                        }
-                    }
+            // GardenQuery is handled by hootenanny, not chaosgarden
+            ToolRequest::GardenQuery(_) => {
+                return Payload::Error {
+                    code: "not_supported".to_string(),
+                    message: "Trustfall queries are now handled by hootenanny via GetSnapshot".to_string(),
+                    details: None,
                 };
             }
 
