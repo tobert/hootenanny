@@ -127,6 +127,9 @@ pub struct GardenDaemon {
     // Reference to timeline ring buffer (written by tick(), read by RT callback)
     // This is obtained from the PipeWire output stream when attached
     timeline_ring: RwLock<Option<Arc<Mutex<RingBuffer>>>>,
+
+    // Monotonic version counter for snapshot invalidation
+    snapshot_version: std::sync::atomic::AtomicU64,
 }
 
 impl GardenDaemon {
@@ -193,6 +196,7 @@ impl GardenDaemon {
             playback_engine: RwLock::new(None),
             compiled_graph: RwLock::new(None),
             timeline_ring: RwLock::new(None),
+            snapshot_version: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -290,6 +294,233 @@ impl GardenDaemon {
         let transport = self.transport.read().unwrap();
         let tempo = self.tempo_map.read().unwrap().tempo_at(Tick(0));
         (transport.playing, transport.position, tempo)
+    }
+
+    /// Build a full state snapshot for Trustfall query evaluation in hootenanny.
+    ///
+    /// This collects all queryable state into a GardenSnapshot struct that can be
+    /// serialized to Cap'n Proto and sent over ZMQ. Designed to minimize allocations
+    /// by reusing existing data structures where possible.
+    pub fn build_snapshot(&self, version: u64) -> hooteproto::GardenSnapshot {
+        use hooteproto::garden_snapshot::*;
+
+        // Transport state
+        let transport = self.transport.read().unwrap();
+        let tempo_map = self.tempo_map.read().unwrap();
+        let transport_snapshot = TransportSnapshot {
+            playing: transport.playing,
+            position: transport.position.0,
+            tempo: tempo_map.tempo_at(crate::Tick(0)),
+        };
+
+        // Regions
+        let regions = self.regions.read().unwrap();
+        let region_snapshots: Vec<RegionSnapshot> = regions
+            .iter()
+            .map(|r| self.region_to_snapshot(r))
+            .collect();
+
+        // Graph
+        let graph = self.graph.read().unwrap();
+        let graph_snapshot = graph.snapshot();
+        let nodes: Vec<GraphNode> = graph_snapshot
+            .nodes
+            .iter()
+            .map(|n| GraphNode {
+                id: n.id.to_string(),
+                name: n.name.clone(),
+                type_id: n.type_id.clone(),
+                inputs: n.inputs.iter().map(|p| Port {
+                    name: p.name.clone(),
+                    signal_type: signal_type_to_snapshot(&p.signal_type),
+                }).collect(),
+                outputs: n.outputs.iter().map(|p| Port {
+                    name: p.name.clone(),
+                    signal_type: signal_type_to_snapshot(&p.signal_type),
+                }).collect(),
+                latency_samples: n.latency_samples as u32,
+                can_realtime: n.capabilities.realtime,
+                can_offline: n.capabilities.offline,
+            })
+            .collect();
+
+        let edges: Vec<GraphEdge> = graph_snapshot
+            .edges
+            .iter()
+            .map(|e| GraphEdge {
+                source_id: e.source_id.to_string(),
+                source_port: e.source_port.clone(),
+                dest_id: e.dest_id.to_string(),
+                dest_port: e.dest_port.clone(),
+            })
+            .collect();
+
+        // Latent jobs and approvals
+        let latent_manager = self.latent_manager.read().unwrap();
+        let latent_jobs: Vec<LatentJob> = regions
+            .iter()
+            .filter_map(|r| {
+                if let crate::primitives::Behavior::Latent { tool, state, .. } = &r.behavior {
+                    if state.status == crate::primitives::LatentStatus::Running {
+                        Some(LatentJob {
+                            id: state.job_id.clone().unwrap_or_default(),
+                            region_id: r.id.to_string(),
+                            tool: tool.clone(),
+                            progress: state.progress,
+                        })
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let pending_approvals: Vec<ApprovalInfo> = latent_manager
+            .pending_approvals()
+            .iter()
+            .map(|a| ApprovalInfo {
+                region_id: a.region_id.to_string(),
+                content_hash: a.content_hash.clone(),
+                content_type: content_type_to_snapshot(&a.content_type),
+            })
+            .collect();
+
+        // Tempo map
+        let tempo_map_snapshot = TempoMapSnapshot {
+            default_tempo: tempo_map.tempo_at(crate::Tick(0)),
+            ticks_per_beat: 480, // Standard MIDI resolution
+            changes: vec![], // TODO: Extract tempo changes from TempoMap
+        };
+
+        // I/O state - minimal for now, can be expanded
+        let outputs = self.build_audio_output_snapshot();
+        let inputs = self.build_audio_input_snapshot();
+
+        hooteproto::GardenSnapshot {
+            version,
+            transport: transport_snapshot,
+            regions: region_snapshots,
+            nodes,
+            edges,
+            latent_jobs,
+            pending_approvals,
+            outputs,
+            inputs,
+            midi_devices: vec![], // TODO: Add MIDI device tracking
+            tempo_map: tempo_map_snapshot,
+        }
+    }
+
+    /// Convert a Region to RegionSnapshot
+    fn region_to_snapshot(&self, region: &crate::Region) -> hooteproto::garden_snapshot::RegionSnapshot {
+        use hooteproto::garden_snapshot::*;
+        use crate::primitives::Behavior;
+
+        let (behavior_type, content_hash, content_type, latent_status, latent_progress, job_id, generation_tool) =
+            match &region.behavior {
+                Behavior::PlayContent { content_hash, content_type, .. } => (
+                    BehaviorType::PlayContent,
+                    Some(content_hash.clone()),
+                    Some(content_type_to_snapshot(content_type)),
+                    None,
+                    0.0,
+                    None,
+                    None,
+                ),
+                Behavior::Latent { tool, state, .. } => (
+                    BehaviorType::Latent,
+                    state.resolved.as_ref().map(|r| r.content_hash.clone()),
+                    state.resolved.as_ref().map(|r| content_type_to_snapshot(&r.content_type)),
+                    Some(latent_status_to_snapshot(&state.status)),
+                    state.progress,
+                    state.job_id.clone(),
+                    Some(tool.clone()),
+                ),
+                Behavior::ApplyProcessing { .. } => (
+                    BehaviorType::ApplyProcessing,
+                    None,
+                    None,
+                    None,
+                    0.0,
+                    None,
+                    None,
+                ),
+                Behavior::EmitTrigger { .. } => (
+                    BehaviorType::EmitTrigger,
+                    None,
+                    None,
+                    None,
+                    0.0,
+                    None,
+                    None,
+                ),
+                Behavior::Custom { .. } => (
+                    BehaviorType::Custom,
+                    None,
+                    None,
+                    None,
+                    0.0,
+                    None,
+                    None,
+                ),
+            };
+
+        RegionSnapshot {
+            id: region.id.to_string(),
+            position: region.position.0,
+            duration: region.duration.0,
+            behavior_type,
+            name: region.metadata.name.clone(),
+            tags: region.metadata.tags.clone(),
+            content_hash,
+            content_type,
+            latent_status,
+            latent_progress,
+            job_id,
+            generation_tool,
+            is_resolved: region.is_resolved(),
+            is_approved: region.is_approved(),
+            is_playable: region.is_playable(),
+            is_alive: region.lifecycle.is_alive(),
+            is_tombstoned: region.lifecycle.is_tombstoned(),
+        }
+    }
+
+    /// Build audio output snapshot (minimal for now)
+    fn build_audio_output_snapshot(&self) -> Vec<hooteproto::garden_snapshot::AudioOutput> {
+        let output = self.audio_output.read().unwrap();
+        match output.as_ref() {
+            Some(stream) => {
+                let config = stream.config();
+                vec![hooteproto::garden_snapshot::AudioOutput {
+                    id: "default".to_string(),
+                    name: config.name.clone(),
+                    channels: config.channels as u8,
+                    pw_node_id: None, // TODO: Get PipeWire node ID
+                }]
+            }
+            None => vec![],
+        }
+    }
+
+    /// Build audio input snapshot (minimal for now)
+    fn build_audio_input_snapshot(&self) -> Vec<hooteproto::garden_snapshot::AudioInput> {
+        let input = self.monitor_input.read().unwrap();
+        match input.as_ref() {
+            Some(stream) => {
+                let config = stream.config();
+                vec![hooteproto::garden_snapshot::AudioInput {
+                    id: "monitor".to_string(),
+                    name: config.device_name.clone().unwrap_or_else(|| "default".to_string()),
+                    channels: config.channels as u8,
+                    port_pattern: None, // Not currently tracked in config
+                    pw_node_id: None, // TODO: Get PipeWire node ID
+                }]
+            }
+            None => vec![],
+        }
     }
 
     /// Called by the tick loop to advance position based on wall time
@@ -1109,6 +1340,57 @@ impl GardenDaemon {
                 }
             }
 
+            // State snapshot requests for Trustfall query evaluation
+            ShellRequest::GetSnapshot => {
+                let version = self.snapshot_version.fetch_add(1, Ordering::Relaxed);
+                let snapshot = self.build_snapshot(version);
+                ShellReply::Snapshot { snapshot }
+            }
+            ShellRequest::GetGraph => {
+                let graph = self.graph.read().unwrap();
+                let graph_snapshot = graph.snapshot();
+                let nodes: Vec<hooteproto::garden_snapshot::GraphNode> = graph_snapshot
+                    .nodes
+                    .iter()
+                    .map(|n| hooteproto::garden_snapshot::GraphNode {
+                        id: n.id.to_string(),
+                        name: n.name.clone(),
+                        type_id: n.type_id.clone(),
+                        inputs: n.inputs.iter().map(|p| hooteproto::garden_snapshot::Port {
+                            name: p.name.clone(),
+                            signal_type: signal_type_to_snapshot(&p.signal_type),
+                        }).collect(),
+                        outputs: n.outputs.iter().map(|p| hooteproto::garden_snapshot::Port {
+                            name: p.name.clone(),
+                            signal_type: signal_type_to_snapshot(&p.signal_type),
+                        }).collect(),
+                        latency_samples: n.latency_samples as u32,
+                        can_realtime: n.capabilities.realtime,
+                        can_offline: n.capabilities.offline,
+                    })
+                    .collect();
+                let edges: Vec<hooteproto::garden_snapshot::GraphEdge> = graph_snapshot
+                    .edges
+                    .iter()
+                    .map(|e| hooteproto::garden_snapshot::GraphEdge {
+                        source_id: e.source_id.to_string(),
+                        source_port: e.source_port.clone(),
+                        dest_id: e.dest_id.to_string(),
+                        dest_port: e.dest_port.clone(),
+                    })
+                    .collect();
+                ShellReply::GraphSnapshot { nodes, edges }
+            }
+            ShellRequest::GetIOState => {
+                let outputs = self.build_audio_output_snapshot();
+                let inputs = self.build_audio_input_snapshot();
+                ShellReply::IOState {
+                    outputs,
+                    inputs,
+                    midi_devices: vec![], // TODO: Add MIDI device tracking
+                }
+            }
+
             // Unhandled requests
             _ => ShellReply::Error {
                 error: format!("Unhandled shell request: {:?}", req),
@@ -1304,6 +1586,39 @@ fn field_value_to_json(v: &trustfall::FieldValue) -> serde_json::Value {
             serde_json::Value::Array(arr)
         }
         _ => serde_json::Value::Null,
+    }
+}
+
+/// Convert chaosgarden SignalType to snapshot SignalType
+fn signal_type_to_snapshot(signal: &crate::primitives::SignalType) -> hooteproto::garden_snapshot::SignalType {
+    use crate::primitives::SignalType;
+    match signal {
+        SignalType::Audio => hooteproto::garden_snapshot::SignalType::Audio,
+        SignalType::Midi => hooteproto::garden_snapshot::SignalType::Midi,
+        SignalType::Control => hooteproto::garden_snapshot::SignalType::Control,
+        SignalType::Trigger => hooteproto::garden_snapshot::SignalType::Trigger,
+    }
+}
+
+/// Convert chaosgarden ContentType to snapshot MediaType
+fn content_type_to_snapshot(content_type: &crate::primitives::ContentType) -> hooteproto::garden_snapshot::MediaType {
+    use crate::primitives::ContentType;
+    match content_type {
+        ContentType::Audio => hooteproto::garden_snapshot::MediaType::Audio,
+        ContentType::Midi => hooteproto::garden_snapshot::MediaType::Midi,
+    }
+}
+
+/// Convert chaosgarden LatentStatus to snapshot LatentStatus
+fn latent_status_to_snapshot(status: &crate::primitives::LatentStatus) -> hooteproto::garden_snapshot::LatentStatus {
+    use crate::primitives::LatentStatus;
+    match status {
+        LatentStatus::Pending => hooteproto::garden_snapshot::LatentStatus::Pending,
+        LatentStatus::Running => hooteproto::garden_snapshot::LatentStatus::Running,
+        LatentStatus::Resolved => hooteproto::garden_snapshot::LatentStatus::Resolved,
+        LatentStatus::Approved => hooteproto::garden_snapshot::LatentStatus::Approved,
+        LatentStatus::Rejected => hooteproto::garden_snapshot::LatentStatus::Rejected,
+        LatentStatus::Failed => hooteproto::garden_snapshot::LatentStatus::Failed,
     }
 }
 

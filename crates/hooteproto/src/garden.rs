@@ -518,6 +518,21 @@ pub enum ShellReply {
         samples_captured: u64,
         overruns: u64,
     },
+    /// Full state snapshot for Trustfall query evaluation in hootenanny
+    Snapshot {
+        snapshot: crate::garden_snapshot::GardenSnapshot,
+    },
+    /// Just the audio graph (nodes + edges) for lightweight queries
+    GraphSnapshot {
+        nodes: Vec<crate::garden_snapshot::GraphNode>,
+        edges: Vec<crate::garden_snapshot::GraphEdge>,
+    },
+    /// Just I/O device state
+    IOState {
+        outputs: Vec<crate::garden_snapshot::AudioOutput>,
+        inputs: Vec<crate::garden_snapshot::AudioInput>,
+        midi_devices: Vec<crate::garden_snapshot::MidiDeviceInfo>,
+    },
 }
 
 /// Control channel requests (priority)
