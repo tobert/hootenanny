@@ -8,11 +8,13 @@
 //! Note: GardenPeer is now in hooteproto. Use `hooteproto::GardenPeer` directly.
 
 mod client_tracker;
+mod garden_state_cache;
 mod hooteproto_server;
 mod manager;
 mod publisher;
 mod vibeweaver_client;
 
+pub use garden_state_cache::{CacheStats, GardenStateCache};
 pub use hooteproto::{GardenEndpoints, GardenPeer};
 pub use hooteproto_server::HooteprotoServer;
 pub use manager::GardenManager;

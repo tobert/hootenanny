@@ -1,3 +1,4 @@
+pub mod garden_adapter; // Trustfall adapter for cached garden state
 pub mod manual_schemas; // Hand-written schemas for llama.cpp compatibility
 pub mod native;
 pub mod schema;
