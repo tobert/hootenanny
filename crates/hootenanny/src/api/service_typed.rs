@@ -281,41 +281,25 @@ impl EventDualityServer {
 
     /// Get garden status - typed response
     pub async fn garden_status_typed(&self) -> Result<GardenStatusResponse, ToolError> {
-        use chaosgarden::ipc::ShellReply;
-
         let manager = self.garden_manager.as_ref().ok_or_else(|| {
             ToolError::validation("not_connected", "Not connected to chaosgarden")
         })?;
 
-        let reply = manager
-            .get_transport_state()
+        let snapshot = manager
+            .get_snapshot()
             .await
             .map_err(|e| ToolError::service("chaosgarden", "status_failed", e.to_string()))?;
 
-        match reply {
-            ShellReply::TransportState {
-                playing,
-                position,
-                tempo,
-            } => {
-                Ok(GardenStatusResponse {
-                    state: if playing {
-                        TransportState::Playing
-                    } else {
-                        TransportState::Stopped
-                    },
-                    position_beats: position.0,
-                    tempo_bpm: tempo,
-                    region_count: 0, // Would need separate query
-                })
-            }
-            ShellReply::Error { error, .. } => {
-                Err(ToolError::service("chaosgarden", "status_failed", error))
-            }
-            _ => Err(ToolError::internal(
-                "Unexpected reply type for get_transport_state",
-            )),
-        }
+        Ok(GardenStatusResponse {
+            state: if snapshot.transport.playing {
+                TransportState::Playing
+            } else {
+                TransportState::Stopped
+            },
+            position_beats: snapshot.transport.position,
+            tempo_bpm: snapshot.transport.tempo,
+            region_count: snapshot.regions.len(),
+        })
     }
 
     /// Get garden regions - typed response
