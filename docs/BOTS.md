@@ -171,6 +171,23 @@ pub struct AudioGraphAdapter {
 
 **Never bypass Trustfall for queries.** If you need to filter/search/traverse, extend the schema.
 
+### Garden Query Timing
+
+All Region timing in chaosgarden uses **beats** (not seconds or samples):
+
+| Concept | `schedule` tool | Region schema | Unit |
+|---------|-----------------|---------------|------|
+| Start position | `at` | `position` | beats |
+| Length | `duration` | `duration` | beats |
+| End position | (computed) | `end` | beats |
+
+Example: `schedule(at=0, duration=4)` creates a Region with `position=0`, `duration=4`, `end=4`.
+
+Query regions with Trustfall:
+```graphql
+{ Region { id @output position @output duration @output behavior_type @output } }
+```
+
 ### Artifact-Centric Access
 
 **Share artifacts.** Artifacts have identity, context, and access tracking.

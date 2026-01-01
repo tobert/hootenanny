@@ -6,6 +6,20 @@
 
 ---
 
+## Timing Units
+
+All Region timing uses **beats** (not seconds or samples):
+
+| Schema Field | Description | Unit |
+|--------------|-------------|------|
+| `position` | Start position | beats |
+| `duration` | Length | beats |
+| `end` | Computed end (position + duration) | beats |
+
+The `schedule` MCP tool uses `at` for position—same concept, different name.
+
+---
+
 ## Task
 
 Create `crates/chaosgarden/src/query.rs` with Trustfall adapter. Use `trustfall_stubgen` to generate skeleton from schema, then implement the adapter methods.

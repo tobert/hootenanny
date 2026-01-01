@@ -9,10 +9,10 @@
 
 The daemon supports 18 shell request types, but only 8 are exposed via MCP:
 
-### Currently Exposed (8)
+### Currently Exposed (9)
 | MCP Tool | Daemon Request | Status |
 |----------|---------------|--------|
-| `garden_status` | GetTransportState | ✅ Working |
+| `garden_status` | GetSnapshot | ✅ Working |
 | `garden_play` | Play | ✅ Working |
 | `garden_pause` | Pause | ✅ Working |
 | `garden_stop` | Stop | ✅ Working |
@@ -20,6 +20,30 @@ The daemon supports 18 shell request types, but only 8 are exposed via MCP:
 | `garden_set_tempo` | SetTempo | ✅ Working |
 | `garden_query` | (Trustfall query) | ✅ Working |
 | `garden_emergency_pause` | (Control) | ✅ Working |
+| `schedule` | CreateRegion | ✅ Working |
+
+#### `schedule` Tool Parameters
+
+The `schedule` tool creates regions on the timeline. All timing uses **beats** (not seconds):
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `encoding` | object | Content reference: `{type: "midi", artifact_id: "..."}` |
+| `at` | float | Start position in beats (maps to Region.position) |
+| `duration` | float | Length in beats (optional, auto-detected from content) |
+| `gain` | float | Volume multiplier (optional) |
+| `rate` | float | Playback rate (optional) |
+
+Example:
+```json
+{
+  "encoding": {"type": "midi", "artifact_id": "artifact_abc123"},
+  "at": 0,
+  "duration": 4
+}
+```
+
+Returns: `{region_id, position, duration, artifact_id}`
 
 ### Missing MCP Tools (10)
 
