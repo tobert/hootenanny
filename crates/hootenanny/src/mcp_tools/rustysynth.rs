@@ -130,6 +130,21 @@ pub fn calculate_wav_duration(wav_bytes: &[u8], sample_rate: u32) -> f64 {
     samples as f64 / sample_rate as f64
 }
 
+/// Calculate the duration of a MIDI file in seconds
+///
+/// Uses rustysynth's MidiFile parser to extract timing information.
+///
+/// # Arguments
+/// * `midi_bytes` - MIDI file content
+///
+/// # Returns
+/// Duration in seconds, or None if parsing fails
+pub fn calculate_midi_duration(midi_bytes: &[u8]) -> Option<f64> {
+    let mut cursor = Cursor::new(midi_bytes);
+    let midi = MidiFile::new(&mut cursor).ok()?;
+    Some(midi.get_length())
+}
+
 // --- SoundFont Inspection Types ---
 
 /// Information about the SoundFont file

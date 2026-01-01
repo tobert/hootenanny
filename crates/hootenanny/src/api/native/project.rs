@@ -328,6 +328,14 @@ impl EventDualityServer {
         };
         let midi_bytes = abc::to_midi(&tune, &params);
 
+        // Calculate MIDI duration for scheduling
+        // Get tempo from ABC header (default 120 BPM)
+        let bpm = tune.header.tempo.as_ref().map(|t| t.bpm).unwrap_or(120) as f64;
+        let duration_seconds =
+            crate::mcp_tools::rustysynth::calculate_midi_duration(&midi_bytes);
+        // Convert to beats: beats = seconds * (bpm / 60)
+        let duration_beats = duration_seconds.map(|secs| secs * bpm / 60.0);
+
         let midi_hash = self
             .local_models
             .store_cas_content(&midi_bytes, "audio/midi")
@@ -357,6 +365,9 @@ impl EventDualityServer {
             serde_json::json!({
                 "type": "projection",
                 "projection_type": "abc_to_midi",
+                "duration_seconds": duration_beats,  // Actually beats, for schedule() compatibility
+                "duration_seconds_real": duration_seconds,  // True seconds
+                "tempo_bpm": bpm,
                 "source": {
                     "abc_hash": abc_hash,
                 },
