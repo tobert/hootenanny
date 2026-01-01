@@ -128,6 +128,27 @@ impl EventDualityServer {
                     )
                     .await?;
 
+                // Pre-calculate durations for all outputs (before acquiring write lock)
+                // Orpheus doesn't encode tempo - use default 120 BPM
+                let mut durations: Vec<(Option<f64>, Option<f64>)> = Vec::new();
+                for hash in &orpheus_result.output_hashes {
+                    let dur = match local_models.inspect_cas_content(hash).await {
+                        Ok(ref info) if info.local_path.is_some() => {
+                            match tokio::fs::read(info.local_path.as_ref().unwrap()).await {
+                                Ok(midi_bytes) => {
+                                    let secs =
+                                        crate::mcp_tools::rustysynth::calculate_midi_duration(&midi_bytes);
+                                    let beats = secs.map(|s| s * 2.0); // 120 BPM: beats = seconds * 2
+                                    (secs, beats)
+                                }
+                                Err(_) => (None, None),
+                            }
+                        }
+                        _ => (None, None),
+                    };
+                    durations.push(dur);
+                }
+
                 // Create artifacts
                 let mut artifacts = Vec::new();
                 let store = artifact_store
@@ -142,6 +163,8 @@ impl EventDualityServer {
                         .creator
                         .clone()
                         .unwrap_or_else(|| "agent_orpheus".to_string());
+
+                    let (duration_seconds, duration_beats) = durations.get(i).copied().unwrap_or((None, None));
 
                     let metadata = serde_json::json!({
                         "type": "orpheus_generation",
@@ -162,6 +185,9 @@ impl EventDualityServer {
                             "tokens": tokens,
                             "job_id": job_id_clone.as_str(),
                         },
+                        "duration_seconds": duration_beats,
+                        "duration_seconds_real": duration_seconds,
+                        "tempo_bpm": 120,
                     });
 
                     let mut tags = vec![

@@ -87,10 +87,22 @@ impl EventDualityServer {
             }
         };
 
-        // Use explicit duration if provided, otherwise try metadata, fallback to 4 beats
-        let duration = request.duration
-            .or(metadata_duration)
-            .unwrap_or(4.0);
+        // Use explicit duration if provided, otherwise require it from metadata
+        // Duration is critical for scheduling - we don't guess
+        let duration = match (request.duration, metadata_duration) {
+            (Some(d), _) => d,
+            (None, Some(d)) => d,
+            (None, None) => {
+                return Err(ToolError::validation(
+                    "missing_duration",
+                    format!(
+                        "Artifact {} has no duration_seconds metadata and no duration was provided. \
+                         Either regenerate the artifact with updated tools, or explicitly pass duration.",
+                        artifact_id
+                    ),
+                ));
+            }
+        };
 
         // Create region on timeline
         use chaosgarden::ipc::{Beat, Behavior, ShellRequest};
