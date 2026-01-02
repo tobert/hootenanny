@@ -9,7 +9,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
 
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
 use crate::ipc::{
@@ -539,7 +539,7 @@ impl GardenDaemon {
         // Get timeline ring (if audio output is attached)
         let timeline_ring = match self.timeline_ring.read().unwrap().as_ref() {
             Some(ring) => Arc::clone(ring),
-            None => return, // No output attached
+            None => return, // No audio output attached
         };
 
         // Check if ring has room for a full buffer before processing
@@ -549,9 +549,12 @@ impl GardenDaemon {
         {
             let ring = match timeline_ring.lock() {
                 Ok(r) => r,
-                Err(_) => return,
+                Err(_) => {
+                    trace!("process_playback: ring lock failed");
+                    return;
+                }
             };
-            if ring.available() < MIN_RING_SPACE {
+            if ring.space() < MIN_RING_SPACE {
                 // Ring is full, skip this tick - RT callback will drain it
                 return;
             }
@@ -1136,10 +1139,12 @@ impl GardenDaemon {
                 let transport = self.transport.read().unwrap();
                 let tempo_map = self.tempo_map.read().unwrap();
                 let current_tempo = tempo_map.tempo_at(Tick(0)); // Default to tempo at start
+                let region_count = self.regions.read().unwrap().len();
                 ShellReply::TransportState {
                     playing: transport.playing,
                     position: IpcBeat(transport.position.0),
                     tempo: current_tempo,
+                    region_count,
                 }
             }
             ShellRequest::CreateRegion { position, duration, behavior } => {
@@ -1576,10 +1581,11 @@ mod tests {
         // GetTransportState
         let reply = daemon.handle_shell(ShellRequest::GetTransportState);
         match reply {
-            ShellReply::TransportState { playing, position, tempo } => {
+            ShellReply::TransportState { playing, position, tempo, region_count } => {
                 assert!(!playing);
                 assert_eq!(position.0, 0.0);
                 assert_eq!(tempo, 120.0);
+                assert_eq!(region_count, 0);
             }
             _ => panic!("expected TransportState"),
         }

@@ -107,33 +107,30 @@ impl EventDualityServer {
             }
         };
 
-        // Create region on timeline
-        use chaosgarden::ipc::{Beat, Behavior, ShellRequest};
+        // Create region on timeline via Cap'n Proto
+        use hooteproto::request::{GardenCreateRegionRequest, ToolRequest};
+        use hooteproto::responses::ToolResponse;
 
-        let behavior = Behavior::PlayContent { content_hash: content_hash.clone() };
+        let create_req = ToolRequest::GardenCreateRegion(GardenCreateRegionRequest {
+            position: request.at,
+            duration,
+            behavior_type: "play_content".to_string(),
+            content_id: content_hash.clone(),
+        });
 
-        let shell_req = ShellRequest::CreateRegion {
-            position: Beat(request.at),
-            duration: Beat(duration),
-            behavior,
-        };
-
-        match manager.request(shell_req).await {
-            Ok(chaosgarden::ipc::ShellReply::RegionCreated { region_id }) => {
+        match manager.tool_request(create_req).await {
+            Ok(ToolResponse::GardenRegionCreated(response)) => {
                 Ok(ScheduledResponse {
                     success: true,
                     message: format!("Scheduled {} at beat {}", artifact_id, request.at),
-                    region_id: region_id.to_string(),
+                    region_id: response.region_id,
                     position: request.at,
                     duration,
                     artifact_id,
                 })
             }
-            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => {
-                Err(ToolError::internal(error))
-            }
             Ok(other) => Err(ToolError::internal(format!(
-                "Unexpected reply: {:?}",
+                "Unexpected response: {:?}",
                 other
             ))),
             Err(e) => Err(ToolError::internal(format!("Schedule failed: {}", e))),

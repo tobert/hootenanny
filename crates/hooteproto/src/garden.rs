@@ -486,6 +486,7 @@ pub enum ShellReply {
         playing: bool,
         position: Beat,
         tempo: f64,
+        region_count: usize,
     },
     Regions {
         regions: Vec<RegionSummary>,

@@ -332,6 +332,7 @@ impl PlaybackEngine {
         for region in regions {
             // Skip non-alive regions
             if !region.lifecycle.is_alive() {
+                tracing::trace!(region_id = %region.id, "skipping dead region");
                 continue;
             }
 

@@ -441,12 +441,12 @@ fn shell_reply_to_payload(reply: hooteproto::garden::ShellReply) -> Payload {
         ShellReply::Ok { result: _ } => {
             Payload::TypedResponse(ResponseEnvelope::ack("ok".to_string()))
         }
-        ShellReply::TransportState { playing, position, tempo } => {
+        ShellReply::TransportState { playing, position, tempo, region_count } => {
             let response = GardenStatusResponse {
                 state: if playing { TransportState::Playing } else { TransportState::Stopped },
                 position_beats: position.0,
                 tempo_bpm: tempo,
-                region_count: 0, // Would need separate query
+                region_count,
             };
             Payload::TypedResponse(ResponseEnvelope::success(ToolResponse::GardenStatus(response)))
         }
