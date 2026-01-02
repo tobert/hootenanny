@@ -44,8 +44,14 @@ pub fn parse_body(input: &str, collector: &mut FeedbackCollector) -> Vec<Element
             continue;
         }
 
-        // Check for comment
+        // Check for comment or directive
         if remaining.starts_with('%') {
+            // Check for %%MIDI directive in body - warn that it's ignored
+            if remaining.starts_with("%%MIDI") {
+                collector.warning(
+                    "%%MIDI directive found after K: field - move it before K: to take effect"
+                );
+            }
             // Skip to end of line
             if let Some(newline_pos) = remaining.find('\n') {
                 remaining = &remaining[newline_pos..];
@@ -576,5 +582,29 @@ mod tests {
             .collect();
 
         assert_eq!(notes.len(), 4);
+    }
+
+    #[test]
+    fn test_midi_directive_in_body_warns() {
+        use crate::feedback::FeedbackLevel;
+
+        let mut collector = FeedbackCollector::new();
+        let _elements = parse_body("CD\n%%MIDI program 56\nEF", &mut collector);
+
+        // Should have a warning about %%MIDI in body
+        let warnings: Vec<_> = collector
+            .feedback()
+            .iter()
+            .filter(|f| f.level == FeedbackLevel::Warning)
+            .collect();
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].message.contains("%%MIDI"),
+            "Warning should mention %%MIDI"
+        );
+        assert!(
+            warnings[0].message.contains("before K:"),
+            "Warning should suggest moving before K:"
+        );
     }
 }

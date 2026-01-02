@@ -1101,4 +1101,59 @@ mod tests {
         let has_program_52 = midi.windows(2).any(|w| w[0] == 0xC0 && w[1] == 52);
         assert!(has_program_52, "ABC program should override params");
     }
+
+    #[test]
+    fn test_midi_program_in_header_before_key() {
+        // %%MIDI program MUST come before K: field (in header section)
+        // This is the correct placement
+        let abc = "X:1\nT:Test\n%%MIDI program 56\nM:4/4\nL:1/4\nK:C\nCDEF|\n";
+        let result = crate::parse(abc);
+        assert!(!result.has_errors());
+        assert_eq!(
+            result.value.header.midi_program,
+            Some(56),
+            "%%MIDI program before K: should be parsed"
+        );
+
+        let midi = generate(&result.value, &MidiParams::default());
+        let has_program_change = midi.windows(2).any(|w| w[0] == 0xC0 && w[1] == 56);
+        assert!(has_program_change, "Should emit program change 56");
+    }
+
+    #[test]
+    fn test_midi_program_after_key_not_parsed() {
+        // %%MIDI program after K: field is in the body, not header
+        // Currently this is NOT parsed (header parsing stops at K:)
+        // This test documents the current behavior
+        let abc = "X:1\nT:Test\nM:4/4\nL:1/4\nK:C\n%%MIDI program 56\nCDEF|\n";
+        let result = crate::parse(abc);
+        assert!(!result.has_errors());
+        // Currently NOT parsed because it's after K:
+        assert_eq!(
+            result.value.header.midi_program,
+            None,
+            "%%MIDI program after K: is not parsed (in body, not header)"
+        );
+    }
+
+    #[test]
+    fn test_midi_program_various_positions() {
+        // Test %%MIDI program works in various valid header positions
+        let cases = [
+            ("X:1\n%%MIDI program 40\nT:Test\nM:4/4\nK:C\nC|\n", Some(40), "after X:"),
+            ("X:1\nT:Test\n%%MIDI program 41\nM:4/4\nK:C\nC|\n", Some(41), "after T:"),
+            ("X:1\nT:Test\nM:4/4\n%%MIDI program 42\nL:1/4\nK:C\nC|\n", Some(42), "after M:"),
+            ("X:1\nT:Test\nM:4/4\nL:1/4\n%%MIDI program 43\nK:C\nC|\n", Some(43), "before K:"),
+            ("X:1\nT:Test\nM:4/4\nL:1/4\nK:C\n%%MIDI program 44\nC|\n", None, "after K: (body)"),
+        ];
+
+        for (abc, expected_program, position) in cases {
+            let result = crate::parse(abc);
+            assert!(!result.has_errors(), "Parse failed for {}", position);
+            assert_eq!(
+                result.value.header.midi_program, expected_program,
+                "Wrong program for %%MIDI {}", position
+            );
+        }
+    }
 }
