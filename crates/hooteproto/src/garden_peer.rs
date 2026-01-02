@@ -52,6 +52,11 @@ use crate::socket_config::{
     create_dealer_and_connect, create_subscriber_and_connect, Multipart, ZmqContext,
 };
 use crate::{Command, ConnectionState, ContentType, HootFrame, LazyPirateConfig, PROTOCOL_VERSION};
+use crate::request::ToolRequest;
+use crate::responses::ToolResponse;
+use crate::envelope::ResponseEnvelope;
+use crate::conversion::{payload_to_capnp_envelope, capnp_envelope_to_payload};
+use crate::{Payload, envelope_capnp};
 
 /// Health tracking for GardenPeer
 struct GardenHealth {
@@ -395,6 +400,91 @@ impl GardenPeer {
 
         self.health.record_success();
         Ok(response_msg.content)
+    }
+
+    /// Send a tool request using Cap'n Proto serialization
+    ///
+    /// This is the preferred method for new code - uses typed ToolRequest/ToolResponse
+    /// and Cap'n Proto wire format instead of JSON.
+    pub async fn tool_request(&self, req: ToolRequest) -> Result<ToolResponse> {
+        let request_id = Uuid::new_v4();
+        let payload = Payload::ToolRequest(req);
+
+        // Serialize to Cap'n Proto
+        let capnp_msg = payload_to_capnp_envelope(request_id, &payload)
+            .context("Failed to serialize ToolRequest to Cap'n Proto")?;
+        let capnp_bytes = capnp::serialize::write_message_to_words(&capnp_msg);
+
+        let frame = HootFrame {
+            command: Command::Request,
+            content_type: ContentType::CapnProto,
+            request_id,
+            service: "chaosgarden".to_string(),
+            traceparent: None,
+            body: Bytes::from(capnp_bytes),
+        };
+
+        let frames = frame.to_frames();
+        let multipart: Multipart = frames.iter().map(|f| f.to_vec()).collect::<Vec<_>>().into();
+
+        // Send
+        {
+            let mut tx = self.shell.tx.lock().await;
+            tokio::time::timeout(self.config.timeout, tx.send(multipart))
+                .await
+                .context("Tool request send timeout")??;
+        }
+
+        // Receive
+        let response = {
+            let mut rx = self.shell.rx.lock().await;
+            tokio::time::timeout(self.config.timeout, rx.next())
+                .await
+                .context("Tool response receive timeout")?
+                .ok_or_else(|| anyhow::anyhow!("Socket stream ended"))??
+        };
+
+        let response_frames: Vec<Bytes> = response
+            .into_iter()
+            .map(|m| Bytes::from(m.to_vec()))
+            .collect();
+
+        let response_frame =
+            HootFrame::from_frames(&response_frames).context("Failed to parse response frame")?;
+
+        if response_frame.content_type != ContentType::CapnProto {
+            anyhow::bail!(
+                "Expected Cap'n Proto response, got {:?}",
+                response_frame.content_type
+            );
+        }
+
+        // Parse Cap'n Proto response
+        let capnp_reader = response_frame.read_capnp()
+            .context("Failed to create Cap'n Proto reader")?;
+        let envelope_reader = capnp_reader.get_root::<envelope_capnp::envelope::Reader>()
+            .context("Failed to read envelope")?;
+        let response_payload = capnp_envelope_to_payload(envelope_reader)
+            .context("Failed to convert envelope to payload")?;
+
+        match response_payload {
+            Payload::TypedResponse(ResponseEnvelope::Success { response }) => {
+                self.health.record_success();
+                Ok(response)
+            }
+            Payload::TypedResponse(ResponseEnvelope::Error(err)) => {
+                self.health.record_failure(self.config.max_failures);
+                anyhow::bail!("Tool request failed: {}", err.message())
+            }
+            Payload::Error { code, message, .. } => {
+                self.health.record_failure(self.config.max_failures);
+                anyhow::bail!("Tool request error [{}]: {}", code, message)
+            }
+            other => {
+                self.health.record_failure(self.config.max_failures);
+                anyhow::bail!("Unexpected response payload: {:?}", other)
+            }
+        }
     }
 
     /// Send a control request (priority channel)

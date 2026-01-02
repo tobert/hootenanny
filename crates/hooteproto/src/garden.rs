@@ -245,7 +245,8 @@ pub struct PendingApproval {
 #[serde(rename_all = "snake_case")]
 pub enum Behavior {
     PlayContent {
-        artifact_id: String,
+        /// CAS content hash - chaosgarden resolves this to load audio
+        content_hash: String,
     },
     Latent {
         job_id: String,

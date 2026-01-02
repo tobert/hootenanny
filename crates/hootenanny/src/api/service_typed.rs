@@ -281,25 +281,25 @@ impl EventDualityServer {
 
     /// Get garden status - typed response
     pub async fn garden_status_typed(&self) -> Result<GardenStatusResponse, ToolError> {
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
+
         let manager = self.garden_manager.as_ref().ok_or_else(|| {
             ToolError::validation("not_connected", "Not connected to chaosgarden")
         })?;
 
-        let snapshot = manager
-            .get_snapshot()
-            .await
-            .map_err(|e| ToolError::service("chaosgarden", "status_failed", e.to_string()))?;
-
-        Ok(GardenStatusResponse {
-            state: if snapshot.transport.playing {
-                TransportState::Playing
-            } else {
-                TransportState::Stopped
-            },
-            position_beats: snapshot.transport.position,
-            tempo_bpm: snapshot.transport.tempo,
-            region_count: snapshot.regions.len(),
-        })
+        match manager.tool_request(ToolRequest::GardenStatus).await {
+            Ok(ToolResponse::GardenStatus(response)) => Ok(response),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected response for GardenStatus: {:?}",
+                other
+            ))),
+            Err(e) => Err(ToolError::service(
+                "chaosgarden",
+                "status_failed",
+                e.to_string(),
+            )),
+        }
     }
 
     /// Get garden regions - typed response
@@ -308,53 +308,26 @@ impl EventDualityServer {
         start: Option<f64>,
         end: Option<f64>,
     ) -> Result<GardenRegionsResponse, ToolError> {
-        use chaosgarden::ipc::{Beat, ShellReply, ShellRequest};
-        use hooteproto::responses::GardenRegionInfo;
+        use hooteproto::request::{GardenGetRegionsRequest, ToolRequest};
+        use hooteproto::responses::ToolResponse;
 
         let manager = self.garden_manager.as_ref().ok_or_else(|| {
             ToolError::validation("not_connected", "Not connected to chaosgarden")
         })?;
 
-        // Convert f64 beat range to (Beat, Beat) tuple
-        let range = match (start, end) {
-            (Some(s), Some(e)) => Some((Beat(s), Beat(e))),
-            _ => None,
-        };
+        let request = ToolRequest::GardenGetRegions(GardenGetRegionsRequest { start, end });
 
-        let reply = manager
-            .request(ShellRequest::GetRegions { range })
-            .await
-            .map_err(|e| ToolError::service("chaosgarden", "get_regions_failed", e.to_string()))?;
-
-        match reply {
-            ShellReply::Regions { regions } => {
-                let converted: Vec<GardenRegionInfo> = regions
-                    .into_iter()
-                    .map(|r| GardenRegionInfo {
-                        region_id: r.region_id.to_string(),
-                        position: r.position.0,
-                        duration: r.duration.0,
-                        behavior_type: if r.is_latent {
-                            "latent"
-                        } else {
-                            "play_content"
-                        }
-                        .to_string(),
-                        content_id: r.artifact_id.unwrap_or_default(),
-                    })
-                    .collect();
-                let count = converted.len();
-                Ok(GardenRegionsResponse {
-                    regions: converted,
-                    count,
-                })
-            }
-            ShellReply::Error { error, .. } => Err(ToolError::service(
+        match manager.tool_request(request).await {
+            Ok(ToolResponse::GardenRegions(response)) => Ok(response),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected response for GetRegions: {:?}",
+                other
+            ))),
+            Err(e) => Err(ToolError::service(
                 "chaosgarden",
                 "get_regions_failed",
-                error,
+                e.to_string(),
             )),
-            _ => Err(ToolError::internal("Unexpected reply type for GetRegions")),
         }
     }
 
@@ -366,73 +339,102 @@ impl EventDualityServer {
     // async results back to jobs.
     // =========================================================================
 
-    pub async fn garden_play_fire(&self, job_id: Option<&str>) -> Result<(), ToolError> {
-        use chaosgarden::ipc::ShellRequest;
+    pub async fn garden_play_fire(&self, _job_id: Option<&str>) -> Result<(), ToolError> {
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
 
         let manager = self.garden_manager.as_ref().ok_or_else(|| {
             ToolError::validation("not_connected", "Not connected to chaosgarden")
         })?;
-        manager
-            .request_with_job_id(ShellRequest::Play, job_id)
-            .await
-            .map_err(|e| ToolError::service("chaosgarden", "play_failed", e.to_string()))?;
-        Ok(())
+
+        match manager.tool_request(ToolRequest::GardenPlay).await {
+            Ok(ToolResponse::Ack(_)) => Ok(()),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected response for Play: {:?}",
+                other
+            ))),
+            Err(e) => Err(ToolError::service("chaosgarden", "play_failed", e.to_string())),
+        }
     }
 
-    pub async fn garden_pause_fire(&self, job_id: Option<&str>) -> Result<(), ToolError> {
-        use chaosgarden::ipc::ShellRequest;
+    pub async fn garden_pause_fire(&self, _job_id: Option<&str>) -> Result<(), ToolError> {
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
 
         let manager = self.garden_manager.as_ref().ok_or_else(|| {
             ToolError::validation("not_connected", "Not connected to chaosgarden")
         })?;
-        manager
-            .request_with_job_id(ShellRequest::Pause, job_id)
-            .await
-            .map_err(|e| ToolError::service("chaosgarden", "pause_failed", e.to_string()))?;
-        Ok(())
+
+        match manager.tool_request(ToolRequest::GardenPause).await {
+            Ok(ToolResponse::Ack(_)) => Ok(()),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected response for Pause: {:?}",
+                other
+            ))),
+            Err(e) => Err(ToolError::service("chaosgarden", "pause_failed", e.to_string())),
+        }
     }
 
-    pub async fn garden_stop_fire(&self, job_id: Option<&str>) -> Result<(), ToolError> {
-        use chaosgarden::ipc::ShellRequest;
+    pub async fn garden_stop_fire(&self, _job_id: Option<&str>) -> Result<(), ToolError> {
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
 
         let manager = self.garden_manager.as_ref().ok_or_else(|| {
             ToolError::validation("not_connected", "Not connected to chaosgarden")
         })?;
-        manager
-            .request_with_job_id(ShellRequest::Stop, job_id)
-            .await
-            .map_err(|e| ToolError::service("chaosgarden", "stop_failed", e.to_string()))?;
-        Ok(())
+
+        match manager.tool_request(ToolRequest::GardenStop).await {
+            Ok(ToolResponse::Ack(_)) => Ok(()),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected response for Stop: {:?}",
+                other
+            ))),
+            Err(e) => Err(ToolError::service("chaosgarden", "stop_failed", e.to_string())),
+        }
     }
 
-    pub async fn garden_seek_fire(&self, beat: f64, job_id: Option<&str>) -> Result<(), ToolError> {
-        use chaosgarden::ipc::{Beat, ShellRequest};
+    pub async fn garden_seek_fire(&self, beat: f64, _job_id: Option<&str>) -> Result<(), ToolError> {
+        use hooteproto::request::{GardenSeekRequest, ToolRequest};
+        use hooteproto::responses::ToolResponse;
 
         let manager = self.garden_manager.as_ref().ok_or_else(|| {
             ToolError::validation("not_connected", "Not connected to chaosgarden")
         })?;
-        manager
-            .request_with_job_id(ShellRequest::Seek { beat: Beat(beat) }, job_id)
-            .await
-            .map_err(|e| ToolError::service("chaosgarden", "seek_failed", e.to_string()))?;
-        Ok(())
+
+        let request = ToolRequest::GardenSeek(GardenSeekRequest { beat });
+
+        match manager.tool_request(request).await {
+            Ok(ToolResponse::Ack(_)) => Ok(()),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected response for Seek: {:?}",
+                other
+            ))),
+            Err(e) => Err(ToolError::service("chaosgarden", "seek_failed", e.to_string())),
+        }
     }
 
     pub async fn garden_set_tempo_fire(
         &self,
         bpm: f64,
-        job_id: Option<&str>,
+        _job_id: Option<&str>,
     ) -> Result<(), ToolError> {
-        use chaosgarden::ipc::ShellRequest;
+        use hooteproto::request::{GardenSetTempoRequest, ToolRequest};
+        use hooteproto::responses::ToolResponse;
 
         let manager = self.garden_manager.as_ref().ok_or_else(|| {
             ToolError::validation("not_connected", "Not connected to chaosgarden")
         })?;
-        manager
-            .request_with_job_id(ShellRequest::SetTempo { bpm }, job_id)
-            .await
-            .map_err(|e| ToolError::service("chaosgarden", "set_tempo_failed", e.to_string()))?;
-        Ok(())
+
+        let request = ToolRequest::GardenSetTempo(GardenSetTempoRequest { bpm });
+
+        match manager.tool_request(request).await {
+            Ok(ToolResponse::Ack(_)) => Ok(()),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected response for SetTempo: {:?}",
+                other
+            ))),
+            Err(e) => Err(ToolError::service("chaosgarden", "set_tempo_failed", e.to_string())),
+        }
     }
 
     pub async fn garden_emergency_pause_fire(&self, _job_id: Option<&str>) -> Result<(), ToolError> {
@@ -457,88 +459,63 @@ impl EventDualityServer {
         duration: f64,
         behavior_type: &str,
         content_id: &str,
-        job_id: Option<&str>,
+        _job_id: Option<&str>,
     ) -> Result<String, ToolError> {
-        use chaosgarden::ipc::{Beat, Behavior, ShellReply, ShellRequest};
+        use hooteproto::request::{GardenCreateRegionRequest, ToolRequest};
+        use hooteproto::responses::ToolResponse;
 
         let manager = self.garden_manager.as_ref().ok_or_else(|| {
             ToolError::validation("not_connected", "Not connected to chaosgarden")
         })?;
 
-        let behavior = match behavior_type {
-            "play_content" => Behavior::PlayContent {
-                artifact_id: content_id.to_string(),
-            },
-            "latent" => Behavior::Latent {
-                job_id: content_id.to_string(),
-            },
-            _ => {
-                return Err(ToolError::validation(
-                    "invalid_behavior",
-                    format!("Unknown behavior type: {}", behavior_type),
-                ))
-            }
-        };
+        let request = ToolRequest::GardenCreateRegion(GardenCreateRegionRequest {
+            position,
+            duration,
+            behavior_type: behavior_type.to_string(),
+            content_id: content_id.to_string(),
+        });
 
-        let reply = manager
-            .request_with_job_id(
-                ShellRequest::CreateRegion {
-                    position: Beat(position),
-                    duration: Beat(duration),
-                    behavior,
-                },
-                job_id,
-            )
-            .await
-            .map_err(|e| {
-                ToolError::service("chaosgarden", "create_region_failed", e.to_string())
-            })?;
-
-        match reply {
-            ShellReply::RegionCreated { region_id } => Ok(region_id.to_string()),
-            ShellReply::Error { error, .. } => Err(ToolError::service(
+        match manager.tool_request(request).await {
+            Ok(ToolResponse::GardenRegionCreated(response)) => Ok(response.region_id),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected response for CreateRegion: {:?}",
+                other
+            ))),
+            Err(e) => Err(ToolError::service(
                 "chaosgarden",
-                "create_region_error",
-                error,
+                "create_region_failed",
+                e.to_string(),
             )),
-            _ => Err(ToolError::internal("unexpected reply from chaosgarden")),
         }
     }
 
     pub async fn garden_delete_region_fire(
         &self,
         region_id: &str,
-        job_id: Option<&str>,
+        _job_id: Option<&str>,
     ) -> Result<(), ToolError> {
-        use chaosgarden::ipc::{ShellReply, ShellRequest};
+        use hooteproto::request::{GardenDeleteRegionRequest, ToolRequest};
+        use hooteproto::responses::ToolResponse;
 
         let manager = self.garden_manager.as_ref().ok_or_else(|| {
             ToolError::validation("not_connected", "Not connected to chaosgarden")
         })?;
 
-        let region_uuid = uuid::Uuid::parse_str(region_id)
-            .map_err(|_| ToolError::validation("invalid_uuid", "Invalid region_id UUID format"))?;
+        let request = ToolRequest::GardenDeleteRegion(GardenDeleteRegionRequest {
+            region_id: region_id.to_string(),
+        });
 
-        let reply = manager
-            .request_with_job_id(
-                ShellRequest::DeleteRegion {
-                    region_id: region_uuid,
-                },
-                job_id,
-            )
-            .await
-            .map_err(|e| {
-                ToolError::service("chaosgarden", "delete_region_failed", e.to_string())
-            })?;
-
-        match reply {
-            ShellReply::Ok { .. } => Ok(()),
-            ShellReply::Error { error, .. } => Err(ToolError::service(
+        match manager.tool_request(request).await {
+            Ok(ToolResponse::Ack(_)) => Ok(()),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected response for DeleteRegion: {:?}",
+                other
+            ))),
+            Err(e) => Err(ToolError::service(
                 "chaosgarden",
-                "delete_region_error",
-                error,
+                "delete_region_failed",
+                e.to_string(),
             )),
-            _ => Err(ToolError::internal("unexpected reply from chaosgarden")),
         }
     }
 
@@ -546,36 +523,31 @@ impl EventDualityServer {
         &self,
         region_id: &str,
         new_position: f64,
-        job_id: Option<&str>,
+        _job_id: Option<&str>,
     ) -> Result<(), ToolError> {
-        use chaosgarden::ipc::{Beat, ShellReply, ShellRequest};
+        use hooteproto::request::{GardenMoveRegionRequest, ToolRequest};
+        use hooteproto::responses::ToolResponse;
 
         let manager = self.garden_manager.as_ref().ok_or_else(|| {
             ToolError::validation("not_connected", "Not connected to chaosgarden")
         })?;
 
-        let region_uuid = uuid::Uuid::parse_str(region_id)
-            .map_err(|_| ToolError::validation("invalid_uuid", "Invalid region_id UUID format"))?;
+        let request = ToolRequest::GardenMoveRegion(GardenMoveRegionRequest {
+            region_id: region_id.to_string(),
+            new_position,
+        });
 
-        let reply = manager
-            .request_with_job_id(
-                ShellRequest::MoveRegion {
-                    region_id: region_uuid,
-                    new_position: Beat(new_position),
-                },
-                job_id,
-            )
-            .await
-            .map_err(|e| ToolError::service("chaosgarden", "move_region_failed", e.to_string()))?;
-
-        match reply {
-            ShellReply::Ok { .. } => Ok(()),
-            ShellReply::Error { error, .. } => Err(ToolError::service(
+        match manager.tool_request(request).await {
+            Ok(ToolResponse::Ack(_)) => Ok(()),
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected response for MoveRegion: {:?}",
+                other
+            ))),
+            Err(e) => Err(ToolError::service(
                 "chaosgarden",
-                "move_region_error",
-                error,
+                "move_region_failed",
+                e.to_string(),
             )),
-            _ => Err(ToolError::internal("unexpected reply from chaosgarden")),
         }
     }
 
@@ -2956,22 +2928,18 @@ impl EventDualityServer {
             )
         })?;
 
-        use chaosgarden::ipc::ShellRequest;
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
 
         match manager
-            .request(ShellRequest::AttachAudio {
-                device_name: request.device_name,
-                sample_rate: request.sample_rate,
-                latency_frames: request.latency_frames,
-            })
+            .tool_request(ToolRequest::GardenAttachAudio(request))
             .await
         {
-            Ok(chaosgarden::ipc::ShellReply::Ok { result: _ }) => {
+            Ok(ToolResponse::Ack(_)) => {
                 // After attach, get current status
                 self.garden_audio_status_typed().await
             }
-            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => Err(ToolError::internal(error)),
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
             Err(e) => Err(ToolError::internal(format!("Attach audio failed: {}", e))),
         }
     }
@@ -2987,14 +2955,14 @@ impl EventDualityServer {
             )
         })?;
 
-        use chaosgarden::ipc::ShellRequest;
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
 
-        match manager.request(ShellRequest::DetachAudio).await {
-            Ok(chaosgarden::ipc::ShellReply::Ok { result: _ }) => {
+        match manager.tool_request(ToolRequest::GardenDetachAudio).await {
+            Ok(ToolResponse::Ack(_)) => {
                 self.garden_audio_status_typed().await
             }
-            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => Err(ToolError::internal(error)),
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
             Err(e) => Err(ToolError::internal(format!("Detach audio failed: {}", e))),
         }
     }
@@ -3010,29 +2978,12 @@ impl EventDualityServer {
             )
         })?;
 
-        use chaosgarden::ipc::ShellRequest;
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
 
-        match manager.request(ShellRequest::GetAudioStatus).await {
-            Ok(chaosgarden::ipc::ShellReply::AudioStatus {
-                attached,
-                device_name,
-                sample_rate,
-                latency_frames,
-                callbacks,
-                samples_written,
-                underruns,
-                ..
-            }) => Ok(hooteproto::responses::GardenAudioStatusResponse {
-                attached,
-                device_name,
-                sample_rate,
-                latency_frames,
-                callbacks,
-                samples_written,
-                underruns,
-            }),
-            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => Err(ToolError::internal(error)),
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+        match manager.tool_request(ToolRequest::GardenAudioStatus).await {
+            Ok(ToolResponse::GardenAudioStatus(response)) => Ok(response),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
             Err(e) => Err(ToolError::internal(format!("Get audio status failed: {}", e))),
         }
     }
@@ -3049,20 +3000,17 @@ impl EventDualityServer {
             )
         })?;
 
-        use chaosgarden::ipc::ShellRequest;
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
 
         match manager
-            .request(ShellRequest::AttachInput {
-                device_name: request.device_name,
-                sample_rate: request.sample_rate,
-            })
+            .tool_request(ToolRequest::GardenAttachInput(request))
             .await
         {
-            Ok(chaosgarden::ipc::ShellReply::Ok { result: _ }) => {
+            Ok(ToolResponse::Ack(_)) => {
                 self.garden_input_status_typed().await
             }
-            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => Err(ToolError::internal(error)),
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
             Err(e) => Err(ToolError::internal(format!("Attach input failed: {}", e))),
         }
     }
@@ -3078,14 +3026,14 @@ impl EventDualityServer {
             )
         })?;
 
-        use chaosgarden::ipc::ShellRequest;
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
 
-        match manager.request(ShellRequest::DetachInput).await {
-            Ok(chaosgarden::ipc::ShellReply::Ok { result: _ }) => {
+        match manager.tool_request(ToolRequest::GardenDetachInput).await {
+            Ok(ToolResponse::Ack(_)) => {
                 self.garden_input_status_typed().await
             }
-            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => Err(ToolError::internal(error)),
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
             Err(e) => Err(ToolError::internal(format!("Detach input failed: {}", e))),
         }
     }
@@ -3101,32 +3049,12 @@ impl EventDualityServer {
             )
         })?;
 
-        use chaosgarden::ipc::ShellRequest;
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
 
-        match manager.request(ShellRequest::GetInputStatus).await {
-            Ok(chaosgarden::ipc::ShellReply::InputStatus {
-                attached,
-                device_name,
-                sample_rate,
-                channels,
-                monitor_enabled,
-                monitor_gain,
-                callbacks,
-                samples_captured,
-                overruns,
-            }) => Ok(hooteproto::responses::GardenInputStatusResponse {
-                attached,
-                device_name,
-                sample_rate,
-                channels,
-                monitor_enabled,
-                monitor_gain,
-                callbacks,
-                samples_captured,
-                overruns,
-            }),
-            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => Err(ToolError::internal(error)),
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+        match manager.tool_request(ToolRequest::GardenInputStatus).await {
+            Ok(ToolResponse::GardenInputStatus(response)) => Ok(response),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
             Err(e) => Err(ToolError::internal(format!("Get input status failed: {}", e))),
         }
     }
@@ -3143,30 +3071,22 @@ impl EventDualityServer {
             )
         })?;
 
-        use chaosgarden::ipc::ShellRequest;
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
 
         match manager
-            .request(ShellRequest::SetMonitor {
-                enabled: request.enabled,
-                gain: request.gain,
-            })
+            .tool_request(ToolRequest::GardenSetMonitor(request))
             .await
         {
-            Ok(chaosgarden::ipc::ShellReply::Ok { result }) => {
-                // Extract values from JSON result
-                let enabled = result.get("monitor_enabled")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(request.enabled.unwrap_or(false));
-                let gain = result.get("monitor_gain")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(request.gain.map(|g| g as f64).unwrap_or(1.0));
+            Ok(ToolResponse::GardenMonitorStatus(response)) => Ok(response),
+            Ok(ToolResponse::Ack(_)) => {
+                // Fallback for ack response - return defaults
                 Ok(hooteproto::responses::GardenMonitorStatusResponse {
-                    enabled,
-                    gain,
+                    enabled: false,
+                    gain: 1.0,
                 })
             }
-            Ok(chaosgarden::ipc::ShellReply::Error { error, .. }) => Err(ToolError::internal(error)),
-            Ok(other) => Err(ToolError::internal(format!("Unexpected reply: {:?}", other))),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
             Err(e) => Err(ToolError::internal(format!("Set monitor failed: {}", e))),
         }
     }

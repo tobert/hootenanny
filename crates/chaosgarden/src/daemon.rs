@@ -1344,8 +1344,8 @@ impl GardenDaemon {
 /// Convert IPC Behavior to internal Behavior
 fn convert_ipc_behavior_to_internal(ipc: &crate::ipc::Behavior) -> Behavior {
     match ipc {
-        crate::ipc::Behavior::PlayContent { artifact_id } => Behavior::PlayContent {
-            content_hash: artifact_id.clone(),
+        crate::ipc::Behavior::PlayContent { content_hash } => Behavior::PlayContent {
+            content_hash: content_hash.clone(),
             content_type: crate::primitives::ContentType::Audio, // Default, could be enhanced
             params: crate::primitives::PlaybackParams::default(),
         },
@@ -1602,7 +1602,7 @@ mod tests {
 
         // Create a region with PlayContent behavior
         let behavior = crate::ipc::Behavior::PlayContent {
-            artifact_id: "hash_abc123".to_string(),
+            content_hash: "hash_abc123".to_string(),
         };
         let reply = daemon.handle_shell(ShellRequest::CreateRegion {
             position: IpcBeat(4.0),
@@ -1657,7 +1657,7 @@ mod tests {
 
         // Create a region
         let behavior = crate::ipc::Behavior::PlayContent {
-            artifact_id: "hash_123".to_string(),
+            content_hash: "hash_123".to_string(),
         };
         let reply = daemon.handle_shell(ShellRequest::CreateRegion {
             position: IpcBeat(0.0),
@@ -1695,7 +1695,7 @@ mod tests {
 
         // Create a region at beat 0
         let behavior = crate::ipc::Behavior::PlayContent {
-            artifact_id: "hash_456".to_string(),
+            content_hash: "hash_456".to_string(),
         };
         let reply = daemon.handle_shell(ShellRequest::CreateRegion {
             position: IpcBeat(0.0),
@@ -1738,7 +1738,7 @@ mod tests {
         // Create regions at beats 0, 8, and 16
         for pos in [0.0, 8.0, 16.0] {
             let behavior = crate::ipc::Behavior::PlayContent {
-                artifact_id: format!("hash_{}", pos as i32),
+                content_hash: format!("hash_{}", pos as i32),
             };
             daemon.handle_shell(ShellRequest::CreateRegion {
                 position: IpcBeat(pos),
@@ -1762,7 +1762,7 @@ mod tests {
 
         // Create a region via handler
         let behavior = crate::ipc::Behavior::PlayContent {
-            artifact_id: "hash_handler".to_string(),
+            content_hash: "hash_handler".to_string(),
         };
         daemon.handle_shell(ShellRequest::CreateRegion {
             position: IpcBeat(2.0),

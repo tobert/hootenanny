@@ -14,6 +14,8 @@ use tracing::{debug, error, info, warn};
 use hooteproto::garden::{
     Beat, ControlReply, ControlRequest, IOPubEvent, ShellReply, ShellRequest,
 };
+use hooteproto::request::ToolRequest;
+use hooteproto::responses::ToolResponse;
 use hooteproto::{GardenEndpoints, GardenPeer};
 
 /// Connection state to chaosgarden
@@ -141,6 +143,19 @@ impl GardenManager {
             .context("not connected to chaosgarden")?;
 
         client.request_with_job_id(req, job_id).await
+    }
+
+    /// Send a tool request using Cap'n Proto serialization
+    ///
+    /// This is the preferred method for new code - uses typed ToolRequest/ToolResponse
+    /// and Cap'n Proto wire format instead of JSON.
+    pub async fn tool_request(&self, req: ToolRequest) -> Result<ToolResponse> {
+        let client_guard = self.client.read().await;
+        let client = client_guard
+            .as_ref()
+            .context("not connected to chaosgarden")?;
+
+        client.tool_request(req).await
     }
 
     /// Send a control request (priority channel)

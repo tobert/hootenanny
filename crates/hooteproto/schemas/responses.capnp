@@ -444,6 +444,8 @@ struct GardenAudioStatusResponse {
   sampleRate @2 :UInt32;
   latencyFrames @3 :UInt32;
   bufferUnderruns @4 :UInt64;
+  callbacks @5 :UInt64;
+  samplesWritten @6 :UInt64;
 }
 
 struct GardenInputStatusResponse {

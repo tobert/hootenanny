@@ -1799,6 +1799,8 @@ fn response_to_capnp_tool_response(
             b.set_sample_rate(r.sample_rate.unwrap_or(0));
             b.set_latency_frames(r.latency_frames.unwrap_or(0));
             b.set_buffer_underruns(r.underruns);
+            b.set_callbacks(r.callbacks);
+            b.set_samples_written(r.samples_written);
         }
         ToolResponse::GardenInputStatus(r) => {
             let mut b = builder.reborrow().init_garden_input_status();
@@ -2454,8 +2456,8 @@ fn capnp_tool_response_to_response(
                 device_name: if device_name.is_empty() { None } else { Some(device_name) },
                 sample_rate: Some(r.get_sample_rate()),
                 latency_frames: Some(r.get_latency_frames()),
-                callbacks: 0, // Not in capnp schema yet
-                samples_written: 0, // Not in capnp schema yet
+                callbacks: r.get_callbacks(),
+                samples_written: r.get_samples_written(),
                 underruns: r.get_buffer_underruns(),
             }))
         }

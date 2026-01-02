@@ -42,8 +42,8 @@ impl EventDualityServer {
             }
         }
 
-        // Resolve encoding to artifact_id and extract duration from metadata
-        let (artifact_id, metadata_duration) = match &request.encoding {
+        // Resolve encoding to artifact_id, content_hash, and duration from metadata
+        let (artifact_id, content_hash, metadata_duration) = match &request.encoding {
             Encoding::Midi { artifact_id } | Encoding::Audio { artifact_id } => {
                 // Verify artifact exists and extract metadata
                 let store = self
@@ -71,7 +71,10 @@ impl EventDualityServer {
                             .and_then(|v| v.as_f64())
                     });
 
-                (artifact_id.clone(), duration)
+                // Need content_hash for chaosgarden to resolve from CAS
+                let hash = artifact.content_hash.as_str().to_string();
+
+                (artifact_id.clone(), hash, duration)
             }
             Encoding::Hash { .. } => {
                 return Err(ToolError::validation(
@@ -107,7 +110,7 @@ impl EventDualityServer {
         // Create region on timeline
         use chaosgarden::ipc::{Beat, Behavior, ShellRequest};
 
-        let behavior = Behavior::PlayContent { artifact_id: artifact_id.clone() };
+        let behavior = Behavior::PlayContent { content_hash: content_hash.clone() };
 
         let shell_req = ShellRequest::CreateRegion {
             position: Beat(request.at),

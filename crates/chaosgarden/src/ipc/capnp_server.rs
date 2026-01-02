@@ -174,41 +174,14 @@ impl CapnpGardenServer {
             }
 
             Command::Request => {
-                match frame.content_type {
+                let result_payload = match frame.content_type {
                     ContentType::Json => {
-                        // JSON request - parse as Jupyter Message<ShellRequest> for backward compatibility
-                        debug!("[{}] Processing JSON request", channel);
-                        let reply_content = match serde_json::from_slice::<hooteproto::garden::Message<hooteproto::garden::ShellRequest>>(&frame.body) {
-                            Ok(msg) => {
-                                // Call handle_shell and get ShellReply
-                                handler.handle_shell(msg.content)
-                            }
-                            Err(e) => {
-                                hooteproto::garden::ShellReply::Error {
-                                    error: format!("Failed to parse JSON ShellRequest: {}", e),
-                                    traceback: None,
-                                }
-                            }
-                        };
-                        // Wrap in Message envelope and serialize back to JSON
-                        let reply_msg = hooteproto::garden::Message::new(
-                            frame.request_id,
-                            "shell_reply",
-                            reply_content,
-                        );
-                        let reply_json = serde_json::to_vec(&reply_msg).unwrap_or_default();
-                        let response_frame = HootFrame {
-                            command: Command::Reply,
-                            content_type: ContentType::Json,
-                            request_id: frame.request_id,
-                            service: "chaosgarden".to_string(),
-                            traceparent: None,
-                            body: reply_json.into(),
-                        };
-                        let reply_frames = response_frame.to_frames_with_identity(&identity);
-                        let reply = frames_to_multipart(&reply_frames);
-                        socket.tx.lock().await.send(reply).await
-                            .with_context(|| format!("[{}] Failed to send JSON response", channel))?;
+                        error!("[{}] JSON requests no longer supported - use Cap'n Proto", channel);
+                        Payload::Error {
+                            code: "json_not_supported".to_string(),
+                            message: "JSON requests are no longer supported - use Cap'n Proto".to_string(),
+                            details: None,
+                        }
                     }
                     ContentType::CapnProto => {
                         // Cap'n Proto request - parse as Payload
@@ -223,7 +196,7 @@ impl CapnpGardenServer {
                             Err(e) => Err(e.to_string()),
                         };
 
-                        let result_payload = match payload_result {
+                        match payload_result {
                             Ok(payload) => {
                                 // Dispatch to handler
                                 self.dispatch_payload(handler, payload).await
@@ -236,35 +209,39 @@ impl CapnpGardenServer {
                                     details: None,
                                 }
                             }
-                        };
-
-                        // Convert result to Cap'n Proto envelope
-                        let response_msg =
-                            payload_to_capnp_envelope(frame.request_id, &result_payload)?;
-
-                        // Serialize and send
-                        let bytes = capnp::serialize::write_message_to_words(&response_msg);
-                        let response_frame = HootFrame {
-                            command: Command::Reply,
-                            content_type: ContentType::CapnProto,
-                            request_id: frame.request_id,
-                            service: "chaosgarden".to_string(),
-                            traceparent: None,
-                            body: bytes.into(),
-                        };
-
-                        let reply_frames = response_frame.to_frames_with_identity(&identity);
-                        let reply = frames_to_multipart(&reply_frames);
-                        socket.tx.lock().await.send(reply).await
-                            .with_context(|| format!("[{}] Failed to send capnp response", channel))?;
+                        }
                     }
                     other => {
                         warn!(
                             "[{}] Unsupported content type: {:?}, ignoring",
                             channel, other
                         );
+                        Payload::Error {
+                            code: "unsupported_content_type".to_string(),
+                            message: format!("Unsupported content type: {:?}", other),
+                            details: None,
+                        }
                     }
-                }
+                };
+
+                // Convert result to Cap'n Proto envelope and send
+                let response_msg =
+                    payload_to_capnp_envelope(frame.request_id, &result_payload)?;
+
+                let bytes = capnp::serialize::write_message_to_words(&response_msg);
+                let response_frame = HootFrame {
+                    command: Command::Reply,
+                    content_type: ContentType::CapnProto,
+                    request_id: frame.request_id,
+                    service: "chaosgarden".to_string(),
+                    traceparent: None,
+                    body: bytes.into(),
+                };
+
+                let reply_frames = response_frame.to_frames_with_identity(&identity);
+                let reply = frames_to_multipart(&reply_frames);
+                socket.tx.lock().await.send(reply).await
+                    .with_context(|| format!("[{}] Failed to send response", channel))?;
             }
 
             other => {
@@ -390,7 +367,7 @@ impl CapnpGardenServer {
             ToolRequest::GardenCreateRegion(r) => {
                 let behavior = match r.behavior_type.as_str() {
                     "latent" => IpcBehavior::Latent { job_id: r.content_id.clone() },
-                    _ => IpcBehavior::PlayContent { artifact_id: r.content_id.clone() },
+                    _ => IpcBehavior::PlayContent { content_hash: r.content_id.clone() },
                 };
                 ShellRequest::CreateRegion {
                     position: IpcBeat(r.position),

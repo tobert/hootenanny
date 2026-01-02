@@ -284,6 +284,9 @@ impl PipeWireOutputStream {
 
     /// Get runtime statistics (callbacks, samples written, underruns)
     pub fn stats(&self) -> &Arc<StreamStats> {
+        eprintln!("stats() returning Arc ptr: {:p}, callbacks: {}",
+            Arc::as_ptr(&self.stats),
+            self.stats.callbacks.load(std::sync::atomic::Ordering::Relaxed));
         &self.stats
     }
 
@@ -358,9 +361,14 @@ fn run_pipewire_loop(
     // Register process callback - runs in PipeWire's RT thread
     // This is the RT mixer: reads from monitor input (if enabled) and timeline ring
     let _listener = stream
-        .add_local_listener_with_user_data((ring_buffer, stats, monitor))
+        .add_local_listener_with_user_data((ring_buffer, stats.clone(), monitor))
         .process(move |stream, (timeline_ring, stats, monitor)| {
-            stats.callbacks.fetch_add(1, Ordering::Relaxed);
+            let count = stats.callbacks.fetch_add(1, Ordering::Relaxed);
+            // Debug: log first callback
+            if count == 0 {
+                eprintln!("🎵 First PipeWire process callback! Arc ptr: {:p}, count now = {}",
+                    Arc::as_ptr(stats), count + 1);
+            }
 
             let Some(mut buffer) = stream.dequeue_buffer() else {
                 return;

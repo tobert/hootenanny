@@ -179,6 +179,41 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Query garden state".to_string(),
             input_schema: manual_schemas::garden_query_request(),
         },
+        ToolInfo {
+            name: "garden_attach_audio".to_string(),
+            description: "Attach audio output device".to_string(),
+            input_schema: manual_schemas::garden_attach_audio_request(),
+        },
+        ToolInfo {
+            name: "garden_detach_audio".to_string(),
+            description: "Detach audio output device".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        ToolInfo {
+            name: "garden_audio_status".to_string(),
+            description: "Get audio output status".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        ToolInfo {
+            name: "garden_set_monitor".to_string(),
+            description: "Enable/disable audio monitoring".to_string(),
+            input_schema: manual_schemas::garden_set_monitor_request(),
+        },
+        ToolInfo {
+            name: "garden_attach_input".to_string(),
+            description: "Attach audio input device".to_string(),
+            input_schema: manual_schemas::garden_attach_input_request(),
+        },
+        ToolInfo {
+            name: "garden_detach_input".to_string(),
+            description: "Detach audio input device".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        ToolInfo {
+            name: "garden_input_status".to_string(),
+            description: "Get audio input status".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        },
         // Config Tools
         ToolInfo {
             name: "config_get".to_string(),
