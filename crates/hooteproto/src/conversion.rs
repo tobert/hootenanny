@@ -1386,10 +1386,11 @@ fn projection_target_to_capnp(builder: common_capnp::projection_target::Builder,
             a.set_soundfont_hash(soundfont_hash);
             a.set_sample_rate(sample_rate.unwrap_or(44100));
         }
-        crate::ProjectionTarget::Midi { channel, velocity } => {
+        crate::ProjectionTarget::Midi { channel, velocity, program } => {
             let mut m = builder.init_midi();
             m.set_channel(channel.unwrap_or(0));
             m.set_velocity(velocity.unwrap_or(80));
+            m.set_program(program.unwrap_or(0));
         }
     }
 }
@@ -1409,6 +1410,7 @@ fn capnp_to_projection_target(reader: common_capnp::projection_target::Reader) -
             Ok(crate::ProjectionTarget::Midi {
                 channel: Some(m.get_channel()).filter(|&v| v != 0),
                 velocity: Some(m.get_velocity()).filter(|&v| v != 0),
+                program: Some(m.get_program()).filter(|&v| v != 0),
             })
         }
     }

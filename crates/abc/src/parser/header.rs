@@ -20,6 +20,19 @@ pub fn parse_header<'a>(input: &'a str, collector: &mut FeedbackCollector) -> (&
 
         let trimmed = line.trim();
 
+        // Handle %%MIDI directives before skipping comments
+        if let Some(directive) = trimmed.strip_prefix("%%MIDI") {
+            parse_midi_directive(directive.trim(), &mut header, collector);
+            line_num += 1;
+            remaining = &remaining[line.len()..];
+            if remaining.starts_with('\n') {
+                remaining = &remaining[1..];
+            } else if remaining.starts_with("\r\n") {
+                remaining = &remaining[2..];
+            }
+            continue;
+        }
+
         // Skip empty lines and comments in header
         if trimmed.is_empty() || trimmed.starts_with('%') {
             line_num += 1;
@@ -371,6 +384,48 @@ fn parse_stem_direction(s: &str) -> StemDirection {
     }
 }
 
+/// Parse %%MIDI directives
+///
+/// Currently supports:
+/// - `%%MIDI program N` - Set MIDI program number (0-127)
+fn parse_midi_directive(directive: &str, header: &mut Header, collector: &mut FeedbackCollector) {
+    let parts: Vec<&str> = directive.split_whitespace().collect();
+
+    if parts.is_empty() {
+        return;
+    }
+
+    match parts[0].to_lowercase().as_str() {
+        "program" => {
+            if parts.len() >= 2 {
+                match parts[1].parse::<u8>() {
+                    Ok(program) if program <= 127 => {
+                        header.midi_program = Some(program);
+                    }
+                    Ok(program) => {
+                        collector.warning(format!(
+                            "MIDI program {} out of range (0-127), ignoring",
+                            program
+                        ));
+                    }
+                    Err(_) => {
+                        collector.warning(format!(
+                            "Invalid MIDI program '{}', expected number 0-127",
+                            parts[1]
+                        ));
+                    }
+                }
+            } else {
+                collector.warning("%%MIDI program requires a number (0-127)");
+            }
+        }
+        other => {
+            // Silently ignore other MIDI directives for now
+            collector.info(format!("Ignoring %%MIDI {} directive", other));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,5 +519,21 @@ mod tests {
                 denominator: 16
             }
         );
+    }
+
+    #[test]
+    fn test_parse_midi_program() {
+        let mut collector = FeedbackCollector::new();
+        let abc = "X:1\nT:Test\n%%MIDI program 33\nM:4/4\nK:C\n";
+        let (_, header) = parse_header(abc, &mut collector);
+        assert_eq!(header.midi_program, Some(33));
+    }
+
+    #[test]
+    fn test_parse_midi_program_trumpet() {
+        let mut collector = FeedbackCollector::new();
+        let abc = "X:1\nT:Fanfare\n%%MIDI program 56\nM:4/4\nK:C\n";
+        let (_, header) = parse_header(abc, &mut collector);
+        assert_eq!(header.midi_program, Some(56)); // Trumpet
     }
 }

@@ -49,6 +49,9 @@ pub struct MidiParams {
     pub ticks_per_beat: u16,
     /// MIDI channel (0-15, default 0). Use 9 for GM drums.
     pub channel: u8,
+    /// MIDI program number (0-127). If Some, a program change is emitted at track start.
+    /// See General MIDI for standard mappings (e.g., 0=Piano, 33=Bass, 56=Trumpet).
+    pub program: Option<u8>,
 }
 
 impl Default for MidiParams {
@@ -57,6 +60,7 @@ impl Default for MidiParams {
             velocity: 80,
             ticks_per_beat: 480,
             channel: 0,
+            program: None, // No program change by default (uses synth's default)
         }
     }
 }

@@ -126,6 +126,7 @@ struct ProjectionTarget {
     midi :group {
       channel @2 :UInt8;
       velocity @3 :UInt8;
+      program @4 :UInt8;
     }
   }
 }

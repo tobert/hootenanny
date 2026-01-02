@@ -532,6 +532,9 @@ pub enum ProjectionTarget {
         channel: Option<u8>,
         /// Note velocity (default: 80)
         velocity: Option<u8>,
+        /// MIDI program number (0-127). See General MIDI for standard mappings.
+        /// E.g., 0=Piano, 33=Bass, 56=Trumpet, 52=Choir Aahs.
+        program: Option<u8>,
     },
 }
 

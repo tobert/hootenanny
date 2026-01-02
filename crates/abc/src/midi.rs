@@ -117,6 +117,12 @@ pub fn generate(tune: &Tune, params: &MidiParams) -> Vec<u8> {
         writer.tempo(120); // Default
     }
 
+    // Set program: ABC %%MIDI program takes priority, then params.program
+    let program = tune.header.midi_program.or(params.program);
+    if let Some(program) = program {
+        writer.program_change(program);
+    }
+
     // Compute key signature accidentals
     let key_accidentals = compute_key_accidentals(&tune.header.key);
 
@@ -308,6 +314,12 @@ fn generate_multitrack(tune: &Tune, params: &MidiParams) -> Vec<u8> {
         } as u8
             % 16;
         let mut writer = MidiWriter::new(params.ticks_per_beat, channel);
+
+        // Set program: ABC %%MIDI program takes priority, then params.program
+        let program = tune.header.midi_program.or(params.program);
+        if let Some(program) = program {
+            writer.program_change_channel(program, channel);
+        }
 
         let elements = expand_repeats(&voice.elements);
         let mut bar_accidentals = key_accidentals.clone();
@@ -603,6 +615,14 @@ impl MidiWriter {
 
     fn note_off(&mut self, pitch: u8) {
         self.channel_event(vec![0x80 | self.channel, pitch, 0]);
+    }
+
+    fn program_change(&mut self, program: u8) {
+        self.channel_event(vec![0xC0 | self.channel, program & 0x7F]);
+    }
+
+    fn program_change_channel(&mut self, program: u8, channel: u8) {
+        self.channel_event(vec![0xC0 | (channel & 0x0F), program & 0x7F]);
     }
 
     fn note(&mut self, pitch: u8, velocity: u8, duration: u32) {
@@ -1012,6 +1032,7 @@ mod tests {
             velocity: 80,
             ticks_per_beat: 480,
             channel: 9,
+            program: None,
         };
         let midi_ch9 = generate(&result.value, &params_ch9);
         // Look for note-on: 0x99 = channel 9 note-on
@@ -1024,5 +1045,60 @@ mod tests {
             !has_ch0_in_ch9,
             "Should not have channel 0 events when using channel 9"
         );
+    }
+
+    #[test]
+    fn test_midi_program_from_abc() {
+        // Test that %%MIDI program directive results in program change event
+        let abc = "X:1\nT:Test\n%%MIDI program 33\nM:4/4\nL:1/4\nK:C\ncde|\n";
+        let result = crate::parse(abc);
+        assert!(!result.has_errors());
+        assert_eq!(result.value.header.midi_program, Some(33));
+
+        let midi = generate(&result.value, &MidiParams::default());
+
+        // Look for program change: 0xC0 = channel 0 program change, 33 = program
+        let has_program_change = midi.windows(2).any(|w| w[0] == 0xC0 && w[1] == 33);
+        assert!(has_program_change, "Should have program change to 33");
+    }
+
+    #[test]
+    fn test_midi_program_from_params() {
+        // Test that params.program works when ABC doesn't have %%MIDI program
+        let abc = "X:1\nT:Test\nM:4/4\nL:1/4\nK:C\ncde|\n";
+        let result = crate::parse(abc);
+        assert!(!result.has_errors());
+        assert_eq!(result.value.header.midi_program, None);
+
+        let params = MidiParams {
+            velocity: 80,
+            ticks_per_beat: 480,
+            channel: 0,
+            program: Some(56), // Trumpet
+        };
+        let midi = generate(&result.value, &params);
+
+        // Look for program change: 0xC0 = channel 0 program change, 56 = trumpet
+        let has_program_change = midi.windows(2).any(|w| w[0] == 0xC0 && w[1] == 56);
+        assert!(has_program_change, "Should have program change to 56");
+    }
+
+    #[test]
+    fn test_abc_program_overrides_params() {
+        // Test that ABC %%MIDI program takes priority over params.program
+        let abc = "X:1\nT:Test\n%%MIDI program 52\nM:4/4\nL:1/4\nK:C\ncde|\n";
+        let result = crate::parse(abc);
+
+        let params = MidiParams {
+            velocity: 80,
+            ticks_per_beat: 480,
+            channel: 0,
+            program: Some(0), // Piano - but ABC says 52
+        };
+        let midi = generate(&result.value, &params);
+
+        // Should use ABC's program 52, not params' program 0
+        let has_program_52 = midi.windows(2).any(|w| w[0] == 0xC0 && w[1] == 52);
+        assert!(has_program_52, "ABC program should override params");
     }
 }

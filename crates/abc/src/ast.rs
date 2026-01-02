@@ -37,6 +37,8 @@ pub struct Header {
     pub notes: Option<String>,
     pub voice_defs: Vec<VoiceDef>,
     pub other_fields: Vec<InfoField>,
+    /// MIDI program number from %%MIDI program directive (0-127)
+    pub midi_program: Option<u8>,
 }
 
 impl Default for Header {
@@ -55,6 +57,7 @@ impl Default for Header {
             notes: None,
             voice_defs: Vec::new(),
             other_fields: Vec::new(),
+            midi_program: None,
         }
     }
 }

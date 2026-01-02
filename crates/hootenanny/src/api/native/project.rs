@@ -94,7 +94,7 @@ impl EventDualityServer {
                 ));
             }
 
-            if let (Encoding::Abc { notation }, ProjectionTarget::Midi { channel, velocity }) =
+            if let (Encoding::Abc { notation }, ProjectionTarget::Midi { channel, velocity, program }) =
                 (request.encoding, request.target)
             {
                 let metadata = ArtifactMetadata {
@@ -104,7 +104,7 @@ impl EventDualityServer {
                     parent_id: request.parent_id,
                 };
                 return self
-                    .project_to_midi(notation, channel, velocity, metadata)
+                    .project_to_midi(notation, channel, velocity, program, metadata)
                     .await;
             } else {
                 return Err(ToolError::validation(
@@ -307,6 +307,7 @@ impl EventDualityServer {
         abc_notation: String,
         channel: Option<u8>,
         velocity: Option<u8>,
+        program: Option<u8>,
         metadata: ArtifactMetadata,
     ) -> Result<ToolResponse, ToolError> {
         let parse_result = abc::parse(&abc_notation);
@@ -325,6 +326,7 @@ impl EventDualityServer {
             velocity: velocity.unwrap_or(80),
             ticks_per_beat: 480,
             channel: channel.unwrap_or(0),
+            program,
         };
         let midi_bytes = abc::to_midi(&tune, &params);
 

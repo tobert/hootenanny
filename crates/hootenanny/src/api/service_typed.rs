@@ -1462,6 +1462,7 @@ impl EventDualityServer {
             velocity: velocity.unwrap_or(80),
             ticks_per_beat: 480,
             channel: channel.unwrap_or(0),
+            program: None, // Use default (piano) - abc_to_midi doesn't have program param yet
         };
 
         // Generate MIDI bytes
