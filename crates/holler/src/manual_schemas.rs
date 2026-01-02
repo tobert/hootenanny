@@ -725,6 +725,377 @@ pub fn analyze_request() -> Value {
     })
 }
 
+// =============================================================================
+// Additional schemas for types that were using schema_for::<T>()
+// These are simple schemas without defaults - llama.cpp compatible
+// =============================================================================
+
+/// Schema for CasStoreRequest (MCP uses base64 for binary data)
+pub fn cas_store_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "content_base64": {
+                "type": "string",
+                "description": "Base64-encoded content to store"
+            },
+            "mime_type": {
+                "type": "string",
+                "description": "MIME type of the content"
+            }
+        },
+        "required": ["content_base64", "mime_type"]
+    })
+}
+
+/// Schema for CasInspectRequest
+pub fn cas_inspect_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "hash": {
+                "type": "string",
+                "description": "CAS hash to inspect"
+            }
+        },
+        "required": ["hash"]
+    })
+}
+
+/// Schema for UploadFileRequest (cas_upload_file)
+pub fn upload_file_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "file_path": {
+                "type": "string",
+                "description": "Absolute path to file to upload"
+            },
+            "mime_type": {
+                "type": "string",
+                "description": "MIME type of the file (e.g., 'audio/soundfont', 'audio/midi')"
+            }
+        },
+        "required": ["file_path", "mime_type"]
+    })
+}
+
+/// Schema for ArtifactListRequest
+pub fn artifact_list_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "tag": {
+                "type": ["string", "null"],
+                "description": "Filter by tag"
+            },
+            "creator": {
+                "type": ["string", "null"],
+                "description": "Filter by creator"
+            }
+        }
+    })
+}
+
+/// Schema for ArtifactGetRequest
+pub fn artifact_get_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": {
+                "type": "string",
+                "description": "Artifact ID"
+            }
+        },
+        "required": ["id"]
+    })
+}
+
+/// Schema for GetJobStatusRequest (job_status)
+pub fn get_job_status_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "job_id": {
+                "type": "string",
+                "description": "Job ID to get status for"
+            }
+        },
+        "required": ["job_id"]
+    })
+}
+
+/// Schema for CancelJobRequest (job_cancel)
+pub fn cancel_job_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "job_id": {
+                "type": "string",
+                "description": "Job ID to cancel"
+            }
+        },
+        "required": ["job_id"]
+    })
+}
+
+/// Schema for SleepRequest (job_sleep)
+pub fn sleep_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "milliseconds": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Milliseconds to sleep (max 30000 = 30 seconds)"
+            }
+        },
+        "required": ["milliseconds"]
+    })
+}
+
+/// Schema for GraphTagRequest
+pub fn graph_tag_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "identity_id": {
+                "type": "string",
+                "description": "Identity ID to tag"
+            },
+            "namespace": {
+                "type": "string",
+                "description": "Tag namespace"
+            },
+            "value": {
+                "type": "string",
+                "description": "Tag value"
+            }
+        },
+        "required": ["identity_id", "namespace", "value"]
+    })
+}
+
+/// Schema for GraphConnectRequest
+pub fn graph_connect_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "from_identity": {
+                "type": "string",
+                "description": "Source identity ID"
+            },
+            "from_port": {
+                "type": "string",
+                "description": "Source port"
+            },
+            "to_identity": {
+                "type": "string",
+                "description": "Target identity ID"
+            },
+            "to_port": {
+                "type": "string",
+                "description": "Target port"
+            },
+            "transport": {
+                "type": ["string", "null"],
+                "description": "Transport kind (din_midi, usb_midi, patch_cable_cv, etc.)"
+            }
+        },
+        "required": ["from_identity", "from_port", "to_identity", "to_port"]
+    })
+}
+
+/// Schema for GraphFindRequest
+pub fn graph_find_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": ["string", "null"],
+                "description": "Filter by name"
+            },
+            "tag_namespace": {
+                "type": ["string", "null"],
+                "description": "Filter by tag namespace"
+            },
+            "tag_value": {
+                "type": ["string", "null"],
+                "description": "Filter by tag value"
+            }
+        }
+    })
+}
+
+/// Schema for AbcValidateRequest
+pub fn abc_validate_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "abc": {
+                "type": "string",
+                "description": "ABC notation string to validate"
+            }
+        },
+        "required": ["abc"]
+    })
+}
+
+/// Schema for GardenSeekRequest
+pub fn garden_seek_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "beat": {
+                "type": "number",
+                "description": "Beat position to seek to"
+            }
+        },
+        "required": ["beat"]
+    })
+}
+
+/// Schema for GardenSetTempoRequest
+pub fn garden_set_tempo_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "bpm": {
+                "type": "number",
+                "description": "Tempo in beats per minute"
+            }
+        },
+        "required": ["bpm"]
+    })
+}
+
+/// Schema for ConfigGetRequest
+pub fn config_get_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "section": {
+                "type": ["string", "null"],
+                "description": "Config section: 'paths', 'bind', 'telemetry', 'models', 'connections', 'media', 'defaults'. Omit for full config."
+            },
+            "key": {
+                "type": ["string", "null"],
+                "description": "Specific key within section (e.g. 'cas_dir' in paths section)"
+            }
+        }
+    })
+}
+
+/// Schema for ScheduleRequest
+///
+/// This uses the encoding oneOf pattern for content references.
+pub fn schedule_request() -> Value {
+    json!({
+        "type": "object",
+        "required": ["encoding", "at"],
+        "properties": {
+            "encoding": {
+                "description": "Content reference encoding - how to locate content for playback or analysis.\n\nThis is a typed alternative to JSON-based encoding, enabling:\n- Type-safe ZMQ transport without JSON\n- Cap'n Proto serialization\n- Validation at protocol boundaries",
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "description": "MIDI content via artifact ID",
+                        "properties": {
+                            "type": { "const": "midi", "type": "string" },
+                            "artifact_id": { "type": "string" }
+                        },
+                        "required": ["type", "artifact_id"]
+                    },
+                    {
+                        "type": "object",
+                        "description": "Audio content via artifact ID",
+                        "properties": {
+                            "type": { "const": "audio", "type": "string" },
+                            "artifact_id": { "type": "string" }
+                        },
+                        "required": ["type", "artifact_id"]
+                    },
+                    {
+                        "type": "object",
+                        "description": "ABC notation as raw string",
+                        "properties": {
+                            "type": { "const": "abc", "type": "string" },
+                            "notation": { "type": "string" }
+                        },
+                        "required": ["type", "notation"]
+                    },
+                    {
+                        "type": "object",
+                        "description": "Raw content via CAS hash with format hint",
+                        "properties": {
+                            "type": { "const": "hash", "type": "string" },
+                            "content_hash": { "type": "string" },
+                            "format": { "type": "string" }
+                        },
+                        "required": ["type", "content_hash", "format"]
+                    }
+                ]
+            },
+            "at": {
+                "type": "number",
+                "description": "Beat position to schedule at"
+            },
+            "duration": {
+                "type": ["number", "null"],
+                "description": "Duration in beats (auto-detected from artifact if not specified)"
+            },
+            "gain": {
+                "type": ["number", "null"],
+                "description": "Playback gain 0.0-1.0"
+            },
+            "rate": {
+                "type": ["number", "null"],
+                "description": "Playback rate multiplier"
+            }
+        }
+    })
+}
+
+/// Schema for WeaveEvalRequest
+pub fn weave_eval_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "code": {
+                "type": "string",
+                "description": "Python code to execute in the vibeweaver kernel"
+            }
+        },
+        "required": ["code"]
+    })
+}
+
+/// Schema for WeaveSessionRequest
+pub fn weave_session_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "session_id": {
+                "type": ["string", "null"],
+                "description": "Session ID (uses current session if not specified)"
+            }
+        }
+    })
+}
+
+/// Schema for WeaveHelpRequest
+pub fn weave_help_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "topic": {
+                "type": ["string", "null"],
+                "description": "Help topic: 'api', 'session', 'scheduler', 'examples', or omit for overview"
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

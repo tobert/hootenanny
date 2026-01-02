@@ -1195,7 +1195,6 @@ dependencies = [
  "futures",
  "hooteconf",
  "pretty_assertions",
- "schemars",
  "serde",
  "serde_bytes",
  "serde_json",

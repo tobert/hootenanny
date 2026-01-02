@@ -1,40 +1,27 @@
 //! Tool registry - list of all available tools
 //!
-//! This module provides tool metadata for discovery.
-//!
-//! Tools that have `#[serde(default)]` annotations use manual schemas from
-//! `manual_schemas` module to avoid emitting `default` fields that llama.cpp
-//! cannot parse. See that module for details on why each type needs manual schemas.
+//! This module provides tool metadata for MCP discovery.
+//! All schemas are manually written to ensure llama.cpp compatibility
+//! (no `default` fields that llama.cpp cannot parse).
 
-use crate::api::manual_schemas;
-use crate::api::schema::*;
+use crate::manual_schemas;
 use hooteproto::ToolInfo;
-use schemars::JsonSchema;
-use serde_json::Value;
-
-/// Helper to generate JSON schema for a type
-fn schema_for<T: JsonSchema>() -> Value {
-    let settings = schemars::generate::SchemaSettings::draft07().with(|s| {
-        s.inline_subschemas = true;
-    });
-    let gen = settings.into_generator();
-    let schema = gen.into_root_schema_for::<T>();
-    serde_json::to_value(schema).unwrap_or_default()
-}
 
 /// List all tools supported by hootenanny
 pub fn list_tools() -> Vec<ToolInfo> {
     vec![
+        // ==========================================================================
         // CAS Tools
+        // ==========================================================================
         ToolInfo {
             name: "cas_store".to_string(),
             description: "Store raw content in CAS".to_string(),
-            input_schema: schema_for::<CasStoreRequest>(),
+            input_schema: manual_schemas::cas_store_request(),
         },
         ToolInfo {
             name: "cas_inspect".to_string(),
             description: "Inspect content in CAS".to_string(),
-            input_schema: schema_for::<CasInspectRequest>(),
+            input_schema: manual_schemas::cas_inspect_request(),
         },
         ToolInfo {
             name: "cas_stats".to_string(),
@@ -44,10 +31,12 @@ pub fn list_tools() -> Vec<ToolInfo> {
         ToolInfo {
             name: "cas_upload_file".to_string(),
             description: "Upload file from disk to CAS".to_string(),
-            input_schema: schema_for::<UploadFileRequest>(),
+            input_schema: manual_schemas::upload_file_request(),
         },
+
+        // ==========================================================================
         // Artifact Tools
-        // Uses manual schema: #[serde(default)] on tags, creator
+        // ==========================================================================
         ToolInfo {
             name: "artifact_upload".to_string(),
             description: "Upload file and create artifact".to_string(),
@@ -56,25 +45,30 @@ pub fn list_tools() -> Vec<ToolInfo> {
         ToolInfo {
             name: "artifact_list".to_string(),
             description: "List artifacts".to_string(),
-            input_schema: schema_for::<ArtifactListRequest>(),
+            input_schema: manual_schemas::artifact_list_request(),
         },
         ToolInfo {
             name: "artifact_get".to_string(),
             description: "Get artifact by ID".to_string(),
-            input_schema: schema_for::<ArtifactGetRequest>(),
+            input_schema: manual_schemas::artifact_get_request(),
         },
+
+        // ==========================================================================
         // SoundFont Tools
-        // Uses manual schema: #[serde(default)] on include_drum_map
+        // ==========================================================================
         ToolInfo {
             name: "soundfont_inspect".to_string(),
             description: "Inspect SoundFont presets".to_string(),
             input_schema: manual_schemas::soundfont_inspect_request(),
         },
+
+        // ==========================================================================
         // Job Tools
+        // ==========================================================================
         ToolInfo {
             name: "job_status".to_string(),
             description: "Get status of a job".to_string(),
-            input_schema: schema_for::<GetJobStatusRequest>(),
+            input_schema: manual_schemas::get_job_status_request(),
         },
         ToolInfo {
             name: "job_list".to_string(),
@@ -89,9 +83,8 @@ pub fn list_tools() -> Vec<ToolInfo> {
         ToolInfo {
             name: "job_cancel".to_string(),
             description: "Cancel a running job".to_string(),
-            input_schema: schema_for::<CancelJobRequest>(),
+            input_schema: manual_schemas::cancel_job_request(),
         },
-        // Uses manual schema: #[serde(default)] on job_ids
         ToolInfo {
             name: "job_poll".to_string(),
             description: "Poll for job completion".to_string(),
@@ -100,10 +93,12 @@ pub fn list_tools() -> Vec<ToolInfo> {
         ToolInfo {
             name: "job_sleep".to_string(),
             description: "Sleep for a duration".to_string(),
-            input_schema: schema_for::<SleepRequest>(),
+            input_schema: manual_schemas::sleep_request(),
         },
+
+        // ==========================================================================
         // Graph Tools
-        // Uses manual schema: #[serde(default)] on hints
+        // ==========================================================================
         ToolInfo {
             name: "graph_bind".to_string(),
             description: "Bind an identity to a device".to_string(),
@@ -112,37 +107,41 @@ pub fn list_tools() -> Vec<ToolInfo> {
         ToolInfo {
             name: "graph_tag".to_string(),
             description: "Tag an identity".to_string(),
-            input_schema: schema_for::<GraphTagRequest>(),
+            input_schema: manual_schemas::graph_tag_request(),
         },
         ToolInfo {
             name: "graph_connect".to_string(),
             description: "Connect two identities".to_string(),
-            input_schema: schema_for::<GraphConnectRequest>(),
+            input_schema: manual_schemas::graph_connect_request(),
         },
         ToolInfo {
             name: "graph_find".to_string(),
             description: "Find identities".to_string(),
-            input_schema: schema_for::<GraphFindRequest>(),
+            input_schema: manual_schemas::graph_find_request(),
         },
-        // Uses manual schema: #[serde(default)] on include_metadata, include_annotations
         ToolInfo {
             name: "graph_context".to_string(),
             description: "Get graph context for LLM".to_string(),
             input_schema: manual_schemas::graph_context_request(),
         },
-        // Uses manual schema: #[serde(default)] on variables
         ToolInfo {
             name: "graph_query".to_string(),
             description: "Execute Trustfall query on graph".to_string(),
             input_schema: manual_schemas::graph_query_request(),
         },
+
+        // ==========================================================================
         // ABC Tools
+        // ==========================================================================
         ToolInfo {
             name: "abc_validate".to_string(),
             description: "Validate ABC notation".to_string(),
-            input_schema: schema_for::<AbcValidateRequest>(),
+            input_schema: manual_schemas::abc_validate_request(),
         },
+
+        // ==========================================================================
         // Garden Tools
+        // ==========================================================================
         ToolInfo {
             name: "garden_status".to_string(),
             description: "Get chaosgarden status".to_string(),
@@ -166,14 +165,13 @@ pub fn list_tools() -> Vec<ToolInfo> {
         ToolInfo {
             name: "garden_seek".to_string(),
             description: "Seek to position".to_string(),
-            input_schema: schema_for::<super::tools::garden::GardenSeekRequest>(),
+            input_schema: manual_schemas::garden_seek_request(),
         },
         ToolInfo {
             name: "garden_set_tempo".to_string(),
             description: "Set tempo".to_string(),
-            input_schema: schema_for::<super::tools::garden::GardenSetTempoRequest>(),
+            input_schema: manual_schemas::garden_set_tempo_request(),
         },
-        // Uses manual schema: #[serde(default)] on variables
         ToolInfo {
             name: "garden_query".to_string(),
             description: "Query garden state".to_string(),
@@ -214,38 +212,39 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Get audio input status".to_string(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
         },
+
+        // ==========================================================================
         // Config Tools
+        // ==========================================================================
         ToolInfo {
             name: "config_get".to_string(),
             description: "Get configuration values".to_string(),
-            input_schema: schema_for::<super::tools::config::ConfigGetRequest>(),
+            input_schema: manual_schemas::config_get_request(),
         },
-        // Generation Tools
-        // Uses manual schema: #[serde(default)] on inference, as_loop, tags, num_variations, creator
+
+        // ==========================================================================
+        // Generation Tools (sample, extend, bridge, project, analyze)
+        // ==========================================================================
         ToolInfo {
             name: "sample".to_string(),
             description: "Generate MIDI from scratch".to_string(),
             input_schema: manual_schemas::sample_request(),
         },
-        // Uses manual schema: #[serde(default)] on inference, tags, num_variations, creator
         ToolInfo {
             name: "extend".to_string(),
             description: "Continue existing MIDI content".to_string(),
             input_schema: manual_schemas::extend_request(),
         },
-        // Uses manual schema: #[serde(default)] on inference, tags, creator
         ToolInfo {
             name: "bridge".to_string(),
             description: "Create bridge transitions between MIDI sections".to_string(),
             input_schema: manual_schemas::bridge_request(),
         },
-        // Uses manual schema: #[serde(default)] on tags, creator
         ToolInfo {
             name: "project".to_string(),
             description: "Project content to different format (MIDI→audio, ABC→MIDI)".to_string(),
             input_schema: manual_schemas::project_request(),
         },
-        // Uses manual schema: tagged enum for tasks with ZeroShot
         ToolInfo {
             name: "analyze".to_string(),
             description: "Run analysis tasks on content (classify, beats, genre, mood, embeddings)".to_string(),
@@ -254,9 +253,12 @@ pub fn list_tools() -> Vec<ToolInfo> {
         ToolInfo {
             name: "schedule".to_string(),
             description: "Schedule content on timeline".to_string(),
-            input_schema: schema_for::<super::native::ScheduleRequest>(),
+            input_schema: manual_schemas::schedule_request(),
         },
+
+        // ==========================================================================
         // AsyncLong Tools (return job_id immediately)
+        // ==========================================================================
         ToolInfo {
             name: "musicgen_generate".to_string(),
             description: "Generate audio from text prompt using MusicGen".to_string(),
@@ -318,18 +320,20 @@ pub fn list_tools() -> Vec<ToolInfo> {
                 }
             }),
         },
+
+        // ==========================================================================
         // Vibeweaver Tools (Python Kernel)
+        // ==========================================================================
         ToolInfo {
             name: "weave_eval".to_string(),
             description: "Execute Python code in vibeweaver kernel".to_string(),
-            input_schema: schema_for::<WeaveEvalRequest>(),
+            input_schema: manual_schemas::weave_eval_request(),
         },
         ToolInfo {
             name: "weave_session".to_string(),
             description: "Get current vibeweaver session state".to_string(),
-            input_schema: schema_for::<WeaveSessionRequest>(),
+            input_schema: manual_schemas::weave_session_request(),
         },
-        // Uses manual schema: #[serde(default)] on clear_session
         ToolInfo {
             name: "weave_reset".to_string(),
             description: "Reset vibeweaver kernel".to_string(),
@@ -338,7 +342,7 @@ pub fn list_tools() -> Vec<ToolInfo> {
         ToolInfo {
             name: "weave_help".to_string(),
             description: "Get vibeweaver help documentation".to_string(),
-            input_schema: schema_for::<WeaveHelpRequest>(),
+            input_schema: manual_schemas::weave_help_request(),
         },
     ]
 }

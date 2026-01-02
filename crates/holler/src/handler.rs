@@ -5,9 +5,6 @@
 //! Tool lists are cached and refreshed when backends recover from failures.
 
 use hooteproto::{Payload, ToolInfo};
-use hooteproto::request::ToolRequest;
-use hooteproto::responses::ToolResponse;
-use hooteproto::envelope::ResponseEnvelope;
 use rmcp::{
     ErrorData as McpError,
     ServerHandler,
@@ -218,31 +215,13 @@ impl ServerHandler for ZmqHandler {
     }
 }
 
-/// Async helper to collect tools from hootenanny.
-async fn collect_tools_async(backends: &BackendPool) -> Vec<Tool> {
-    let mut all_tools = Vec::new();
-
-    // Query hootenanny for all tools (it proxies to vibeweaver and chaosgarden)
-    if let Some(ref backend) = backends.hootenanny {
-        match backend.request(Payload::ToolRequest(ToolRequest::ListTools)).await {
-            Ok(Payload::TypedResponse(ResponseEnvelope::Success { response, .. })) => {
-                if let ToolResponse::ToolsList(list) = response {
-                    debug!("Got {} tools from hootenanny", list.tools.len());
-                    all_tools.extend(list.tools.into_iter().map(tool_info_to_rmcp));
-                } else {
-                    debug!("hootenanny returned non-ToolsList response: {:?}", response);
-                }
-            }
-            Ok(other) => {
-                debug!("hootenanny returned unexpected response to ListTools: {:?}", other);
-            }
-            Err(e) => {
-                warn!("Failed to get tools from hootenanny: {}", e);
-            }
-        }
-    }
-
-    all_tools
+/// Collect tools from local registry.
+///
+/// All tools are defined statically in tools_registry - no ZMQ round-trip needed.
+async fn collect_tools_async(_backends: &BackendPool) -> Vec<Tool> {
+    let tools = crate::tools_registry::list_tools();
+    debug!("Loaded {} tools from local registry", tools.len());
+    tools.into_iter().map(tool_info_to_rmcp).collect()
 }
 
 /// Convert hooteproto ToolInfo to rmcp Tool.

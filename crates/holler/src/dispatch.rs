@@ -531,9 +531,6 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             })))
         }
 
-        // === Tool Discovery ===
-        "list_tools" => Ok(Payload::ToolRequest(ToolRequest::ListTools)),
-
         // === Tool Help ===
         "holler_help" | "get_tool_help" => {
             let p: GetToolHelpArgs = serde_json::from_value(args).unwrap_or_default();

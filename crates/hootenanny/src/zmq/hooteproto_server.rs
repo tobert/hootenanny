@@ -354,7 +354,7 @@ impl HooteprotoServer {
     ///
     /// Dispatches payload via typed dispatcher.
     async fn dispatch_via_server(&self, server: &EventDualityServer, payload: Payload) -> Payload {
-        use crate::api::typed_dispatcher::TypedDispatcher;
+        use crate::api::dispatcher::TypedDispatcher;
         use hooteproto::{envelope_to_payload, payload_to_request};
 
         // Typed dispatch path
@@ -398,7 +398,6 @@ fn payload_type_name(payload: &Payload) -> &'static str {
         Payload::Pong { .. } => "pong",
         Payload::Shutdown { .. } => "shutdown",
         Payload::ToolRequest(tr) => tr.name(),
-        Payload::ToolList { .. } => "tool_list",
         Payload::TypedResponse(_) => "typed_response",
         Payload::Error { .. } => "error",
         Payload::StreamStart { .. } => "stream_start",

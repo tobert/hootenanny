@@ -53,15 +53,14 @@ struct Payload {
     # === Responses ===
     toolResponse @24 :Responses.ToolResponse;
     error @25 :Common.Error;
-    toolList @26 :ToolList;
 
     # === Stream Capture (Hootenanny → Chaosgarden) ===
-    streamStart @27 :Streams.StreamStart;
-    streamSwitchChunk @28 :Streams.StreamSwitchChunk;
-    streamStop @29 :Streams.StreamStop;
+    streamStart @26 :Streams.StreamStart;
+    streamSwitchChunk @27 :Streams.StreamSwitchChunk;
+    streamStop @28 :Streams.StreamStop;
 
     # === Generic Tool Call (name-based dispatch) ===
-    toolCall @30 :ToolCall;
+    toolCall @29 :ToolCall;
   }
 }
 
@@ -77,8 +76,4 @@ struct Pong {
 
 struct ShutdownRequest {
   reason @0 :Text;
-}
-
-struct ToolList {
-  tools @0 :List(Common.ToolInfo);
 }

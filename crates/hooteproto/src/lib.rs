@@ -47,10 +47,10 @@
 //! status = common.JobStatus.running
 //! ```
 //!
-//! ## Tool Parameter Types
+//! ## Tool Schemas
 //!
-//! The `params` module contains types with JsonSchema derives for MCP compatibility.
-//! Use with `baton::schema_for::<ParamType>()` to generate tool input schemas.
+//! MCP tool schemas live in the `holler` crate (the MCP gateway) in
+//! `tools_registry` and `manual_schemas`. This keeps hooteproto JSON-free.
 
 // Cap'n Proto generated modules (must be at crate root for cross-references)
 #[allow(clippy::all)]
@@ -114,10 +114,8 @@ pub mod frame;
 pub mod garden;
 pub mod garden_snapshot;
 pub mod metadata;
-pub mod params;
 pub mod request;
 pub mod responses;
-pub mod schema_helpers;
 pub mod timing;
 
 // Peer infrastructure - batteries included for building hootenanny peers
@@ -170,7 +168,6 @@ pub use garden_snapshot::{
     MidiDirection, Port, RegionSnapshot, SignalType, TempoChange, TempoMapSnapshot, TransportSnapshot,
 };
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -260,11 +257,6 @@ pub enum Payload {
         code: String,
         message: String,
         details: Option<serde_json::Value>,
-    },
-    
-    /// Response for ListTools
-    ToolList {
-        tools: Vec<ToolInfo>,
     },
 
     // === Direct Protocol Messages (Not Tools) ===
@@ -436,7 +428,7 @@ pub struct ToolHelp {
 /// - Type-safe ZMQ transport without JSON
 /// - Cap'n Proto serialization
 /// - Validation at protocol boundaries
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Encoding {
     /// MIDI content via artifact ID
@@ -450,7 +442,7 @@ pub enum Encoding {
 }
 
 /// Analysis task for the analyze tool.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum AnalysisTask {
     /// Classify content type/characteristics
@@ -468,7 +460,7 @@ pub enum AnalysisTask {
 }
 
 /// Generative model space for sampling operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Space {
     /// Base Orpheus MIDI model
@@ -495,7 +487,7 @@ pub enum Space {
 /// - Orpheus: temperature, top_p, max_tokens, variant
 /// - MusicGen: temperature, top_k, top_p, duration_seconds, guidance_scale
 /// - YuE: variant (genre), max_tokens, seed
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InferenceContext {
     /// Sampling temperature (0.0 = deterministic, higher = more random)
     pub temperature: Option<f32>,
@@ -516,7 +508,7 @@ pub struct InferenceContext {
 }
 
 /// Target format for content projection.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProjectionTarget {
     /// Project to audio via SoundFont rendering
@@ -543,7 +535,7 @@ pub enum ProjectionTarget {
 // =============================================================================
 
 /// Output format type produced by generative operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputType {
     /// MIDI format (symbolic music events)
@@ -1113,27 +1105,6 @@ mod tests {
         let json = serde_json::to_string(&broadcast).unwrap();
         let parsed: Broadcast = serde_json::from_str(&json).unwrap();
         assert_eq!(broadcast, parsed);
-    }
-
-    #[test]
-    fn tool_list_roundtrip() {
-        let envelope = Envelope::new(Payload::ToolList {
-            tools: vec![
-                ToolInfo {
-                    name: "lua_eval".to_string(),
-                    description: "Evaluate Lua code".to_string(),
-                    input_schema: serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "code": {"type": "string"}
-                        }
-                    }),
-                },
-            ],
-        });
-        let json = serde_json::to_string(&envelope).unwrap();
-        let parsed: Envelope = serde_json::from_str(&json).unwrap();
-        assert_eq!(envelope.payload, parsed.payload);
     }
 
     #[test]

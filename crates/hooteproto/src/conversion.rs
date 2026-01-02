@@ -191,20 +191,6 @@ pub fn capnp_envelope_to_payload(
                 details: None,
             })
         }
-        envelope_capnp::payload::ToolList(list) => {
-            let reader = list?.get_tools()?;
-            let mut tools = Vec::new();
-            for i in 0..reader.len() {
-                let t = reader.get(i);
-                tools.push(crate::ToolInfo {
-                    name: t.get_name()?.to_str()?.to_string(),
-                    description: t.get_description()?.to_str()?.to_string(),
-                    input_schema: serde_json::from_str(t.get_input_schema()?.to_str()?).unwrap_or_default(),
-                });
-            }
-            Ok(Payload::ToolList { tools })
-        }
-
         envelope_capnp::payload::ToolCall(call) => Err(capnp::Error::failed(format!("ToolCall deprecated: {}", call?.get_name()?.to_str()?))),
         envelope_capnp::payload::Register(_) => Err(capnp::Error::failed("Register unimplemented".to_string())),
     }
@@ -311,15 +297,6 @@ pub fn payload_to_capnp_envelope(
                     e.set_details(serde_json::to_string(d).unwrap_or_default());
                 } else {
                     e.set_details("");
-                }
-            }
-            Payload::ToolList { tools } => {
-                let mut l = payload_builder.init_tool_list().init_tools(tools.len() as u32);
-                for (i, tool) in tools.iter().enumerate() {
-                    let mut t = l.reborrow().get(i as u32);
-                    t.set_name(&tool.name);
-                    t.set_description(&tool.description);
-                    t.set_input_schema(serde_json::to_string(&tool.input_schema).unwrap_or_default());
                 }
             }
             _ => return Err(capnp::Error::failed("Unimplemented payload for serialization".to_string())),
@@ -557,7 +534,6 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             l.set_temperature(req.temperature.unwrap_or(1.0));
             l.set_system_prompt(req.system_prompt.as_deref().unwrap_or(""));
         }
-        ToolRequest::ListTools => builder.reborrow().set_list_tools(()),
         ToolRequest::WeaveEval(req) => builder.reborrow().init_weave_eval().set_code(&req.code),
         ToolRequest::WeaveSession => builder.reborrow().set_weave_session(()),
         ToolRequest::WeaveReset(req) => builder.reborrow().init_weave_reset().set_clear_session(req.clear_session),
@@ -1022,7 +998,6 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
                 system_prompt: capnp_optional_string(l.get_system_prompt()?),
             }))
         }
-        tools_capnp::tool_request::ListTools(()) => Ok(ToolRequest::ListTools),
         tools_capnp::tool_request::WeaveEval(w) => { let w = w?; Ok(ToolRequest::WeaveEval(WeaveEvalRequest { code: w.get_code()?.to_str()?.to_string() })) }
         tools_capnp::tool_request::WeaveSession(()) => Ok(ToolRequest::WeaveSession),
         tools_capnp::tool_request::WeaveReset(w) => { let w = w?; Ok(ToolRequest::WeaveReset(WeaveResetRequest { clear_session: w.get_clear_session() })) }

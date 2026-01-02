@@ -685,15 +685,6 @@ impl TypedDispatcher {
 
             // === Admin ===
             ToolRequest::Ping => ResponseEnvelope::ack("pong"),
-            ToolRequest::ListTools => {
-                use hooteproto::responses::ToolsListResponse;
-                let tools = crate::api::tools_registry::list_tools();
-                let count = tools.len();
-                ResponseEnvelope::success(ToolResponse::ToolsList(ToolsListResponse {
-                    tools,
-                    count,
-                }))
-            }
 
             // === FireAndForget tools (routed via dispatch_fire_and_forget) ===
             // These should never reach dispatch_async, but Rust requires exhaustive matching.

@@ -4,7 +4,6 @@
 //! No JSON involved - these serialize directly to Cap'n Proto.
 
 use crate::timing::ToolTiming;
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// All tool requests. Discriminated by `tool` field in serialized form.
@@ -222,8 +221,6 @@ pub enum ToolRequest {
     // ==========================================================================
     /// Ping for liveness
     Ping,
-    /// List available tools
-    ListTools,
 }
 
 impl ToolRequest {
@@ -242,7 +239,7 @@ impl ToolRequest {
             Self::GraphFind(_) | Self::GraphContext(_) | Self::GraphQuery(_) => ToolTiming::AsyncShort,
             Self::ArtifactGet(_) | Self::ArtifactList(_) | Self::ArtifactCreate(_) => ToolTiming::AsyncShort,
             Self::CasInspect(_) => ToolTiming::AsyncShort,
-            Self::Ping | Self::ListTools | Self::ListResources => ToolTiming::AsyncShort,
+            Self::Ping | Self::ListResources => ToolTiming::AsyncShort,
             Self::ReadResource(_) => ToolTiming::AsyncShort,
             Self::CasStore(_) | Self::CasGet(_) | Self::CasUploadFile(_) | Self::CasStats => ToolTiming::AsyncShort,
             Self::ArtifactUpload(_) => ToolTiming::AsyncShort,
@@ -365,7 +362,6 @@ impl ToolRequest {
             Self::Bridge(_) => "bridge",
             Self::Project(_) => "project",
             Self::Ping => "ping",
-            Self::ListTools => "list_tools",
         }
     }
 }
@@ -857,7 +853,7 @@ pub struct SampleLlmRequest {
 // Model-Native Request Types
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScheduleRequest {
     pub encoding: crate::Encoding,
     pub at: f64,
@@ -866,7 +862,7 @@ pub struct ScheduleRequest {
     pub rate: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnalyzeRequest {
     pub encoding: crate::Encoding,
     pub tasks: Vec<crate::AnalysisTask>,
@@ -881,7 +877,7 @@ fn default_creator() -> Option<String> {
 }
 
 /// Request to sample from a generative space.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SampleRequest {
     /// Generative space to sample from
     pub space: crate::Space,
@@ -920,7 +916,7 @@ pub struct SampleRequest {
 }
 
 /// Request to extend existing content.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtendRequest {
     /// Content to continue from
     pub encoding: crate::Encoding,
@@ -952,7 +948,7 @@ pub struct ExtendRequest {
 }
 
 /// Request to create a bridge transition between sections.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BridgeRequest {
     /// Starting content (section A)
     pub from: crate::Encoding,
@@ -980,7 +976,7 @@ pub struct BridgeRequest {
 }
 
 /// Request to project content to a different format.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectRequest {
     /// Source content to project
     pub encoding: crate::Encoding,

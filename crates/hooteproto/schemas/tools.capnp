@@ -82,45 +82,44 @@ struct ToolRequest {
 
     # === Misc Tools ===
     sampleLlm @46 :SampleLlm;
-    listTools @47 :Void;
 
     # === Vibeweaver Tools ===
-    weaveEval @48 :WeaveEval;
-    weaveSession @49 :Void;
-    weaveReset @50 :WeaveReset;
-    weaveHelp @51 :WeaveHelp;
+    weaveEval @47 :WeaveEval;
+    weaveSession @48 :Void;
+    weaveReset @49 :WeaveReset;
+    weaveHelp @50 :WeaveHelp;
 
     # === Garden Tools ===
-    gardenStatus @52 :Void;
-    gardenPlay @53 :Void;
-    gardenPause @54 :Void;
-    gardenStop @55 :Void;
-    gardenSeek @56 :Garden.Seek;
-    gardenSetTempo @57 :Garden.SetTempo;
-    gardenQuery @58 :Garden.Query;
-    gardenEmergencyPause @59 :Void;
-    gardenCreateRegion @60 :Garden.CreateRegion;
-    gardenDeleteRegion @61 :Garden.DeleteRegion;
-    gardenMoveRegion @62 :Garden.MoveRegion;
-    gardenGetRegions @63 :Garden.GetRegions;
-    gardenAttachAudio @64 :Garden.AttachAudio;
-    gardenDetachAudio @65 :Void;
-    gardenAudioStatus @66 :Void;
-    gardenAttachInput @67 :Garden.AttachInput;
-    gardenDetachInput @68 :Void;
-    gardenInputStatus @69 :Void;
-    gardenSetMonitor @70 :Garden.SetMonitor;
+    gardenStatus @51 :Void;
+    gardenPlay @52 :Void;
+    gardenPause @53 :Void;
+    gardenStop @54 :Void;
+    gardenSeek @55 :Garden.Seek;
+    gardenSetTempo @56 :Garden.SetTempo;
+    gardenQuery @57 :Garden.Query;
+    gardenEmergencyPause @58 :Void;
+    gardenCreateRegion @59 :Garden.CreateRegion;
+    gardenDeleteRegion @60 :Garden.DeleteRegion;
+    gardenMoveRegion @61 :Garden.MoveRegion;
+    gardenGetRegions @62 :Garden.GetRegions;
+    gardenAttachAudio @63 :Garden.AttachAudio;
+    gardenDetachAudio @64 :Void;
+    gardenAudioStatus @65 :Void;
+    gardenAttachInput @66 :Garden.AttachInput;
+    gardenDetachInput @67 :Void;
+    gardenInputStatus @68 :Void;
+    gardenSetMonitor @69 :Garden.SetMonitor;
 
     # === Help & Model-Native ===
-    getToolHelp @71 :GetToolHelp;
-    schedule @72 :Schedule;
-    analyze @73 :Analyze;
+    getToolHelp @70 :GetToolHelp;
+    schedule @71 :Schedule;
+    analyze @72 :Analyze;
 
     # === Native High-Level Tools ===
-    nativeSample @75 :NativeSample;
-    nativeExtend @76 :NativeExtend;
-    nativeBridge @77 :NativeBridge;
-    nativeProject @78 :NativeProject;
+    nativeSample @73 :NativeSample;
+    nativeExtend @75 :NativeExtend;
+    nativeBridge @76 :NativeBridge;
+    nativeProject @77 :NativeProject;
   }
 }
 
