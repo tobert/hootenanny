@@ -6,6 +6,7 @@
 pub mod api;
 pub mod async_bridge;
 pub mod broadcast;
+pub mod callbacks;
 pub mod db;
 pub mod kernel;
 pub mod scheduler;

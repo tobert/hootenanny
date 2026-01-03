@@ -5,6 +5,9 @@ use pyo3::types::PyDict;
 use serde_json::json;
 use tracing::debug;
 
+use crate::async_bridge::{create_job_awaitable, Artifact as AsyncArtifact};
+use crate::broadcast::BroadcastHandler;
+use crate::callbacks::CallbackRegistry;
 use crate::tool_bridge;
 
 /// Read-only beat state
@@ -189,18 +192,85 @@ pub fn tempo(bpm: f64) -> PyResult<()> {
 }
 
 /// Generate content from a space (returns awaitable)
+///
+/// Usage:
+/// ```python
+/// artifact = await sample("orpheus_loops", temperature=0.9)
+/// schedule(artifact, at=timeline_end)
+/// ```
 #[pyfunction]
 #[pyo3(signature = (space, prompt=None, inference=None, tags=None))]
-pub fn sample(
-    py: Python<'_>,
+pub fn sample<'py>(
+    py: Python<'py>,
     space: String,
     prompt: Option<String>,
-    inference: Option<Bound<'_, PyDict>>,
+    inference: Option<Bound<'py, PyDict>>,
     tags: Option<Vec<String>>,
-) -> PyResult<PyObject> {
-    // TODO: Return actual awaitable
-    let _ = (space, prompt, inference, tags);
-    Ok(py.None())
+) -> PyResult<Bound<'py, PyAny>> {
+    debug!("sample({}, prompt={:?})", space, prompt);
+
+    // Build args JSON
+    let mut args = json!({ "space": space });
+
+    if let Some(p) = prompt {
+        args["prompt"] = json!(p);
+    }
+
+    if let Some(t) = tags {
+        args["tags"] = json!(t);
+    }
+
+    // Extract inference parameters from PyDict
+    if let Some(ref inf) = inference {
+        if let Ok(Some(temp)) = inf.get_item("temperature") {
+            if let Ok(t) = temp.extract::<f64>() {
+                args["temperature"] = json!(t);
+            }
+        }
+        if let Ok(Some(top_p)) = inf.get_item("top_p") {
+            if let Ok(p) = top_p.extract::<f64>() {
+                args["top_p"] = json!(p);
+            }
+        }
+        if let Ok(Some(top_k)) = inf.get_item("top_k") {
+            if let Ok(k) = top_k.extract::<u32>() {
+                args["top_k"] = json!(k);
+            }
+        }
+        if let Ok(Some(max_tokens)) = inf.get_item("max_tokens") {
+            if let Ok(m) = max_tokens.extract::<u32>() {
+                args["max_tokens"] = json!(m);
+            }
+        }
+    }
+
+    // Call tool_bridge to start the job
+    let result = tool_bridge::call_tool("sample", args)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+    // Extract job_id from response
+    let job_id = result
+        .get("job_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("sample response missing job_id")
+        })?
+        .to_string();
+
+    debug!("sample started job: {}", job_id);
+
+    // Get broadcast handler to register waiter
+    let handler = BroadcastHandler::global().ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Broadcast handler not initialized")
+    })?;
+
+    // Register waiter and get receiver (blocking briefly is okay here)
+    let receiver = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(handler.wait_for_job(job_id.clone()))
+    });
+
+    // Return Python awaitable
+    create_job_awaitable(py, job_id, receiver)
 }
 
 /// Schedule latent generation with deadline (creates rule)
@@ -222,16 +292,64 @@ pub fn latent(
 }
 
 /// Schedule content at beat position
+///
+/// Usage:
+/// ```python
+/// artifact = await sample("orpheus_loops")
+/// schedule(artifact, at=16.0, gain=0.8)
+/// ```
 #[pyfunction]
 #[pyo3(signature = (content, at, duration=None, gain=None))]
 pub fn schedule(
+    py: Python<'_>,
     content: PyObject,
     at: f64,
     duration: Option<f64>,
     gain: Option<f64>,
 ) -> PyResult<()> {
-    // TODO: Schedule via hootenanny
-    let _ = (content, at, duration, gain);
+    debug!("schedule(at={}, duration={:?}, gain={:?})", at, duration, gain);
+
+    // Extract artifact_id from content
+    // Content can be an Artifact object or a string artifact_id
+    let artifact_id: String = if let Ok(id) = content.extract::<String>(py) {
+        id
+    } else if let Ok(artifact) = content.extract::<AsyncArtifact>(py) {
+        artifact.id
+    } else {
+        // Try to get .id attribute
+        content
+            .getattr(py, "id")
+            .and_then(|id| id.extract::<String>(py))
+            .map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                    "content must be an Artifact or artifact_id string",
+                )
+            })?
+    };
+
+    debug!("schedule artifact_id={}", artifact_id);
+
+    // Build args JSON
+    let mut args = json!({
+        "encoding": {
+            "type": "audio",
+            "artifact_id": artifact_id
+        },
+        "at": at
+    });
+
+    if let Some(d) = duration {
+        args["duration"] = json!(d);
+    }
+
+    if let Some(g) = gain {
+        args["gain"] = json!(g);
+    }
+
+    // Call tool_bridge to schedule
+    tool_bridge::call_tool("schedule", args)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
     Ok(())
 }
 
@@ -289,27 +407,119 @@ pub fn seek(beat: f64) -> PyResult<()> {
 
 // --- Decorators ---
 
+/// Decorator class for beat callbacks
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct BeatDecorator {
+    divisor: u32,
+}
+
+#[pymethods]
+impl BeatDecorator {
+    /// Called when decorator is applied to a function
+    fn __call__(&self, py: Python<'_>, func: PyObject) -> PyResult<PyObject> {
+        // Register the callback
+        let registry = CallbackRegistry::global();
+        let mut registry_guard = registry
+            .write()
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+        let func_py: Py<PyAny> = func.clone_ref(py).into();
+        let callback_id = registry_guard.register_beat(self.divisor, func_py);
+
+        debug!(
+            "Registered beat callback: divisor={}, id={}",
+            self.divisor, callback_id
+        );
+
+        // Return the original function unchanged (so it can still be called normally)
+        Ok(func)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("BeatDecorator(divisor={})", self.divisor)
+    }
+}
+
 /// Decorator: fire on beat divisor
+///
+/// Usage:
+/// ```python
+/// @on_beat(16)
+/// def my_callback(beat):
+///     print(f"Beat {beat}")
+/// ```
 #[pyfunction]
-pub fn on_beat(py: Python<'_>, _divisor: u32) -> PyResult<PyObject> {
-    // TODO: Return decorator that creates Beat trigger rule
-    Ok(py.None())
+pub fn on_beat(_py: Python<'_>, divisor: u32) -> PyResult<BeatDecorator> {
+    Ok(BeatDecorator { divisor })
+}
+
+/// Decorator class for marker callbacks
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct MarkerDecorator {
+    name: String,
+}
+
+#[pymethods]
+impl MarkerDecorator {
+    fn __call__(&self, py: Python<'_>, func: PyObject) -> PyResult<PyObject> {
+        let registry = CallbackRegistry::global();
+        let mut registry_guard = registry
+            .write()
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+        let func_py: Py<PyAny> = func.clone_ref(py).into();
+        registry_guard.register_marker(self.name.clone(), func_py);
+
+        Ok(func)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("MarkerDecorator(name='{}')", self.name)
+    }
 }
 
 /// Decorator: fire on named marker
 #[pyfunction]
-pub fn on_marker(py: Python<'_>, _name: String) -> PyResult<PyObject> {
-    // TODO: Return decorator that creates Marker trigger rule
-    Ok(py.None())
+pub fn on_marker(_py: Python<'_>, name: String) -> PyResult<MarkerDecorator> {
+    Ok(MarkerDecorator { name })
+}
+
+/// Decorator class for artifact callbacks
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct ArtifactDecorator {
+    tag: Option<String>,
+}
+
+#[pymethods]
+impl ArtifactDecorator {
+    fn __call__(&self, py: Python<'_>, func: PyObject) -> PyResult<PyObject> {
+        let registry = CallbackRegistry::global();
+        let mut registry_guard = registry
+            .write()
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+        let func_py: Py<PyAny> = func.clone_ref(py).into();
+        registry_guard.register_artifact(self.tag.clone(), func_py);
+
+        Ok(func)
+    }
+
+    fn __repr__(&self) -> String {
+        match &self.tag {
+            Some(t) => format!("ArtifactDecorator(tag='{}')", t),
+            None => "ArtifactDecorator(tag=None)".to_string(),
+        }
+    }
 }
 
 /// Decorator: fire on artifact creation
 #[pyfunction]
 #[pyo3(signature = (tag=None))]
-pub fn on_artifact(py: Python<'_>, tag: Option<String>) -> PyResult<PyObject> {
-    // TODO: Return decorator that creates Artifact trigger rule
-    let _ = tag;
-    Ok(py.None())
+pub fn on_artifact(_py: Python<'_>, tag: Option<String>) -> PyResult<ArtifactDecorator> {
+    Ok(ArtifactDecorator { tag })
 }
 
 // --- Async helpers ---
@@ -332,6 +542,11 @@ pub fn vibeweaver(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Artifact>()?;
     m.add_class::<LatentRef>()?;
     m.add_class::<SessionInfo>()?;
+
+    // Decorator classes (for type checking/introspection)
+    m.add_class::<BeatDecorator>()?;
+    m.add_class::<MarkerDecorator>()?;
+    m.add_class::<ArtifactDecorator>()?;
 
     // Functions
     m.add_function(wrap_pyfunction!(session, m)?)?;
