@@ -864,6 +864,11 @@ pub fn event_poll_request() -> Value {
                 "minimum": 0,
                 "description": "Cursor from previous poll (omit for initial poll to get recent events)"
             },
+            "since_ms": {
+                "type": ["integer", "null"],
+                "minimum": 0,
+                "description": "Get events from the last N milliseconds (alternative to cursor). Useful for real-time UIs."
+            },
             "types": {
                 "type": ["array", "null"],
                 "items": { "type": "string" },

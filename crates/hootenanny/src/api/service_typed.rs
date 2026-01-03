@@ -1321,11 +1321,12 @@ impl EventDualityServer {
     pub async fn event_poll_typed(
         &self,
         cursor: Option<u64>,
+        since_ms: Option<u64>,
         types: Option<Vec<String>>,
         timeout_ms: Option<u64>,
         limit: Option<usize>,
     ) -> Result<hooteproto::responses::EventPollResponse, ToolError> {
-        use crate::event_buffer::{validate_poll_params, DEFAULT_LIMIT, DEFAULT_TIMEOUT_MS};
+        use crate::event_buffer::validate_poll_params;
         use std::time::{Duration, Instant};
 
         // Validate parameters
@@ -1340,17 +1341,45 @@ impl EventDualityServer {
         let timeout_duration = Duration::from_millis(timeout);
         let start = Instant::now();
 
+        // Helper to build snapshot from buffer and job_store
+        let build_snapshot = |buffer: &crate::event_buffer::EventBuffer| {
+            let job_summary = self.job_store.summary();
+
+            hooteproto::responses::Snapshot {
+                transport: buffer.latest_transport().map(|t| {
+                    hooteproto::responses::TransportInfo {
+                        state: t.state.clone(),
+                        position_beats: t.position_beats,
+                        tempo_bpm: t.tempo_bpm,
+                        timestamp_ms: t.timestamp_ms,
+                    }
+                }),
+                latest_beat: buffer.latest_beat().map(|b| {
+                    hooteproto::responses::BeatTickInfo {
+                        beat: b.beat,
+                        position_beats: b.position_beats,
+                        tempo_bpm: b.tempo_bpm,
+                        timestamp_ms: b.timestamp_ms,
+                    }
+                }),
+                active_jobs: job_summary,
+                device_count: buffer.device_count(),
+            }
+        };
+
         loop {
             // Try to get events
             let buffer = event_buffer.read().await;
             let types_ref = types.as_deref();
 
-            let result = buffer.poll(cursor, types_ref, limit).map_err(|e| {
+            let result = buffer.poll(cursor, since_ms, types_ref, limit).map_err(|e| {
                 ToolError::validation("poll_error", e.to_string())
             })?;
 
             // If we have events or no cursor (initial poll), return immediately
             if !result.events.is_empty() || cursor.is_none() {
+                let snapshot = build_snapshot(&buffer);
+
                 return Ok(hooteproto::responses::EventPollResponse {
                     events: result.events.into_iter().map(|e| {
                         hooteproto::responses::BufferedEvent {
@@ -1362,14 +1391,7 @@ impl EventDualityServer {
                     }).collect(),
                     cursor: result.cursor,
                     has_more: result.has_more,
-                    latest_beat: result.latest_beat.map(|b| {
-                        hooteproto::responses::BeatTickInfo {
-                            beat: b.beat,
-                            position_beats: b.position_beats,
-                            tempo_bpm: b.tempo_bpm,
-                            timestamp_ms: b.timestamp_ms,
-                        }
-                    }),
+                    snapshot,
                     buffer: hooteproto::responses::BufferStats {
                         oldest_cursor: result.buffer.oldest_cursor,
                         newest_cursor: result.buffer.newest_cursor,
@@ -1387,20 +1409,13 @@ impl EventDualityServer {
                 // Return empty result with current state
                 let buffer = event_buffer.read().await;
                 let stats = buffer.stats();
-                let latest_beat = buffer.latest_beat().cloned();
+                let snapshot = build_snapshot(&buffer);
 
                 return Ok(hooteproto::responses::EventPollResponse {
                     events: vec![],
                     cursor: cursor.unwrap_or(stats.newest_cursor),
                     has_more: false,
-                    latest_beat: latest_beat.map(|b| {
-                        hooteproto::responses::BeatTickInfo {
-                            beat: b.beat,
-                            position_beats: b.position_beats,
-                            tempo_bpm: b.tempo_bpm,
-                            timestamp_ms: b.timestamp_ms,
-                        }
-                    }),
+                    snapshot,
                     buffer: hooteproto::responses::BufferStats {
                         oldest_cursor: stats.oldest_cursor,
                         newest_cursor: stats.newest_cursor,

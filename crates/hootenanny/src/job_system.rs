@@ -207,6 +207,23 @@ impl JobStore {
         stats
     }
 
+    /// Get summary of active jobs (pending + running counts)
+    pub fn summary(&self) -> hooteproto::responses::JobSummary {
+        let jobs = self.jobs.lock().unwrap();
+        let mut pending = 0;
+        let mut running = 0;
+
+        for job in jobs.values() {
+            match job.status {
+                JobStatus::Pending => pending += 1,
+                JobStatus::Running => running += 1,
+                _ => {}
+            }
+        }
+
+        hooteproto::responses::JobSummary { pending, running }
+    }
+
     /// Remove completed/failed/cancelled jobs older than the given age.
     ///
     /// Returns the number of jobs removed.
@@ -337,6 +354,49 @@ pub fn spawn_cleanup_task(job_store: JobStore, interval_secs: u64) -> JoinHandle
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_summary_counts_active_jobs() {
+        let store = JobStore::new();
+
+        // Initially empty
+        let summary = store.summary();
+        assert_eq!(summary.pending, 0);
+        assert_eq!(summary.running, 0);
+
+        // Create some pending jobs
+        let job1 = store.create_job("tool1".to_string());
+        let job2 = store.create_job("tool2".to_string());
+        let job3 = store.create_job("tool3".to_string());
+
+        let summary = store.summary();
+        assert_eq!(summary.pending, 3);
+        assert_eq!(summary.running, 0);
+
+        // Start one
+        store.mark_running(&job1).unwrap();
+        let summary = store.summary();
+        assert_eq!(summary.pending, 2);
+        assert_eq!(summary.running, 1);
+
+        // Start another
+        store.mark_running(&job2).unwrap();
+        let summary = store.summary();
+        assert_eq!(summary.pending, 1);
+        assert_eq!(summary.running, 2);
+
+        // Complete one - should not count in summary
+        store.mark_complete(&job1, ToolResponse::ack("done")).unwrap();
+        let summary = store.summary();
+        assert_eq!(summary.pending, 1);
+        assert_eq!(summary.running, 1);
+
+        // Fail one - should not count in summary
+        store.mark_failed(&job2, "error".to_string()).unwrap();
+        let summary = store.summary();
+        assert_eq!(summary.pending, 1);
+        assert_eq!(summary.running, 0);
+    }
 
     #[test]
     fn test_cleanup_preserves_running_jobs() {

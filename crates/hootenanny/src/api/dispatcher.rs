@@ -175,7 +175,7 @@ impl TypedDispatcher {
             ToolRequest::EventPoll(req) => {
                 match self
                     .server
-                    .event_poll_typed(req.cursor, req.types, req.timeout_ms, req.limit)
+                    .event_poll_typed(req.cursor, req.since_ms, req.types, req.timeout_ms, req.limit)
                     .await
                 {
                     Ok(resp) => ResponseEnvelope::success(ToolResponse::EventPoll(resp)),

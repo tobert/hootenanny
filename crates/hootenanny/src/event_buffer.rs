@@ -49,6 +49,19 @@ pub struct BeatTickInfo {
     pub timestamp_ms: u64,
 }
 
+/// Transport state info (stored separately from ring buffer)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransportInfo {
+    /// Current state: "playing", "paused", "stopped"
+    pub state: String,
+    /// Current position in beats
+    pub position_beats: f64,
+    /// Current tempo in BPM
+    pub tempo_bpm: f64,
+    /// Timestamp when this state was captured (ms since epoch)
+    pub timestamp_ms: u64,
+}
+
 /// Buffer statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BufferStats {
@@ -134,6 +147,10 @@ pub struct EventBuffer {
     next_seq: u64,
     capacity: usize,
     latest_beat: Option<BeatTickInfo>,
+    /// Latest transport state (from TransportStateChanged)
+    latest_transport: Option<TransportInfo>,
+    /// Number of connected devices
+    device_count: u32,
     /// Total events ever pushed (for stats)
     total_pushed: u64,
 }
@@ -146,6 +163,8 @@ impl EventBuffer {
             next_seq: 1, // Start at 1 so 0 can mean "no cursor"
             capacity,
             latest_beat: None,
+            latest_transport: None,
+            device_count: 0,
             total_pushed: 0,
         }
     }
@@ -153,11 +172,12 @@ impl EventBuffer {
     /// Push a broadcast into the buffer
     ///
     /// Beat ticks are stored separately (latest only).
+    /// Transport state and device count are tracked separately.
     /// All other events go into the ring buffer.
     pub fn push(&mut self, broadcast: &Broadcast) {
         let timestamp_ms = current_time_ms();
 
-        // Handle beat ticks separately
+        // Handle beat ticks separately (don't buffer, just track latest)
         if let Broadcast::BeatTick {
             beat,
             position_beats,
@@ -171,6 +191,29 @@ impl EventBuffer {
                 timestamp_ms,
             });
             return;
+        }
+
+        // Track transport state changes
+        if let Broadcast::TransportStateChanged {
+            state,
+            position_beats,
+            tempo_bpm,
+        } = broadcast
+        {
+            self.latest_transport = Some(TransportInfo {
+                state: state.clone(),
+                position_beats: *position_beats,
+                tempo_bpm: *tempo_bpm,
+                timestamp_ms,
+            });
+        }
+
+        // Track device connections
+        if matches!(broadcast, Broadcast::DeviceConnected { .. }) {
+            self.device_count = self.device_count.saturating_add(1);
+        }
+        if matches!(broadcast, Broadcast::DeviceDisconnected { .. }) {
+            self.device_count = self.device_count.saturating_sub(1);
         }
 
         // Convert broadcast to buffered event
@@ -214,13 +257,15 @@ impl EventBuffer {
         }
     }
 
-    /// Poll for events after the given cursor
+    /// Poll for events after the given cursor or within a time window
     ///
-    /// If cursor is None, returns the newest `limit` events.
+    /// If since_ms is Some, returns events from the last N milliseconds.
     /// If cursor is Some, returns events after that cursor.
+    /// If both are None, returns the newest `limit` events.
     pub fn poll(
         &self,
         cursor: Option<u64>,
+        since_ms: Option<u64>,
         types: Option<&[String]>,
         limit: usize,
     ) -> Result<PollResult, PollError> {
@@ -243,36 +288,37 @@ impl EventBuffer {
             }
         }
 
-        let events = match cursor {
-            None => {
-                // No cursor: return newest `limit` events from tail
-                self.get_tail_events(types, limit)
+        // Determine which query mode to use
+        let events = if let Some(since) = since_ms {
+            // Time-window query: get events from the last N milliseconds
+            let cutoff = server_time_ms.saturating_sub(since);
+            self.get_events_since(cutoff, types, limit)
+        } else if let Some(cursor_seq) = cursor {
+            // Cursor-based query: validate and get events after cursor
+            if cursor_seq > 0 && cursor_seq < stats.oldest_cursor {
+                return Err(PollError::CursorExpired {
+                    message: format!(
+                        "Cursor {} is no longer available. Oldest: {}",
+                        cursor_seq, stats.oldest_cursor
+                    ),
+                    oldest_cursor: stats.oldest_cursor,
+                });
             }
-            Some(cursor_seq) => {
-                // Validate cursor
-                if cursor_seq > 0 && cursor_seq < stats.oldest_cursor {
-                    return Err(PollError::CursorExpired {
-                        message: format!(
-                            "Cursor {} is no longer available. Oldest: {}",
-                            cursor_seq, stats.oldest_cursor
-                        ),
-                        oldest_cursor: stats.oldest_cursor,
-                    });
-                }
 
-                if cursor_seq > stats.newest_cursor && stats.newest_cursor > 0 {
-                    return Err(PollError::InvalidCursor {
-                        message: format!(
-                            "Cursor {} is in the future. Newest: {}",
-                            cursor_seq, stats.newest_cursor
-                        ),
-                        newest_cursor: stats.newest_cursor,
-                    });
-                }
-
-                // Get events after cursor
-                self.get_events_after(cursor_seq, types, limit)
+            if cursor_seq > stats.newest_cursor && stats.newest_cursor > 0 {
+                return Err(PollError::InvalidCursor {
+                    message: format!(
+                        "Cursor {} is in the future. Newest: {}",
+                        cursor_seq, stats.newest_cursor
+                    ),
+                    newest_cursor: stats.newest_cursor,
+                });
             }
+
+            self.get_events_after(cursor_seq, types, limit)
+        } else {
+            // No cursor or since_ms: return newest `limit` events from tail
+            self.get_tail_events(types, limit)
         };
 
         // Calculate new cursor and has_more
@@ -281,17 +327,15 @@ impl EventBuffer {
         });
 
         // Check if there are more events beyond what we returned
-        // For initial poll (no cursor): more events exist in the past
-        // For cursor poll: more events exist after the last returned event
-        let has_more = match cursor {
-            None => {
-                // Initial poll: has_more if there are older events we didn't return
-                events.first().map(|e| e.seq > stats.oldest_cursor).unwrap_or(false)
-            }
-            Some(_) => {
-                // Cursor poll: has_more if there are newer events after what we returned
-                events.last().map(|e| e.seq < stats.newest_cursor).unwrap_or(false)
-            }
+        let has_more = if since_ms.is_some() {
+            // For time-window query: has_more if we hit the limit
+            events.len() >= limit
+        } else if cursor.is_some() {
+            // Cursor poll: has_more if there are newer events after what we returned
+            events.last().map(|e| e.seq < stats.newest_cursor).unwrap_or(false)
+        } else {
+            // Initial poll: has_more if there are older events we didn't return
+            events.first().map(|e| e.seq > stats.oldest_cursor).unwrap_or(false)
         };
 
         Ok(PollResult {
@@ -302,6 +346,25 @@ impl EventBuffer {
             buffer: stats,
             server_time_ms,
         })
+    }
+
+    /// Get events since the given timestamp (cutoff in ms since epoch)
+    fn get_events_since(
+        &self,
+        cutoff_ms: u64,
+        types: Option<&[String]>,
+        limit: usize,
+    ) -> Vec<BufferedEvent> {
+        self.events
+            .iter()
+            .filter(|e| e.timestamp_ms >= cutoff_ms)
+            .filter(|e| match types {
+                Some(filter) => filter.iter().any(|t| t == &e.event_type),
+                None => true,
+            })
+            .take(limit)
+            .cloned()
+            .collect()
     }
 
     /// Get newest `limit` events from the tail of the buffer
@@ -343,6 +406,16 @@ impl EventBuffer {
     /// Get the latest beat tick info
     pub fn latest_beat(&self) -> Option<&BeatTickInfo> {
         self.latest_beat.as_ref()
+    }
+
+    /// Get the latest transport state info
+    pub fn latest_transport(&self) -> Option<&TransportInfo> {
+        self.latest_transport.as_ref()
+    }
+
+    /// Get the current device count
+    pub fn device_count(&self) -> u32 {
+        self.device_count
     }
 
     /// Check if there are events after the given cursor
@@ -437,7 +510,7 @@ mod tests {
         });
 
         // Poll without cursor - get all
-        let result = buffer.poll(None, None, 100).unwrap();
+        let result = buffer.poll(None, None, None, 100).unwrap();
         assert_eq!(result.events.len(), 2);
         assert_eq!(result.cursor, 2);
         assert!(!result.has_more);
@@ -457,7 +530,7 @@ mod tests {
         }
 
         // Poll from cursor 2
-        let result = buffer.poll(Some(2), None, 100).unwrap();
+        let result = buffer.poll(Some(2), None, None, 100).unwrap();
         assert_eq!(result.events.len(), 3); // Events 3, 4, 5
         assert_eq!(result.events[0].seq, 3);
         assert_eq!(result.cursor, 5);
@@ -486,7 +559,7 @@ mod tests {
 
         // Filter for job events only
         let types = vec!["job_state_changed".to_string()];
-        let result = buffer.poll(None, Some(&types), 100).unwrap();
+        let result = buffer.poll(None, None, Some(&types), 100).unwrap();
         assert_eq!(result.events.len(), 2);
     }
 
@@ -509,7 +582,7 @@ mod tests {
         });
 
         // Only one event in buffer
-        let result = buffer.poll(None, None, 100).unwrap();
+        let result = buffer.poll(None, None, None, 100).unwrap();
         assert_eq!(result.events.len(), 1);
 
         // But latest_beat is present
@@ -531,7 +604,7 @@ mod tests {
         }
 
         // Should only have last 5 events
-        let result = buffer.poll(None, None, 100).unwrap();
+        let result = buffer.poll(None, None, None, 100).unwrap();
         assert_eq!(result.events.len(), 5);
         assert_eq!(result.events[0].seq, 6); // Oldest is seq 6
         assert_eq!(result.buffer.oldest_cursor, 6);
@@ -551,7 +624,7 @@ mod tests {
         }
 
         // Try to poll with old cursor
-        let result = buffer.poll(Some(2), None, 100);
+        let result = buffer.poll(Some(2), None, None, 100);
         assert!(matches!(result, Err(PollError::CursorExpired { .. })));
     }
 
@@ -566,7 +639,7 @@ mod tests {
         });
 
         // Try cursor in the future
-        let result = buffer.poll(Some(999), None, 100);
+        let result = buffer.poll(Some(999), None, None, 100);
         assert!(matches!(result, Err(PollError::InvalidCursor { .. })));
     }
 
@@ -583,11 +656,173 @@ mod tests {
         }
 
         // Poll with limit 3
-        let result = buffer.poll(None, None, 3).unwrap();
+        let result = buffer.poll(None, None, None, 3).unwrap();
         assert_eq!(result.events.len(), 3);
         assert!(result.has_more);
         // Should get newest 3 (seq 8, 9, 10)
         assert_eq!(result.events[0].seq, 8);
+    }
+
+    #[test]
+    fn test_transport_tracking() {
+        let mut buffer = EventBuffer::new(100);
+
+        // Push transport state change
+        buffer.push(&Broadcast::TransportStateChanged {
+            state: "playing".to_string(),
+            position_beats: 100.5,
+            tempo_bpm: 120.0,
+        });
+
+        // Latest transport should be tracked
+        let transport = buffer.latest_transport().unwrap();
+        assert_eq!(transport.state, "playing");
+        assert_eq!(transport.position_beats, 100.5);
+        assert_eq!(transport.tempo_bpm, 120.0);
+
+        // Event should also be in buffer
+        let result = buffer.poll(None, None, None, 100).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].event_type, "transport_state_changed");
+    }
+
+    #[test]
+    fn test_device_count_tracking() {
+        let mut buffer = EventBuffer::new(100);
+
+        assert_eq!(buffer.device_count(), 0);
+
+        // Connect some devices
+        buffer.push(&Broadcast::DeviceConnected {
+            pipewire_id: 42,
+            name: "USB MIDI".to_string(),
+            media_class: Some("Midi/Bridge".to_string()),
+            identity_id: None,
+            identity_name: None,
+        });
+        assert_eq!(buffer.device_count(), 1);
+
+        buffer.push(&Broadcast::DeviceConnected {
+            pipewire_id: 43,
+            name: "MIDI Keyboard".to_string(),
+            media_class: Some("Midi/Bridge".to_string()),
+            identity_id: None,
+            identity_name: None,
+        });
+        assert_eq!(buffer.device_count(), 2);
+
+        // Disconnect one
+        buffer.push(&Broadcast::DeviceDisconnected {
+            pipewire_id: 42,
+            name: Some("USB MIDI".to_string()),
+        });
+        assert_eq!(buffer.device_count(), 1);
+    }
+
+    #[test]
+    fn test_since_ms_returns_recent_events() {
+        let mut buffer = EventBuffer::new(100);
+
+        // Push events
+        buffer.push(&Broadcast::JobStateChanged {
+            job_id: "job1".to_string(),
+            state: "complete".to_string(),
+            result: None,
+        });
+
+        // Large window should return events
+        let result = buffer.poll(None, Some(10000), None, 100).unwrap();
+        assert_eq!(result.events.len(), 1);
+    }
+
+    #[test]
+    fn test_since_ms_with_type_filter() {
+        let mut buffer = EventBuffer::new(100);
+
+        // Push mixed events
+        buffer.push(&Broadcast::JobStateChanged {
+            job_id: "job1".to_string(),
+            state: "complete".to_string(),
+            result: None,
+        });
+        buffer.push(&Broadcast::ArtifactCreated {
+            artifact_id: "art1".to_string(),
+            content_hash: "hash1".to_string(),
+            tags: vec![],
+            creator: None,
+        });
+        buffer.push(&Broadcast::JobStateChanged {
+            job_id: "job2".to_string(),
+            state: "running".to_string(),
+            result: None,
+        });
+
+        // Filter by type within time window
+        let types = vec!["job_state_changed".to_string()];
+        let result = buffer.poll(None, Some(10000), Some(&types), 100).unwrap();
+        assert_eq!(result.events.len(), 2);
+        assert!(result.events.iter().all(|e| e.event_type == "job_state_changed"));
+    }
+
+    #[test]
+    fn test_since_ms_respects_limit() {
+        let mut buffer = EventBuffer::new(100);
+
+        // Push several events
+        for i in 0..10 {
+            buffer.push(&Broadcast::JobStateChanged {
+                job_id: format!("job{}", i),
+                state: "complete".to_string(),
+                result: None,
+            });
+        }
+
+        // Should respect limit
+        let result = buffer.poll(None, Some(10000), None, 3).unwrap();
+        assert_eq!(result.events.len(), 3);
+        assert!(result.has_more); // More events available
+    }
+
+    #[test]
+    fn test_since_ms_takes_precedence_over_cursor() {
+        let mut buffer = EventBuffer::new(100);
+
+        // Push events
+        for i in 0..5 {
+            buffer.push(&Broadcast::JobStateChanged {
+                job_id: format!("job{}", i),
+                state: "complete".to_string(),
+                result: None,
+            });
+        }
+
+        // When both cursor and since_ms provided, since_ms wins
+        // Cursor would return events after seq 2, but since_ms returns from time window
+        let result = buffer.poll(Some(2), Some(10000), None, 100).unwrap();
+        // Should get all 5 events (from time window), not just 3 (from cursor)
+        assert_eq!(result.events.len(), 5);
+    }
+
+    #[test]
+    fn test_since_ms_empty_for_narrow_window() {
+        use std::thread;
+        use std::time::Duration;
+
+        let mut buffer = EventBuffer::new(100);
+
+        // Push an event
+        buffer.push(&Broadcast::JobStateChanged {
+            job_id: "job1".to_string(),
+            state: "complete".to_string(),
+            result: None,
+        });
+
+        // Wait a bit so event is "old"
+        thread::sleep(Duration::from_millis(50));
+
+        // Very narrow window (1ms) shouldn't include events from 50ms ago
+        let result = buffer.poll(None, Some(1), None, 100).unwrap();
+        assert_eq!(result.events.len(), 0);
     }
 
     #[test]
@@ -610,5 +845,94 @@ mod tests {
             validate_poll_params(None, Some(9999)),
             Err(PollError::InvalidLimit { .. })
         ));
+    }
+
+    #[test]
+    fn test_snapshot_data_available() {
+        // Test that all data needed for Snapshot is available from EventBuffer
+        let mut buffer = EventBuffer::new(100);
+
+        // Initially everything is None/zero
+        assert!(buffer.latest_beat().is_none());
+        assert!(buffer.latest_transport().is_none());
+        assert_eq!(buffer.device_count(), 0);
+
+        // Add a beat tick
+        buffer.push(&Broadcast::BeatTick {
+            beat: 42,
+            position_beats: 42.5,
+            tempo_bpm: 120.0,
+        });
+
+        let beat = buffer.latest_beat().unwrap();
+        assert_eq!(beat.beat, 42);
+        assert_eq!(beat.position_beats, 42.5);
+        assert_eq!(beat.tempo_bpm, 120.0);
+
+        // Add transport state
+        buffer.push(&Broadcast::TransportStateChanged {
+            state: "playing".to_string(),
+            position_beats: 42.5,
+            tempo_bpm: 120.0,
+        });
+
+        let transport = buffer.latest_transport().unwrap();
+        assert_eq!(transport.state, "playing");
+        assert_eq!(transport.position_beats, 42.5);
+        assert_eq!(transport.tempo_bpm, 120.0);
+
+        // Add devices
+        buffer.push(&Broadcast::DeviceConnected {
+            pipewire_id: 100,
+            name: "MIDI Controller".to_string(),
+            media_class: Some("Midi/Bridge".to_string()),
+            identity_id: None,
+            identity_name: None,
+        });
+        buffer.push(&Broadcast::DeviceConnected {
+            pipewire_id: 101,
+            name: "Audio Interface".to_string(),
+            media_class: Some("Audio/Sink".to_string()),
+            identity_id: None,
+            identity_name: None,
+        });
+
+        assert_eq!(buffer.device_count(), 2);
+
+        // Verify all snapshot data is present and correct
+        assert!(buffer.latest_beat().is_some());
+        assert!(buffer.latest_transport().is_some());
+        assert_eq!(buffer.device_count(), 2);
+    }
+
+    #[test]
+    fn test_transport_updates_on_each_change() {
+        let mut buffer = EventBuffer::new(100);
+
+        // First state: stopped
+        buffer.push(&Broadcast::TransportStateChanged {
+            state: "stopped".to_string(),
+            position_beats: 0.0,
+            tempo_bpm: 120.0,
+        });
+        assert_eq!(buffer.latest_transport().unwrap().state, "stopped");
+
+        // Play
+        buffer.push(&Broadcast::TransportStateChanged {
+            state: "playing".to_string(),
+            position_beats: 0.0,
+            tempo_bpm: 120.0,
+        });
+        assert_eq!(buffer.latest_transport().unwrap().state, "playing");
+
+        // Pause
+        buffer.push(&Broadcast::TransportStateChanged {
+            state: "paused".to_string(),
+            position_beats: 16.0,
+            tempo_bpm: 120.0,
+        });
+        let transport = buffer.latest_transport().unwrap();
+        assert_eq!(transport.state, "paused");
+        assert_eq!(transport.position_beats, 16.0);
     }
 }

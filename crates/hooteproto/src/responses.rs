@@ -326,6 +326,39 @@ pub struct BufferStats {
     pub capacity: u64,
 }
 
+/// Transport state info
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TransportInfo {
+    /// Current state: "playing", "paused", "stopped"
+    pub state: String,
+    /// Current position in beats
+    pub position_beats: f64,
+    /// Current tempo in BPM
+    pub tempo_bpm: f64,
+    /// Timestamp when this state was captured (ms since epoch)
+    pub timestamp_ms: u64,
+}
+
+/// Summary of active jobs
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct JobSummary {
+    pub pending: usize,
+    pub running: usize,
+}
+
+/// Snapshot of current system state
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Snapshot {
+    /// Current transport state (if available)
+    pub transport: Option<TransportInfo>,
+    /// Most recent beat tick (if any beats received)
+    pub latest_beat: Option<BeatTickInfo>,
+    /// Summary of active jobs
+    pub active_jobs: JobSummary,
+    /// Number of connected devices
+    pub device_count: u32,
+}
+
 /// Response from event_poll
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventPollResponse {
@@ -335,8 +368,8 @@ pub struct EventPollResponse {
     pub cursor: u64,
     /// True if more events available beyond limit
     pub has_more: bool,
-    /// Most recent beat tick (always present if any beats received)
-    pub latest_beat: Option<BeatTickInfo>,
+    /// System state snapshot
+    pub snapshot: Snapshot,
     /// Buffer statistics
     pub buffer: BufferStats,
     /// Server timestamp at response time (millis since epoch)

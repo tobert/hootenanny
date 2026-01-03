@@ -722,6 +722,8 @@ pub struct JobSleepRequest {
 pub struct EventPollRequest {
     /// Cursor from previous poll (None = get recent events)
     pub cursor: Option<u64>,
+    /// Get events from the last N milliseconds (alternative to cursor)
+    pub since_ms: Option<u64>,
     /// Event types to filter (None = all types)
     pub types: Option<Vec<String>>,
     /// How long to wait for events (ms). Default: 5000, max: 30000

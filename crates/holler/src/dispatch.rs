@@ -215,6 +215,7 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             let p: EventPollArgs = serde_json::from_value(args).unwrap_or_default();
             Ok(Payload::ToolRequest(ToolRequest::EventPoll(request::EventPollRequest {
                 cursor: p.cursor,
+                since_ms: p.since_ms,
                 types: p.types,
                 timeout_ms: p.timeout_ms,
                 limit: p.limit,
@@ -714,6 +715,7 @@ struct JobSleepArgs {
 #[derive(Debug, Default, Deserialize)]
 struct EventPollArgs {
     cursor: Option<u64>,
+    since_ms: Option<u64>,
     types: Option<Vec<String>>,
     timeout_ms: Option<u64>,
     limit: Option<usize>,
