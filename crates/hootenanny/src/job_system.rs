@@ -12,11 +12,15 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 
+use crate::zmq::BroadcastPublisher;
+use std::sync::RwLock;
+
 /// Storage for background jobs
 #[derive(Clone)]
 pub struct JobStore {
     jobs: Arc<Mutex<HashMap<String, JobInfo>>>,
     handles: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
+    broadcaster: Arc<RwLock<Option<BroadcastPublisher>>>,
 }
 
 impl JobStore {
@@ -24,7 +28,14 @@ impl JobStore {
         Self {
             jobs: Arc::new(Mutex::new(HashMap::new())),
             handles: Arc::new(Mutex::new(HashMap::new())),
+            broadcaster: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Set the broadcaster for job state change notifications
+    pub fn set_broadcaster(&self, broadcaster: BroadcastPublisher) {
+        let mut guard = self.broadcaster.write().unwrap();
+        *guard = Some(broadcaster);
     }
 
     /// Create a new job and return its ID
@@ -65,6 +76,9 @@ impl JobStore {
 
     /// Mark a job as complete with result
     pub fn mark_complete(&self, job_id: &JobId, result: ToolResponse) -> Result<()> {
+        // Extract artifact_id before taking the lock
+        let artifact_id = result.artifact_id().map(|s| s.to_string());
+
         let mut jobs = self.jobs.lock().unwrap();
         let job = jobs
             .get_mut(job_id.as_str())
@@ -81,6 +95,17 @@ impl JobStore {
             job.duration_secs = ?duration,
             "Job completed successfully"
         );
+
+        // Broadcast job completion with artifact_id if available
+        if let Some(broadcaster) = self.broadcaster.read().unwrap().as_ref().cloned() {
+            let job_id_str = job_id.as_str().to_string();
+            let result_json = artifact_id.map(|id| serde_json::json!({ "artifact_id": id }));
+            tokio::spawn(async move {
+                if let Err(e) = broadcaster.job_state_changed(&job_id_str, "complete", result_json).await {
+                    tracing::warn!("Failed to broadcast job completion: {}", e);
+                }
+            });
+        }
 
         Ok(())
     }
@@ -104,6 +129,17 @@ impl JobStore {
             job.error = %error,
             "Job failed"
         );
+
+        // Broadcast job failure
+        if let Some(broadcaster) = self.broadcaster.read().unwrap().as_ref().cloned() {
+            let job_id_str = job_id.as_str().to_string();
+            let error_json = Some(serde_json::json!({ "error": error }));
+            tokio::spawn(async move {
+                if let Err(e) = broadcaster.job_state_changed(&job_id_str, "failed", error_json).await {
+                    tracing::warn!("Failed to broadcast job failure: {}", e);
+                }
+            });
+        }
 
         Ok(())
     }

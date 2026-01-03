@@ -827,4 +827,24 @@ impl ToolResponse {
             tool: tool.into(),
         })
     }
+
+    /// Extract artifact_id from responses that contain one.
+    ///
+    /// Returns Some(artifact_id) for responses like OrpheusGenerated, ArtifactCreated, etc.
+    ///
+    /// For responses with multiple artifacts (e.g., OrpheusGenerated with num_variations > 1),
+    /// returns the first artifact. This is intentional: the job completion broadcast is
+    /// primarily used to signal "the job finished" rather than to enumerate all outputs.
+    /// Callers needing all artifacts should use job_poll or inspect the full response.
+    pub fn artifact_id(&self) -> Option<&str> {
+        match self {
+            // Orpheus can generate multiple variations; return first for broadcast signaling
+            ToolResponse::OrpheusGenerated(r) => r.artifact_ids.first().map(|s| s.as_str()),
+            ToolResponse::AudioGenerated(r) => Some(&r.artifact_id),
+            ToolResponse::ArtifactCreated(r) => Some(&r.artifact_id),
+            ToolResponse::AbcToMidi(r) => Some(&r.artifact_id),
+            ToolResponse::MidiToWav(r) => Some(&r.artifact_id),
+            _ => None,
+        }
+    }
 }

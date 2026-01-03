@@ -259,6 +259,10 @@ async fn main() -> Result<()> {
     });
     info!("   ZMQ PUB: {}", zmq_pub);
 
+    // Wire up broadcaster to job store for job state change notifications
+    job_store.set_broadcaster(broadcast_publisher.clone());
+    info!("   Job store connected to broadcaster");
+
     // --- PipeWire Device Hot-Plug Listener ---
     info!("🔌 Starting PipeWire device listener...");
     let (device_event_tx, device_event_rx) = tokio::sync::mpsc::channel(256);
