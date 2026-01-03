@@ -5,7 +5,7 @@ use pyo3::types::PyDict;
 use serde_json::json;
 use tracing::debug;
 
-use crate::async_bridge::{create_job_awaitable, Artifact as AsyncArtifact};
+use crate::async_bridge::{create_job_awaitable, Artifact as AsyncArtifact, JobFuture};
 use crate::broadcast::BroadcastHandler;
 use crate::callbacks::CallbackRegistry;
 use crate::tool_bridge;
@@ -249,11 +249,16 @@ pub fn sample<'py>(
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
     // Extract job_id from response
+    // Response structure: { "kind": "success", "response": { "type": "job_started", "job_id": "..." } }
     let job_id = result
-        .get("job_id")
+        .get("response")
+        .and_then(|r| r.get("job_id"))
         .and_then(|v| v.as_str())
         .ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("sample response missing job_id")
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "sample response missing job_id: {:?}",
+                result
+            ))
         })?
         .to_string();
 
@@ -264,10 +269,22 @@ pub fn sample<'py>(
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Broadcast handler not initialized")
     })?;
 
-    // Register waiter and get receiver (blocking briefly is okay here)
-    let receiver = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(handler.wait_for_job(job_id.clone()))
-    });
+    // Get runtime handle for async operations
+    let handle = tokio::runtime::Handle::try_current().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "No tokio runtime available: {}",
+            e
+        ))
+    })?;
+
+    // Register waiter and get receiver - use spawn_blocking to avoid block_in_place issues
+    let handler_ref = handler;
+    let job_id_clone = job_id.clone();
+    let receiver = std::thread::spawn(move || {
+        handle.block_on(handler_ref.wait_for_job(job_id_clone))
+    })
+    .join()
+    .map_err(|_| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Failed to register job waiter"))?;
 
     // Return Python awaitable
     create_job_awaitable(py, job_id, receiver)
@@ -547,6 +564,9 @@ pub fn vibeweaver(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<BeatDecorator>()?;
     m.add_class::<MarkerDecorator>()?;
     m.add_class::<ArtifactDecorator>()?;
+
+    // Async classes
+    m.add_class::<JobFuture>()?;
 
     // Functions
     m.add_function(wrap_pyfunction!(session, m)?)?;

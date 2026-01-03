@@ -180,9 +180,26 @@ impl Kernel {
             let stdout: String = stdout_capture.call_method0("getvalue")?.extract()?;
             let stderr: String = stderr_capture.call_method0("getvalue")?.extract()?;
 
-            exec_result.with_context(|| format!("Failed to exec: {}", code))?;
+            // Handle execution result with proper traceback
+            match exec_result {
+                Ok(_) => Ok((stdout, stderr)),
+                Err(e) => {
+                    // Get the full Python traceback
+                    let traceback = e.traceback(py);
+                    let tb_str = traceback
+                        .map(|tb| {
+                            tb.format()
+                                .unwrap_or_else(|_| "Failed to format traceback".to_string())
+                        })
+                        .unwrap_or_default();
 
-            Ok((stdout, stderr))
+                    anyhow::bail!(
+                        "Python error: {}\n{}",
+                        e,
+                        tb_str
+                    )
+                }
+            }
         })
     }
 }
