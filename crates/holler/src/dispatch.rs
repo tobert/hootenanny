@@ -211,6 +211,15 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             let p: JobSleepArgs = serde_json::from_value(args).context("Invalid job_sleep arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::JobSleep(request::JobSleepRequest { milliseconds: p.milliseconds })))
         }
+        "event_poll" => {
+            let p: EventPollArgs = serde_json::from_value(args).unwrap_or_default();
+            Ok(Payload::ToolRequest(ToolRequest::EventPoll(request::EventPollRequest {
+                cursor: p.cursor,
+                types: p.types,
+                timeout_ms: p.timeout_ms,
+                limit: p.limit,
+            })))
+        }
 
         // === Native Tools (high-level abstraction) ===
         "sample" => {
@@ -700,6 +709,14 @@ struct JobCancelArgs {
 #[derive(Debug, Deserialize)]
 struct JobSleepArgs {
     milliseconds: u64,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct EventPollArgs {
+    cursor: Option<u64>,
+    types: Option<Vec<String>>,
+    timeout_ms: Option<u64>,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]

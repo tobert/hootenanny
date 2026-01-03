@@ -108,6 +108,7 @@ pub fn tool_timing(name: &str) -> ToolTiming {
         "job_poll" => ToolTiming::AsyncShort, // Already handles its own timeout
         "job_cancel" => ToolTiming::AsyncShort,
         "job_sleep" => ToolTiming::AsyncShort, // Bounded by input
+        "event_poll" => ToolTiming::AsyncShort, // Handles own timeout (max 30s)
 
         // Default: treat unknown as async medium (safer)
         _ => ToolTiming::AsyncMedium,

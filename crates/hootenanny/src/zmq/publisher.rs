@@ -2,6 +2,8 @@
 //!
 //! Broadcasts Broadcast messages to subscribed clients (holler SUB sockets).
 //! Messages are serialized using Cap'n Proto for cross-language compatibility.
+//!
+//! Optionally stores broadcasts in an EventBuffer for cursor-based polling.
 
 use anyhow::{Context as AnyhowContext, Result};
 use futures::SinkExt;
@@ -9,6 +11,8 @@ use hooteproto::socket_config::{create_publisher_and_bind, ZmqContext, Multipart
 use hooteproto::{broadcast_capnp, Broadcast};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
+
+use crate::event_buffer::EventBufferHandle;
 
 /// Handle for sending broadcasts
 #[derive(Clone)]
@@ -100,15 +104,26 @@ impl BroadcastPublisher {
 pub struct PublisherServer {
     bind_address: String,
     rx: mpsc::Receiver<Broadcast>,
+    event_buffer: Option<EventBufferHandle>,
 }
 
 impl PublisherServer {
     /// Create a new publisher server and return the handle for sending broadcasts
     pub fn new(bind_address: String, buffer_size: usize) -> (Self, BroadcastPublisher) {
         let (tx, rx) = mpsc::channel(buffer_size);
-        let server = Self { bind_address, rx };
+        let server = Self {
+            bind_address,
+            rx,
+            event_buffer: None,
+        };
         let publisher = BroadcastPublisher { tx };
         (server, publisher)
+    }
+
+    /// Attach an event buffer for cursor-based polling
+    pub fn with_event_buffer(mut self, buffer: EventBufferHandle) -> Self {
+        self.event_buffer = Some(buffer);
+        self
     }
 
     /// Run the publisher until the channel closes
@@ -120,6 +135,11 @@ impl PublisherServer {
         info!("Hootenanny PUB socket listening on {}", self.bind_address);
 
         while let Some(broadcast) = self.rx.recv().await {
+            // Push to event buffer if attached
+            if let Some(ref buffer) = self.event_buffer {
+                buffer.write().await.push(&broadcast);
+            }
+
             // Serialize to Cap'n Proto
             let mut message = capnp::message::Builder::new_default();
             {

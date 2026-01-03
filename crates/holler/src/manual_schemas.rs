@@ -854,6 +854,35 @@ pub fn sleep_request() -> Value {
     })
 }
 
+/// Schema for EventPollRequest (event_poll)
+pub fn event_poll_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "cursor": {
+                "type": ["integer", "null"],
+                "minimum": 0,
+                "description": "Cursor from previous poll (omit for initial poll to get recent events)"
+            },
+            "types": {
+                "type": ["array", "null"],
+                "items": { "type": "string" },
+                "description": "Event types to filter (e.g., [\"job_state_changed\", \"artifact_created\"]). Omit for all types."
+            },
+            "timeout_ms": {
+                "type": ["integer", "null"],
+                "minimum": 0,
+                "description": "How long to wait for events (ms). Default: 5000, max: 30000"
+            },
+            "limit": {
+                "type": ["integer", "null"],
+                "minimum": 1,
+                "description": "Max events to return. Default: 100, max: 1000"
+            }
+        }
+    })
+}
+
 /// Schema for GraphTagRequest
 pub fn graph_tag_request() -> Value {
     json!({

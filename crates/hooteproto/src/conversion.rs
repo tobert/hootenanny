@@ -524,6 +524,10 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
         ToolRequest::JobCancel(req) => builder.reborrow().init_job_cancel().set_job_id(&req.job_id),
         ToolRequest::JobList(req) => builder.reborrow().init_job_list().set_status(req.status.as_deref().unwrap_or("")),
         ToolRequest::JobSleep(req) => builder.reborrow().init_job_sleep().set_milliseconds(req.milliseconds),
+        ToolRequest::EventPoll(_) => {
+            // EventPoll is MCP-only, not sent over ZMQ
+            unimplemented!("EventPoll is MCP-only, use JSON serialization")
+        }
         ToolRequest::ReadResource(req) => builder.reborrow().init_read_resource().set_uri(&req.uri),
         ToolRequest::ListResources => builder.reborrow().set_list_resources(()),
         ToolRequest::Complete(req) => { let mut c = builder.reborrow().init_complete(); c.set_context(&req.context); c.set_partial(&req.partial); }
@@ -1565,6 +1569,12 @@ fn response_to_capnp_tool_response(
         }
         ToolResponse::JobSleep(r) => {
             builder.reborrow().init_job_sleep().set_slept_ms(r.slept_ms);
+        }
+
+        // Event Polling (MCP-only, not serialized over ZMQ)
+        ToolResponse::EventPoll(_) => {
+            // EventPoll is handled directly by holler/dispatcher, not sent over ZMQ
+            unimplemented!("EventPoll is MCP-only, use JSON serialization")
         }
 
         // ABC Notation

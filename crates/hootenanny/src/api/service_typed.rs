@@ -1314,6 +1314,111 @@ impl EventDualityServer {
     }
 
     // ============================================================
+    // Event Polling
+    // ============================================================
+
+    /// Poll for buffered broadcast events - typed response
+    pub async fn event_poll_typed(
+        &self,
+        cursor: Option<u64>,
+        types: Option<Vec<String>>,
+        timeout_ms: Option<u64>,
+        limit: Option<usize>,
+    ) -> Result<hooteproto::responses::EventPollResponse, ToolError> {
+        use crate::event_buffer::{validate_poll_params, DEFAULT_LIMIT, DEFAULT_TIMEOUT_MS};
+        use std::time::{Duration, Instant};
+
+        // Validate parameters
+        let (timeout, limit) = validate_poll_params(timeout_ms, limit)
+            .map_err(|e| ToolError::validation("invalid_params", e.to_string()))?;
+
+        let event_buffer = self.event_buffer.as_ref().ok_or_else(|| {
+            ToolError::service("event_poll", "not_configured", "Event buffer not initialized")
+        })?;
+
+        let poll_interval = Duration::from_millis(100);
+        let timeout_duration = Duration::from_millis(timeout);
+        let start = Instant::now();
+
+        loop {
+            // Try to get events
+            let buffer = event_buffer.read().await;
+            let types_ref = types.as_deref();
+
+            let result = buffer.poll(cursor, types_ref, limit).map_err(|e| {
+                ToolError::validation("poll_error", e.to_string())
+            })?;
+
+            // If we have events or no cursor (initial poll), return immediately
+            if !result.events.is_empty() || cursor.is_none() {
+                return Ok(hooteproto::responses::EventPollResponse {
+                    events: result.events.into_iter().map(|e| {
+                        hooteproto::responses::BufferedEvent {
+                            seq: e.seq,
+                            timestamp_ms: e.timestamp_ms,
+                            event_type: e.event_type,
+                            data: e.data,
+                        }
+                    }).collect(),
+                    cursor: result.cursor,
+                    has_more: result.has_more,
+                    latest_beat: result.latest_beat.map(|b| {
+                        hooteproto::responses::BeatTickInfo {
+                            beat: b.beat,
+                            position_beats: b.position_beats,
+                            tempo_bpm: b.tempo_bpm,
+                            timestamp_ms: b.timestamp_ms,
+                        }
+                    }),
+                    buffer: hooteproto::responses::BufferStats {
+                        oldest_cursor: result.buffer.oldest_cursor,
+                        newest_cursor: result.buffer.newest_cursor,
+                        total_events: result.buffer.total_events,
+                        capacity: result.buffer.capacity,
+                    },
+                    server_time_ms: result.server_time_ms,
+                });
+            }
+
+            drop(buffer); // Release read lock before sleeping
+
+            // Check timeout
+            if start.elapsed() >= timeout_duration {
+                // Return empty result with current state
+                let buffer = event_buffer.read().await;
+                let stats = buffer.stats();
+                let latest_beat = buffer.latest_beat().cloned();
+
+                return Ok(hooteproto::responses::EventPollResponse {
+                    events: vec![],
+                    cursor: cursor.unwrap_or(stats.newest_cursor),
+                    has_more: false,
+                    latest_beat: latest_beat.map(|b| {
+                        hooteproto::responses::BeatTickInfo {
+                            beat: b.beat,
+                            position_beats: b.position_beats,
+                            tempo_bpm: b.tempo_bpm,
+                            timestamp_ms: b.timestamp_ms,
+                        }
+                    }),
+                    buffer: hooteproto::responses::BufferStats {
+                        oldest_cursor: stats.oldest_cursor,
+                        newest_cursor: stats.newest_cursor,
+                        total_events: stats.total_events,
+                        capacity: stats.capacity,
+                    },
+                    server_time_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64,
+                });
+            }
+
+            tokio::time::sleep(poll_interval).await;
+        }
+    }
+
+    // ============================================================
     // CAS Upload Tools
     // ============================================================
 

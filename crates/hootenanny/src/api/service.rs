@@ -1,4 +1,5 @@
 use crate::artifact_store::FileStore;
+use crate::event_buffer::EventBufferHandle;
 use crate::gpu_monitor::GpuMonitor;
 use crate::job_system::JobStore;
 use crate::mcp_tools::local_models::LocalModels;
@@ -27,6 +28,8 @@ pub struct EventDualityServer {
     pub session_manager: Option<Arc<SessionManager>>,
     /// Slicing engine for time-range extraction
     pub slicing_engine: Option<Arc<SlicingEngine>>,
+    /// Event buffer for cursor-based polling
+    pub event_buffer: Option<EventBufferHandle>,
 }
 
 impl std::fmt::Debug for EventDualityServer {
@@ -59,6 +62,7 @@ impl EventDualityServer {
             stream_manager: None,
             session_manager: None,
             slicing_engine: None,
+            event_buffer: None,
         }
     }
 
@@ -95,6 +99,12 @@ impl EventDualityServer {
     /// Create with slicing engine for time-range extraction
     pub fn with_slicing_engine(mut self, slicing_engine: Option<Arc<SlicingEngine>>) -> Self {
         self.slicing_engine = slicing_engine;
+        self
+    }
+
+    /// Create with event buffer for cursor-based polling
+    pub fn with_event_buffer(mut self, event_buffer: Option<EventBufferHandle>) -> Self {
+        self.event_buffer = event_buffer;
         self
     }
 

@@ -39,6 +39,9 @@ pub enum ToolResponse {
     JobCancel(JobCancelResponse),
     JobSleep(JobSleepResponse),
 
+    // === Event Polling ===
+    EventPoll(EventPollResponse),
+
     // === ABC Notation ===
     AbcParsed(AbcParsedResponse),
     AbcValidated(AbcValidatedResponse),
@@ -286,6 +289,58 @@ pub struct JobCancelResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JobSleepResponse {
     pub slept_ms: u64,
+}
+
+// =============================================================================
+// Event Polling Responses
+// =============================================================================
+
+/// A buffered broadcast event
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BufferedEvent {
+    /// Monotonic sequence number
+    pub seq: u64,
+    /// Unix timestamp in milliseconds when event was buffered
+    pub timestamp_ms: u64,
+    /// Event type name (e.g., "job_state_changed", "artifact_created")
+    pub event_type: String,
+    /// Full event data as JSON
+    pub data: serde_json::Value,
+}
+
+/// Latest beat tick info
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BeatTickInfo {
+    pub beat: u64,
+    pub position_beats: f64,
+    pub tempo_bpm: f64,
+    pub timestamp_ms: u64,
+}
+
+/// Buffer statistics
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BufferStats {
+    pub oldest_cursor: u64,
+    pub newest_cursor: u64,
+    pub total_events: u64,
+    pub capacity: u64,
+}
+
+/// Response from event_poll
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EventPollResponse {
+    /// Events since cursor (or newest `limit` if no cursor)
+    pub events: Vec<BufferedEvent>,
+    /// New cursor position (seq of last event returned)
+    pub cursor: u64,
+    /// True if more events available beyond limit
+    pub has_more: bool,
+    /// Most recent beat tick (always present if any beats received)
+    pub latest_beat: Option<BeatTickInfo>,
+    /// Buffer statistics
+    pub buffer: BufferStats,
+    /// Server timestamp at response time (millis since epoch)
+    pub server_time_ms: u64,
 }
 
 // =============================================================================

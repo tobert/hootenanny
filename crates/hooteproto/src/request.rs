@@ -147,6 +147,8 @@ pub enum ToolRequest {
     JobCancel(JobCancelRequest),
     /// Sleep for duration (utility)
     JobSleep(JobSleepRequest),
+    /// Poll for buffered broadcast events
+    EventPoll(EventPollRequest),
 
     // ==========================================================================
     // Graph
@@ -246,7 +248,7 @@ impl ToolRequest {
             Self::AbcToMidi(_) => ToolTiming::AsyncShort,
             Self::GraphBind(_) | Self::GraphTag(_) | Self::GraphConnect(_) => ToolTiming::AsyncShort,
             Self::AddAnnotation(_) => ToolTiming::AsyncShort,
-            Self::JobPoll(_) | Self::JobCancel(_) | Self::JobSleep(_) => ToolTiming::AsyncShort,
+            Self::JobPoll(_) | Self::JobCancel(_) | Self::JobSleep(_) | Self::EventPoll(_) => ToolTiming::AsyncShort,
             Self::WeaveEval(_) | Self::WeaveSession | Self::WeaveReset(_) | Self::WeaveHelp(_) => ToolTiming::AsyncShort,
             Self::Complete(_) | Self::SampleLlm(_) => ToolTiming::AsyncShort,
             Self::Schedule(_) => ToolTiming::AsyncShort,
@@ -339,6 +341,7 @@ impl ToolRequest {
             Self::JobPoll(_) => "job_poll",
             Self::JobCancel(_) => "job_cancel",
             Self::JobSleep(_) => "job_sleep",
+            Self::EventPoll(_) => "event_poll",
             Self::GraphBind(_) => "graph_bind",
             Self::GraphTag(_) => "graph_tag",
             Self::GraphConnect(_) => "graph_connect",
@@ -708,6 +711,23 @@ pub struct JobCancelRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JobSleepRequest {
     pub milliseconds: u64,
+}
+
+// =============================================================================
+// Event Polling Request Types
+// =============================================================================
+
+/// Request to poll for buffered broadcast events
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct EventPollRequest {
+    /// Cursor from previous poll (None = get recent events)
+    pub cursor: Option<u64>,
+    /// Event types to filter (None = all types)
+    pub types: Option<Vec<String>>,
+    /// How long to wait for events (ms). Default: 5000, max: 30000
+    pub timeout_ms: Option<u64>,
+    /// Max events to return. Default: 100, max: 1000
+    pub limit: Option<usize>,
 }
 
 // =============================================================================

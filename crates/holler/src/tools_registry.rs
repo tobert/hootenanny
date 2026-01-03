@@ -97,6 +97,15 @@ pub fn list_tools() -> Vec<ToolInfo> {
         },
 
         // ==========================================================================
+        // Event Polling
+        // ==========================================================================
+        ToolInfo {
+            name: "event_poll".to_string(),
+            description: "Poll for buffered broadcast events with cursor-based pagination".to_string(),
+            input_schema: manual_schemas::event_poll_request(),
+        },
+
+        // ==========================================================================
         // Graph Tools
         // ==========================================================================
         ToolInfo {

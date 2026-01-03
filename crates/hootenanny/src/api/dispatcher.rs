@@ -172,6 +172,16 @@ impl TypedDispatcher {
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
+            ToolRequest::EventPoll(req) => {
+                match self
+                    .server
+                    .event_poll_typed(req.cursor, req.types, req.timeout_ms, req.limit)
+                    .await
+                {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::EventPoll(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
 
             // === Config ===
             ToolRequest::ConfigGet(req) => {

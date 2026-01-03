@@ -3,6 +3,7 @@
 mod api;
 mod artifact_store;
 mod cas;
+mod event_buffer;
 mod gpu_monitor;
 mod job_system;
 mod mcp_tools;
@@ -249,15 +250,24 @@ async fn main() -> Result<()> {
     let zmq_pub = &config.infra.bind.zmq_pub;
     let addr = format!("0.0.0.0:{}", http_port);
 
+    // --- Event Buffer for cursor-based polling ---
+    info!("📋 Creating event buffer...");
+    let event_buffer = event_buffer::create_event_buffer(event_buffer::DEFAULT_CAPACITY);
+    info!(
+        "   Event buffer capacity: {} events",
+        event_buffer::DEFAULT_CAPACITY
+    );
+
     // --- ZMQ PUB socket for broadcasts ---
     info!("📢 Starting ZMQ PUB socket for broadcasts...");
     let (pub_server, broadcast_publisher) = zmq::PublisherServer::new(zmq_pub.clone(), 256);
+    let pub_server = pub_server.with_event_buffer(event_buffer.clone());
     tokio::spawn(async move {
         if let Err(e) = pub_server.run().await {
             tracing::error!("ZMQ PUB server error: {}", e);
         }
     });
-    info!("   ZMQ PUB: {}", zmq_pub);
+    info!("   ZMQ PUB: {} (with event buffer)", zmq_pub);
 
     // Wire up broadcaster to job store for job state change notifications
     job_store.set_broadcaster(broadcast_publisher.clone());
@@ -306,7 +316,8 @@ async fn main() -> Result<()> {
         .with_broadcaster(Some(broadcast_publisher))
         .with_stream_manager(Some(stream_manager.clone()))
         .with_session_manager(Some(session_manager.clone()))
-        .with_slicing_engine(Some(slicing_engine.clone())),
+        .with_slicing_engine(Some(slicing_engine.clone()))
+        .with_event_buffer(Some(event_buffer)),
     );
 
     // --- Start Stream Event Handler (if chaosgarden connected) ---
