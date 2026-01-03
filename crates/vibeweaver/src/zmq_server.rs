@@ -24,8 +24,11 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+use crate::broadcast::BroadcastHandler;
+use crate::callbacks::{fire_artifact_callbacks, fire_beat_callbacks, fire_marker_callbacks};
 use crate::kernel::Kernel;
 use crate::session::Session;
+use crate::zmq_client::{Broadcast, BroadcastReceiver};
 
 /// Boxed sink type for sending messages
 type BoxedSink = Pin<Box<dyn futures::Sink<Multipart, Error = tmq::TmqError> + Send>>;
@@ -49,6 +52,8 @@ fn frames_to_multipart(frames: &[Bytes]) -> Multipart {
 pub struct ServerConfig {
     pub bind_address: String,
     pub worker_name: String,
+    /// Hootenanny PUB socket endpoint for broadcasts
+    pub broadcast_endpoint: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -56,6 +61,7 @@ impl Default for ServerConfig {
         Self {
             bind_address: "tcp://0.0.0.0:5575".to_string(),
             worker_name: "vibeweaver".to_string(),
+            broadcast_endpoint: None,
         }
     }
 }
@@ -101,6 +107,15 @@ impl Server {
 
         // Wrap self in Arc for sharing across spawned tasks
         let server = Arc::new(self);
+
+        // Spawn broadcast listener if endpoint configured
+        if let Some(ref broadcast_endpoint) = server.config.broadcast_endpoint {
+            let endpoint = broadcast_endpoint.clone();
+            let shutdown_rx_broadcast = shutdown_rx.resubscribe();
+            tokio::spawn(async move {
+                Self::broadcast_listener(endpoint, shutdown_rx_broadcast).await;
+            });
+        }
 
         loop {
             tokio::select! {
@@ -398,5 +413,85 @@ Use weave_help(topic="api|session|examples") for more info.
                 topic: topic.map(|t| t.to_string()),
             },
         )))
+    }
+
+    /// Broadcast listener task
+    ///
+    /// Connects to hootenanny's PUB socket and receives broadcast events.
+    /// Dispatches to registered Python callbacks.
+    async fn broadcast_listener(
+        endpoint: String,
+        mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    ) {
+        info!("Broadcast listener connecting to {}", endpoint);
+
+        let mut receiver = match BroadcastReceiver::connect(&endpoint) {
+            Ok(r) => r,
+            Err(e) => {
+                error!("Failed to connect broadcast receiver: {}", e);
+                return;
+            }
+        };
+
+        info!("Broadcast listener connected, waiting for events");
+
+        loop {
+            tokio::select! {
+                result = receiver.recv() => {
+                    match result {
+                        Ok(broadcast) => {
+                            debug!("Received broadcast: {:?}", broadcast);
+                            Self::dispatch_broadcast(broadcast).await;
+                        }
+                        Err(e) => {
+                            error!("Broadcast receive error: {}", e);
+                            // Retry after brief delay
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        }
+                    }
+                }
+                _ = shutdown_rx.recv() => {
+                    info!("Broadcast listener shutting down");
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Dispatch a broadcast to registered callbacks and the handler
+    async fn dispatch_broadcast(broadcast: Broadcast) {
+        // First, forward to BroadcastHandler for job waiters and state updates
+        if let Some(handler) = BroadcastHandler::global() {
+            let updates = handler.handle(broadcast.clone()).await;
+            if !updates.is_empty() {
+                debug!("BroadcastHandler processed {} state updates", updates.len());
+            }
+        }
+
+        // Then fire Python callbacks
+        match broadcast {
+            Broadcast::BeatTick { beat, tempo_bpm: _ } => {
+                fire_beat_callbacks(beat);
+            }
+            Broadcast::MarkerReached { name, beat } => {
+                fire_marker_callbacks(&name, beat);
+            }
+            Broadcast::ArtifactCreated {
+                artifact_id,
+                content_hash,
+                tags,
+            } => {
+                fire_artifact_callbacks(&artifact_id, &content_hash, &tags);
+            }
+            Broadcast::JobStateChanged { job_id, state, .. } => {
+                debug!("Job {} state changed to {}", job_id, state);
+            }
+            Broadcast::TransportStateChanged { state, position_beats } => {
+                debug!("Transport {} at beat {}", state, position_beats);
+            }
+            Broadcast::Unknown { topic, .. } => {
+                debug!("Unknown broadcast topic: {}", topic);
+            }
+        }
     }
 }

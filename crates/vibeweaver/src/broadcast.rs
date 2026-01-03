@@ -33,6 +33,9 @@ pub enum StateUpdate {
 /// Pending job completion futures
 type JobWaiters = HashMap<String, oneshot::Sender<ArtifactInfo>>;
 
+/// Global broadcast handler instance
+static HANDLER: std::sync::OnceLock<BroadcastHandler> = std::sync::OnceLock::new();
+
 /// Handles broadcasts and updates kernel state
 pub struct BroadcastHandler {
     state: Arc<RwLock<KernelState>>,
@@ -45,6 +48,18 @@ impl BroadcastHandler {
             state: Arc::new(RwLock::new(initial_state)),
             job_waiters: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Initialize the global handler (call once at startup)
+    pub fn init_global(handler: BroadcastHandler) -> anyhow::Result<()> {
+        HANDLER
+            .set(handler)
+            .map_err(|_| anyhow::anyhow!("BroadcastHandler already initialized"))
+    }
+
+    /// Get the global handler
+    pub fn global() -> Option<&'static BroadcastHandler> {
+        HANDLER.get()
     }
 
     /// Get current state (for Python injection)

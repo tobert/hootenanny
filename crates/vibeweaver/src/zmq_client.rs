@@ -6,6 +6,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use futures::StreamExt;
 use hooteproto::socket_config::{ZmqContext, Multipart};
+use hooteproto::{broadcast_capnp, capnp_to_broadcast, Broadcast as HootBroadcast};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tmq::subscribe;
@@ -87,6 +88,8 @@ impl BroadcastReceiver {
     }
 
     /// Receive next broadcast (blocking)
+    ///
+    /// Parses Cap'n Proto serialized broadcasts from hootenanny's PUB socket.
     pub async fn recv(&mut self) -> Result<Broadcast> {
         let mp = self.sub.next().await
             .ok_or_else(|| anyhow::anyhow!("Socket stream ended"))?
@@ -101,79 +104,76 @@ impl BroadcastReceiver {
             anyhow::bail!("Empty broadcast message");
         }
 
-        // First frame is topic
-        let topic = String::from_utf8_lossy(&frames[0]).to_string();
+        // Parse Cap'n Proto message (single frame containing serialized broadcast)
+        let data = &frames[0];
+        let reader = capnp::serialize::read_message_from_flat_slice(
+            &mut data.as_ref(),
+            capnp::message::ReaderOptions::default(),
+        )?;
 
-        // Second frame (if present) is data
-        let data = if frames.len() > 1 {
-            frames[1].to_vec()
-        } else {
-            vec![]
-        };
+        let broadcast_reader = reader.get_root::<broadcast_capnp::broadcast::Reader>()?;
+        let hoot_broadcast = capnp_to_broadcast(broadcast_reader)?;
 
-        parse_broadcast(&topic, &data)
+        // Convert hooteproto::Broadcast to vibeweaver's simplified Broadcast
+        Ok(hoot_broadcast_to_vibeweaver(hoot_broadcast))
     }
 }
 
-/// Parse raw broadcast into typed Broadcast
-fn parse_broadcast(topic: &str, data: &[u8]) -> Result<Broadcast> {
-    // Try to parse data as JSON
-    let json: serde_json::Value = if data.is_empty() {
-        serde_json::Value::Null
-    } else {
-        serde_json::from_slice(data).unwrap_or(serde_json::Value::Null)
-    };
-
-    match topic.split('.').next() {
-        Some("job") => {
-            let job_id = json["job_id"].as_str().unwrap_or("").to_string();
-            let state = json["state"].as_str().unwrap_or("unknown").to_string();
-            let artifact_id = json["artifact_id"].as_str().map(String::from);
-            Ok(Broadcast::JobStateChanged {
+/// Convert hooteproto::Broadcast to vibeweaver's simplified Broadcast enum
+fn hoot_broadcast_to_vibeweaver(broadcast: HootBroadcast) -> Broadcast {
+    match broadcast {
+        HootBroadcast::JobStateChanged { job_id, state, result } => {
+            // Extract artifact_id from result JSON if present
+            let artifact_id = result
+                .as_ref()
+                .and_then(|r| r.get("artifact_id"))
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            Broadcast::JobStateChanged {
                 job_id,
                 state,
                 artifact_id,
-            })
+            }
         }
-        Some("artifact") => {
-            let artifact_id = json["artifact_id"].as_str().unwrap_or("").to_string();
-            let content_hash = json["content_hash"].as_str().unwrap_or("").to_string();
-            let tags = json["tags"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-            Ok(Broadcast::ArtifactCreated {
-                artifact_id,
-                content_hash,
-                tags,
-            })
-        }
-        Some("transport") => {
-            let state = json["state"].as_str().unwrap_or("stopped").to_string();
-            let position_beats = json["position_beats"].as_f64().unwrap_or(0.0);
-            Ok(Broadcast::TransportStateChanged {
-                state,
-                position_beats,
-            })
-        }
-        Some("beat") => {
-            let beat = json["beat"].as_f64().unwrap_or(0.0);
-            let tempo_bpm = json["tempo_bpm"].as_f64().unwrap_or(120.0);
-            Ok(Broadcast::BeatTick { beat, tempo_bpm })
-        }
-        Some("marker") => {
-            let name = json["name"].as_str().unwrap_or("").to_string();
-            let beat = json["beat"].as_f64().unwrap_or(0.0);
-            Ok(Broadcast::MarkerReached { name, beat })
-        }
-        _ => Ok(Broadcast::Unknown {
-            topic: topic.to_string(),
-            data: data.to_vec(),
-        }),
+        HootBroadcast::ArtifactCreated {
+            artifact_id,
+            content_hash,
+            tags,
+            ..
+        } => Broadcast::ArtifactCreated {
+            artifact_id,
+            content_hash,
+            tags,
+        },
+        HootBroadcast::TransportStateChanged {
+            state,
+            position_beats,
+            ..
+        } => Broadcast::TransportStateChanged {
+            state,
+            position_beats,
+        },
+        HootBroadcast::BeatTick {
+            position_beats,
+            tempo_bpm,
+            ..
+        } => Broadcast::BeatTick {
+            beat: position_beats,
+            tempo_bpm,
+        },
+        HootBroadcast::MarkerReached {
+            position_beats,
+            marker_type,
+            ..
+        } => Broadcast::MarkerReached {
+            name: marker_type,
+            beat: position_beats,
+        },
+        // All other broadcast types become Unknown
+        other => Broadcast::Unknown {
+            topic: format!("{:?}", other).split('{').next().unwrap_or("Unknown").trim().to_string(),
+            data: vec![],
+        },
     }
 }
 
@@ -182,17 +182,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_job_broadcast() {
-        let data = br#"{"job_id": "abc123", "state": "complete", "artifact_id": "art456"}"#;
-        let broadcast = parse_broadcast("job.state_changed", data).unwrap();
+    fn test_hoot_broadcast_to_vibeweaver_job() {
+        let hoot = HootBroadcast::JobStateChanged {
+            job_id: "job123".to_string(),
+            state: "complete".to_string(),
+            result: Some(serde_json::json!({"artifact_id": "art456"})),
+        };
 
-        match broadcast {
+        let vibe = hoot_broadcast_to_vibeweaver(hoot);
+        match vibe {
             Broadcast::JobStateChanged {
                 job_id,
                 state,
                 artifact_id,
             } => {
-                assert_eq!(job_id, "abc123");
+                assert_eq!(job_id, "job123");
                 assert_eq!(state, "complete");
                 assert_eq!(artifact_id, Some("art456".to_string()));
             }
@@ -201,13 +205,17 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_beat_broadcast() {
-        let data = br#"{"beat": 4.0, "tempo_bpm": 130.0}"#;
-        let broadcast = parse_broadcast("beat.tick", data).unwrap();
+    fn test_hoot_broadcast_to_vibeweaver_beat() {
+        let hoot = HootBroadcast::BeatTick {
+            beat: 4,
+            position_beats: 4.5,
+            tempo_bpm: 130.0,
+        };
 
-        match broadcast {
+        let vibe = hoot_broadcast_to_vibeweaver(hoot);
+        match vibe {
             Broadcast::BeatTick { beat, tempo_bpm } => {
-                assert_eq!(beat, 4.0);
+                assert_eq!(beat, 4.5);
                 assert_eq!(tempo_bpm, 130.0);
             }
             _ => panic!("Wrong broadcast type"),

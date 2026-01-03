@@ -6,7 +6,14 @@ use hooteconf::HootConfig;
 use std::path::PathBuf;
 use tokio::runtime::Handle;
 use tracing::info;
-use vibeweaver::{tool_bridge::ToolBridge, zmq_client, Kernel, Server, ServerConfig};
+use vibeweaver::{
+    broadcast::BroadcastHandler,
+    session::SessionId,
+    state::KernelState,
+    tool_bridge::ToolBridge,
+    zmq_client,
+    Kernel, Server, ServerConfig,
+};
 
 /// Vibeweaver - Python Kernel for AI Music Agents
 ///
@@ -94,6 +101,13 @@ async fn main() -> Result<()> {
     ToolBridge::init_global(bridge)?;
     info!("  Tool bridge initialized");
 
+    // Initialize broadcast handler (handles job completion waiters)
+    let session_name = args.session.clone().unwrap_or_else(|| "default".to_string());
+    let initial_state = KernelState::new(SessionId::new(), session_name, 120.0);
+    let handler = BroadcastHandler::new(initial_state);
+    BroadcastHandler::init_global(handler)?;
+    info!("  Broadcast handler initialized");
+
     // Initialize Python kernel
     info!("Initializing Python kernel...");
     let kernel = Kernel::new()?;
@@ -103,6 +117,7 @@ async fn main() -> Result<()> {
     let server_config = ServerConfig {
         bind_address: vibeweaver_config.zmq_router.clone(),
         worker_name: args.name.clone(),
+        broadcast_endpoint: Some(vibeweaver_config.hootenanny_pub.clone()),
     };
 
     // Create shutdown channel

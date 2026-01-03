@@ -4,8 +4,8 @@
 //! Uses tokio's block_on() to bridge the sync/async boundary.
 
 use anyhow::Result;
-use hooteproto::Payload;
-use hooteproto::request::{GardenSeekRequest, GardenSetTempoRequest, ToolRequest};
+use hooteproto::request::{GardenSeekRequest, GardenSetTempoRequest, SampleRequest, ScheduleRequest, ToolRequest};
+use hooteproto::{Encoding, InferenceContext, Payload, Space};
 use serde_json::Value as JsonValue;
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Handle;
@@ -103,11 +103,135 @@ fn args_to_payload(name: &str, args: JsonValue) -> Result<Payload> {
                 .ok_or_else(|| anyhow::anyhow!("garden_set_tempo requires 'bpm' parameter"))?;
             Ok(Payload::ToolRequest(ToolRequest::GardenSetTempo(GardenSetTempoRequest { bpm })))
         }
+
+        // Generative tools
+        "sample" => {
+            let space_str = args
+                .get("space")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("sample requires 'space' parameter"))?;
+
+            let space = parse_space(space_str)?;
+
+            let inference = parse_inference(&args);
+
+            let prompt = args.get("prompt").and_then(|v| v.as_str()).map(String::from);
+            let as_loop = args.get("as_loop").and_then(|v| v.as_bool()).unwrap_or(false);
+            let num_variations = args.get("num_variations").and_then(|v| v.as_u64()).map(|n| n as u32);
+
+            Ok(Payload::ToolRequest(ToolRequest::Sample(SampleRequest {
+                space,
+                inference,
+                num_variations,
+                prompt,
+                seed: None,
+                as_loop,
+                creator: Some("vibeweaver".to_string()),
+                parent_id: None,
+                tags: vec![],
+                variation_set_id: None,
+            })))
+        }
+
+        // Timeline scheduling
+        "schedule" => {
+            let encoding = parse_encoding(&args)?;
+            let at = args
+                .get("at")
+                .and_then(|v| v.as_f64())
+                .ok_or_else(|| anyhow::anyhow!("schedule requires 'at' parameter"))?;
+
+            let duration = args.get("duration").and_then(|v| v.as_f64());
+            let gain = args.get("gain").and_then(|v| v.as_f64());
+            let rate = args.get("rate").and_then(|v| v.as_f64());
+
+            Ok(Payload::ToolRequest(ToolRequest::Schedule(ScheduleRequest {
+                encoding,
+                at,
+                duration,
+                gain,
+                rate,
+            })))
+        }
+
         _ => anyhow::bail!(
             "Unknown tool: {}. Add typed dispatch for this tool in tool_bridge.rs",
             name
         ),
     }
+}
+
+/// Parse space string to Space enum
+fn parse_space(s: &str) -> Result<Space> {
+    match s.to_lowercase().as_str() {
+        "orpheus" => Ok(Space::Orpheus),
+        "orpheus_loops" | "loops" => Ok(Space::OrpheusLoops),
+        "orpheus_children" | "children" => Ok(Space::OrpheusChildren),
+        "orpheus_mono_melodies" | "mono_melodies" => Ok(Space::OrpheusMonoMelodies),
+        "orpheus_bridge" | "bridge" => Ok(Space::OrpheusBridge),
+        "musicgen" | "music_gen" => Ok(Space::MusicGen),
+        "yue" => Ok(Space::Yue),
+        "abc" => Ok(Space::Abc),
+        _ => anyhow::bail!("Unknown space: {}", s),
+    }
+}
+
+/// Parse inference context from JSON args
+fn parse_inference(args: &JsonValue) -> InferenceContext {
+    let inference = args.get("inference").unwrap_or(args);
+
+    InferenceContext {
+        temperature: inference.get("temperature").and_then(|v| v.as_f64()).map(|f| f as f32),
+        top_p: inference.get("top_p").and_then(|v| v.as_f64()).map(|f| f as f32),
+        top_k: inference.get("top_k").and_then(|v| v.as_u64()).map(|n| n as u32),
+        max_tokens: inference.get("max_tokens").and_then(|v| v.as_u64()).map(|n| n as u32),
+        seed: inference.get("seed").and_then(|v| v.as_u64()),
+        guidance_scale: inference.get("guidance_scale").and_then(|v| v.as_f64()).map(|f| f as f32),
+        variant: inference.get("variant").and_then(|v| v.as_str()).map(String::from),
+        duration_seconds: inference.get("duration_seconds").and_then(|v| v.as_f64()).map(|f| f as f32),
+    }
+}
+
+/// Parse encoding from JSON args
+fn parse_encoding(args: &JsonValue) -> Result<Encoding> {
+    // Check for artifact_id (most common case)
+    if let Some(artifact_id) = args.get("artifact_id").and_then(|v| v.as_str()) {
+        // Determine type from artifact_id prefix or explicit type
+        let encoding_type = args
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("audio");
+
+        return match encoding_type {
+            "midi" => Ok(Encoding::Midi { artifact_id: artifact_id.to_string() }),
+            "audio" | _ => Ok(Encoding::Audio { artifact_id: artifact_id.to_string() }),
+        };
+    }
+
+    // Check for encoding sub-object
+    if let Some(encoding) = args.get("encoding") {
+        if let Some(artifact_id) = encoding.get("artifact_id").and_then(|v| v.as_str()) {
+            let encoding_type = encoding.get("type").and_then(|v| v.as_str()).unwrap_or("audio");
+            return match encoding_type {
+                "midi" => Ok(Encoding::Midi { artifact_id: artifact_id.to_string() }),
+                "audio" | _ => Ok(Encoding::Audio { artifact_id: artifact_id.to_string() }),
+            };
+        }
+
+        if let Some(notation) = encoding.get("notation").and_then(|v| v.as_str()) {
+            return Ok(Encoding::Abc { notation: notation.to_string() });
+        }
+
+        if let Some(hash) = encoding.get("content_hash").and_then(|v| v.as_str()) {
+            let format = encoding.get("format").and_then(|v| v.as_str()).unwrap_or("audio/wav");
+            return Ok(Encoding::Hash {
+                content_hash: hash.to_string(),
+                format: format.to_string(),
+            });
+        }
+    }
+
+    anyhow::bail!("schedule requires 'artifact_id' or 'encoding' parameter")
 }
 
 /// Call a hootenanny tool from anywhere (uses global bridge).
