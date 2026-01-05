@@ -354,6 +354,17 @@ pub fn list_tools() -> Vec<ToolInfo> {
                 }
             }),
         },
+        ToolInfo {
+            name: "midi_info".to_string(),
+            description: "Extract MIDI file metadata (tempo, time signature, duration)".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "artifact_id": { "type": "string", "description": "Artifact ID of MIDI file" },
+                    "hash": { "type": "string", "description": "CAS hash of MIDI file (alternative to artifact_id)" }
+                }
+            }),
+        },
 
         // ==========================================================================
         // Vibeweaver Tools (Python Kernel)

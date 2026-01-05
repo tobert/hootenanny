@@ -599,6 +599,12 @@ impl TypedDispatcher {
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
+            ToolRequest::MidiInfo(req) => {
+                match self.server.midi_info_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::MidiInfo(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
 
             // === Vibeweaver (Python kernel proxy) ===
             ToolRequest::WeaveEval(_)

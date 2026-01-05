@@ -408,6 +408,11 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
                 for (i, v) in req.text_candidates.iter().enumerate() { tc.set(i as u32, v); }
             }
         }
+        ToolRequest::MidiInfo(req) => {
+            let mut m = builder.reborrow().init_midi_info();
+            m.set_artifact_id(req.artifact_id.as_deref().unwrap_or(""));
+            m.set_hash(req.hash.as_deref().unwrap_or(""));
+        }
         ToolRequest::MusicgenGenerate(req) => {
             let mut m = builder.reborrow().init_musicgen_generate();
             m.set_prompt(req.prompt.as_deref().unwrap_or(""));
@@ -830,6 +835,13 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
                 text_candidates: capnp_string_list(c.get_text_candidates()?),
                 parent_id: capnp_optional_string(c.get_parent_id()?),
                 creator: capnp_optional_string(c.get_creator()?),
+            }))
+        }
+        tools_capnp::tool_request::MidiInfo(m) => {
+            let m = m?;
+            Ok(ToolRequest::MidiInfo(MidiInfoRequest {
+                artifact_id: capnp_optional_string(m.get_artifact_id()?),
+                hash: capnp_optional_string(m.get_hash()?),
             }))
         }
         tools_capnp::tool_request::MusicgenGenerate(m) => {
@@ -1748,6 +1760,35 @@ fn response_to_capnp_tool_response(
             }
             b.set_similarity(r.similarity.unwrap_or(0.0));
         }
+        ToolResponse::MidiInfo(r) => {
+            let mut b = builder.reborrow().init_midi_info();
+            if let Some(tempo) = r.tempo_bpm {
+                b.set_tempo_bpm(tempo);
+                b.set_has_tempo_bpm(true);
+            } else {
+                b.set_has_tempo_bpm(false);
+            }
+            {
+                let mut changes = b.reborrow().init_tempo_changes(r.tempo_changes.len() as u32);
+                for (i, tc) in r.tempo_changes.iter().enumerate() {
+                    let mut c = changes.reborrow().get(i as u32);
+                    c.set_tick(tc.tick);
+                    c.set_bpm(tc.bpm);
+                }
+            }
+            if let Some((num, denom)) = r.time_signature {
+                b.set_time_sig_num(num);
+                b.set_time_sig_denom(denom);
+                b.set_has_time_sig(true);
+            } else {
+                b.set_has_time_sig(false);
+            }
+            b.set_duration_seconds(r.duration_seconds);
+            b.set_track_count(r.track_count as u16);
+            b.set_ppq(r.ppq);
+            b.set_note_count(r.note_count as u32);
+            b.set_format(r.format);
+        }
 
         // Garden/Transport
         ToolResponse::GardenStatus(r) => {
@@ -2390,6 +2431,36 @@ fn capnp_tool_response_to_response(
                 mood: if mood.is_empty() { None } else { Some(mood) },
                 zero_shot: if zero_shot.is_empty() { None } else { Some(zero_shot) },
                 similarity: if similarity == 0.0 { None } else { Some(similarity) },
+            }))
+        }
+        Which::MidiInfo(r) => {
+            let r = r?;
+            let tempo_bpm = if r.get_has_tempo_bpm() {
+                Some(r.get_tempo_bpm())
+            } else {
+                None
+            };
+            let mut tempo_changes = Vec::new();
+            for tc in r.get_tempo_changes()?.iter() {
+                tempo_changes.push(MidiTempoChange {
+                    tick: tc.get_tick(),
+                    bpm: tc.get_bpm(),
+                });
+            }
+            let time_signature = if r.get_has_time_sig() {
+                Some((r.get_time_sig_num(), r.get_time_sig_denom()))
+            } else {
+                None
+            };
+            Ok(ToolResponse::MidiInfo(MidiInfoResponse {
+                tempo_bpm,
+                tempo_changes,
+                time_signature,
+                duration_seconds: r.get_duration_seconds(),
+                track_count: r.get_track_count() as usize,
+                ppq: r.get_ppq(),
+                note_count: r.get_note_count() as usize,
+                format: r.get_format(),
             }))
         }
 

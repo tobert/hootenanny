@@ -16,3 +16,4 @@ resolver = "2"
 [workspace.dependencies]
 tmq = "0.5"
 zmq = "0.10"
+midly = "0.5"

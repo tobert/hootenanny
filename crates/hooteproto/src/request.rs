@@ -73,6 +73,8 @@ pub enum ToolRequest {
     BeatthisAnalyze(BeatthisAnalyzeRequest),
     /// Analyze audio with CLAP
     ClapAnalyze(ClapAnalyzeRequest),
+    /// Extract MIDI file metadata (tempo, time signature, duration)
+    MidiInfo(MidiInfoRequest),
 
     // ==========================================================================
     // ABC Notation
@@ -243,6 +245,7 @@ impl ToolRequest {
             Self::GraphFind(_) | Self::GraphContext(_) | Self::GraphQuery(_) => ToolTiming::AsyncShort,
             Self::ArtifactGet(_) | Self::ArtifactList(_) | Self::ArtifactCreate(_) => ToolTiming::AsyncShort,
             Self::CasInspect(_) => ToolTiming::AsyncShort,
+            Self::MidiInfo(_) => ToolTiming::AsyncShort,
             Self::Ping | Self::ListResources => ToolTiming::AsyncShort,
             Self::ReadResource(_) => ToolTiming::AsyncShort,
             Self::CasStore(_) | Self::CasGet(_) | Self::CasUploadFile(_) | Self::CasStats => ToolTiming::AsyncShort,
@@ -315,6 +318,7 @@ impl ToolRequest {
             Self::YueGenerate(_) => "yue_generate",
             Self::BeatthisAnalyze(_) => "beatthis_analyze",
             Self::ClapAnalyze(_) => "clap_analyze",
+            Self::MidiInfo(_) => "midi_info",
             Self::AbcParse(_) => "abc_parse",
             Self::AbcValidate(_) => "abc_validate",
             Self::AbcTranspose(_) => "abc_transpose",
@@ -603,6 +607,14 @@ pub struct ClapAnalyzeRequest {
 
 fn default_clap_tasks() -> Vec<String> {
     vec!["embeddings".to_string()]
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiInfoRequest {
+    /// Artifact ID or CAS hash of the MIDI file
+    pub artifact_id: Option<String>,
+    /// Direct CAS hash (alternative to artifact_id)
+    pub hash: Option<String>,
 }
 
 // =============================================================================

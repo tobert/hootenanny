@@ -3018,6 +3018,60 @@ impl EventDualityServer {
         })
     }
 
+    /// Extract MIDI file information (tempo, time signature, duration, etc.)
+    pub async fn midi_info_typed(
+        &self,
+        request: hooteproto::request::MidiInfoRequest,
+    ) -> Result<hooteproto::responses::MidiInfoResponse, ToolError> {
+        // Get MIDI content - either from artifact or direct hash
+        let hash = if let Some(ref artifact_id) = request.artifact_id {
+            // Look up artifact to get hash
+            let store = self.artifact_store.read().map_err(|_| ToolError::internal("Lock poisoned"))?;
+            let artifact = store.get(artifact_id)
+                .map_err(|e| ToolError::internal(e.to_string()))?
+                .ok_or_else(|| ToolError::not_found("artifact", artifact_id.clone()))?;
+            artifact.content_hash.as_str().to_string()
+        } else if let Some(ref h) = request.hash {
+            h.clone()
+        } else {
+            return Err(ToolError::validation("missing_parameter", "Either artifact_id or hash must be provided"));
+        };
+
+        // Get MIDI bytes from CAS
+        let content = self.local_models
+            .inspect_cas_content(&hash)
+            .await
+            .map_err(|e| ToolError::not_found("content", e.to_string()))?;
+
+        let path = content.local_path
+            .ok_or_else(|| ToolError::not_found("content", hash.clone()))?;
+
+        let midi_bytes = tokio::fs::read(&path)
+            .await
+            .map_err(|e| ToolError::internal(format!("Failed to read MIDI file: {}", e)))?;
+
+        // Parse MIDI with our midi_info module
+        let info = crate::mcp_tools::midi_info::extract_midi_info(&midi_bytes)
+            .map_err(|e| ToolError::internal(format!("Failed to parse MIDI: {}", e)))?;
+
+        // Convert to response type
+        Ok(hooteproto::responses::MidiInfoResponse {
+            tempo_bpm: info.tempo_bpm,
+            tempo_changes: info.tempo_changes.into_iter().map(|tc| {
+                hooteproto::responses::MidiTempoChange {
+                    tick: tc.tick,
+                    bpm: tc.bpm,
+                }
+            }).collect(),
+            time_signature: info.time_signature,
+            duration_seconds: info.duration_seconds,
+            track_count: info.track_count,
+            ppq: info.ppq,
+            note_count: info.note_count,
+            format: info.format,
+        })
+    }
+
     // =========================================================================
     // Native Tools (typed wrappers)
     // These forward to the existing native implementations but use hooteproto types.

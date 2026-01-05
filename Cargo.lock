@@ -1155,6 +1155,7 @@ dependencies = [
  "hooteconf",
  "hooteproto",
  "hound",
+ "midly",
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",

@@ -36,6 +36,7 @@ struct ToolRequest {
     # === Analysis Tools ===
     beatthisAnalyze @17 :BeatthisAnalyze;
     clapAnalyze @18 :ClapAnalyze;
+    midiInfo @79 :MidiInfo;
 
     # === Generation Tools ===
     musicgenGenerate @19 :MusicgenGenerate;
@@ -253,6 +254,11 @@ struct ClapAnalyze {
   textCandidates @3 :List(Text);
   parentId @4 :Text;
   creator @5 :Text;
+}
+
+struct MidiInfo {
+  artifactId @0 :Text;
+  hash @1 :Text;
 }
 
 # === Generation Types ===

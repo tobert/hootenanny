@@ -66,6 +66,7 @@ pub enum ToolResponse {
     // === Audio Analysis ===
     BeatsAnalyzed(BeatsAnalyzedResponse),
     ClapAnalyzed(ClapAnalyzedResponse),
+    MidiInfo(MidiInfoResponse),
 
     // === Garden/Transport ===
     GardenStatus(GardenStatusResponse),
@@ -555,6 +556,36 @@ pub struct ClapAnalyzedResponse {
 pub struct ClapClassification {
     pub label: String,
     pub score: f32,
+}
+
+/// Tempo change event within a MIDI file
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiTempoChange {
+    /// Tick position of tempo change
+    pub tick: u32,
+    /// Tempo in BPM
+    pub bpm: f64,
+}
+
+/// MIDI file information extracted from parsing
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiInfoResponse {
+    /// Primary tempo in BPM (first SetTempo event, if any)
+    pub tempo_bpm: Option<f64>,
+    /// All tempo changes in the file
+    pub tempo_changes: Vec<MidiTempoChange>,
+    /// Time signature as (numerator, denominator)
+    pub time_signature: Option<(u8, u8)>,
+    /// Duration in seconds
+    pub duration_seconds: f64,
+    /// Number of tracks
+    pub track_count: usize,
+    /// Pulses per quarter note
+    pub ppq: u16,
+    /// Total number of note-on events
+    pub note_count: usize,
+    /// MIDI format (0, 1, or 2)
+    pub format: u8,
 }
 
 // =============================================================================

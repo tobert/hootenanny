@@ -41,6 +41,7 @@ struct ToolResponse {
     # Audio Analysis
     beatsAnalyzed @19 :BeatsAnalyzedResponse;
     clapAnalyzed @20 :ClapAnalyzedResponse;
+    midiInfo @55 :MidiInfoResponse;
 
     # Garden/Transport
     gardenStatus @21 :GardenStatusResponse;
@@ -395,6 +396,25 @@ struct ClapAnalyzedResponse {
 struct ClapClassification {
   label @0 :Text;
   score @1 :Float32;
+}
+
+struct MidiTempoChange {
+  tick @0 :UInt32;
+  bpm @1 :Float64;
+}
+
+struct MidiInfoResponse {
+  tempoBpm @0 :Float64;
+  hasTempoBpm @1 :Bool;
+  tempoChanges @2 :List(MidiTempoChange);
+  timeSigNum @3 :UInt8;
+  timeSigDenom @4 :UInt8;
+  hasTimeSig @5 :Bool;
+  durationSeconds @6 :Float64;
+  trackCount @7 :UInt16;
+  ppq @8 :UInt16;
+  noteCount @9 :UInt32;
+  format @10 :UInt8;
 }
 
 # =============================================================================

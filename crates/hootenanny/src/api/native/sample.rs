@@ -211,22 +211,18 @@ async fn sample_orpheus(
         .await?;
 
     // Pre-calculate durations for all outputs (before acquiring write lock)
-    // Orpheus doesn't encode tempo - use default 120 BPM
-    let mut durations: Vec<(Option<f64>, Option<f64>)> = Vec::new();
+    let mut durations: Vec<Option<f64>> = Vec::new();
     for hash in &result.output_hashes {
         let dur = match local_models.inspect_cas_content(hash).await {
             Ok(ref info) if info.local_path.is_some() => {
                 match tokio::fs::read(info.local_path.as_ref().unwrap()).await {
                     Ok(midi_bytes) => {
-                        let secs =
-                            crate::mcp_tools::rustysynth::calculate_midi_duration(&midi_bytes);
-                        let beats = secs.map(|s| s * 2.0); // 120 BPM: beats = seconds * 2
-                        (secs, beats)
+                        crate::mcp_tools::rustysynth::calculate_midi_duration(&midi_bytes)
                     }
-                    Err(_) => (None, None),
+                    Err(_) => None,
                 }
             }
-            _ => (None, None),
+            _ => None,
         };
         durations.push(dur);
     }
@@ -245,7 +241,7 @@ async fn sample_orpheus(
             .clone()
             .unwrap_or_else(|| "agent_orpheus".to_string());
 
-        let (duration_seconds, duration_beats) = durations.get(i).copied().unwrap_or((None, None));
+        let duration_seconds = durations.get(i).copied().flatten();
 
         let mut metadata = serde_json::json!({
             "type": "orpheus_generation",
@@ -262,9 +258,7 @@ async fn sample_orpheus(
                 "tokens": tokens,
                 "job_id": job_id,
             },
-            "duration_seconds": duration_beats,
-            "duration_seconds_real": duration_seconds,
-            "tempo_bpm": 120,
+            "duration_seconds": duration_seconds,
         });
 
         if let Some(ref seed_hash_value) = seed_hash {
@@ -364,22 +358,18 @@ async fn sample_orpheus_loops(
         .await?;
 
     // Pre-calculate durations for all outputs (before acquiring write lock)
-    // Orpheus doesn't encode tempo - use default 120 BPM
-    let mut durations: Vec<(Option<f64>, Option<f64>)> = Vec::new();
+    let mut durations: Vec<Option<f64>> = Vec::new();
     for hash in &result.output_hashes {
         let dur = match local_models.inspect_cas_content(hash).await {
             Ok(ref info) if info.local_path.is_some() => {
                 match tokio::fs::read(info.local_path.as_ref().unwrap()).await {
                     Ok(midi_bytes) => {
-                        let secs =
-                            crate::mcp_tools::rustysynth::calculate_midi_duration(&midi_bytes);
-                        let beats = secs.map(|s| s * 2.0); // 120 BPM: beats = seconds * 2
-                        (secs, beats)
+                        crate::mcp_tools::rustysynth::calculate_midi_duration(&midi_bytes)
                     }
-                    Err(_) => (None, None),
+                    Err(_) => None,
                 }
             }
-            _ => (None, None),
+            _ => None,
         };
         durations.push(dur);
     }
@@ -398,7 +388,7 @@ async fn sample_orpheus_loops(
             .clone()
             .unwrap_or_else(|| "agent_orpheus".to_string());
 
-        let (duration_seconds, duration_beats) = durations.get(i).copied().unwrap_or((None, None));
+        let duration_seconds = durations.get(i).copied().flatten();
 
         let mut tags = vec![
             "type:midi".to_string(),
@@ -424,9 +414,7 @@ async fn sample_orpheus_loops(
                     "tokens": tokens,
                     "job_id": job_id,
                 },
-                "duration_seconds": duration_beats,
-                "duration_seconds_real": duration_seconds,
-                "tempo_bpm": 120,
+                "duration_seconds": duration_seconds,
             }),
         )
         .with_tags(tags);
