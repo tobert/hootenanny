@@ -244,10 +244,20 @@ result = job_poll({timeout_ms: 120000, job_ids: jobs, mode: "all"})
 - **Content-addressable:** BLAKE3 hashing, automatic dedup
 - **Tool prefixes:** `cas_*`, `job_*`, `orpheus_*`, `abc_*`, `convert_*`, `graph_*`
 
+## 🐍 Python / Vibeweaver Setup
+
+Vibeweaver embeds system Python via PyO3 for interactive music scripting. Install the music modules:
+
+```bash
+pip install --user mido numpy mingus pretty-midi
+```
+
+These are then available in `weave_eval` for creating MIDI, working with music theory, etc.
+
 ## 🛠️ Development
 
 ```bash
-cargo install cargo-watch  # Auto-reload
+cargo install cargo-watch just  # Auto-reload + task runner
 
 # Terminal 1: Server with auto-reload
 cargo watch -x 'run -p hootenanny'

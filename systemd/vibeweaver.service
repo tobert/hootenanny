@@ -13,6 +13,7 @@ RestartSec=5
 TimeoutStopSec=30
 
 Environment=RUST_LOG=info
+Environment=PYTHONPATH=%h/.local/lib/python3.13/site-packages
 
 [Install]
 WantedBy=default.target
