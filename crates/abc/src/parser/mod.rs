@@ -31,32 +31,45 @@ pub fn parse(input: &str) -> ParseResult<Tune> {
 }
 
 /// Route parsed elements to their respective voices based on VoiceSwitch markers.
+///
+/// Handles three cases:
+/// 1. No voice definitions and no voice switches: single default voice
+/// 2. Voice definitions in header: use those as the voice list
+/// 3. Voice switches without header definitions: create voices from switches
 fn route_elements_to_voices(
     voice_defs: &[crate::ast::VoiceDef],
     elements: Vec<Element>,
 ) -> Vec<Voice> {
-    // If no voice definitions, put everything in a single default voice
-    if voice_defs.is_empty() {
-        // Filter out VoiceSwitch elements if any (shouldn't exist without defs, but be safe)
-        let filtered: Vec<_> = elements
-            .into_iter()
-            .filter(|e| !matches!(e, Element::VoiceSwitch(_)))
-            .collect();
+    // Check if there are any VoiceSwitch elements
+    let has_voice_switches = elements
+        .iter()
+        .any(|e| matches!(e, Element::VoiceSwitch(_)));
+
+    // If no voice definitions AND no voice switches, put everything in a single default voice
+    if voice_defs.is_empty() && !has_voice_switches {
         return vec![Voice {
             id: None,
             name: None,
-            elements: filtered,
+            elements,
         }];
     }
 
-    // Create a voice for each definition
+    // Create a voice for each definition (if any)
     let mut voice_map: HashMap<String, Vec<Element>> = HashMap::new();
     for def in voice_defs {
         voice_map.insert(def.id.clone(), Vec::new());
     }
 
-    // Start with the first defined voice
-    let mut current_voice_id = voice_defs[0].id.clone();
+    // Start with the first defined voice, or "1" if using dynamic voice switches
+    let mut current_voice_id = voice_defs
+        .first()
+        .map(|d| d.id.clone())
+        .unwrap_or_else(|| "1".to_string());
+
+    // Ensure we have a default voice for elements before the first VoiceSwitch
+    if !voice_map.contains_key(&current_voice_id) {
+        voice_map.insert(current_voice_id.clone(), Vec::new());
+    }
 
     for element in elements {
         match element {
@@ -76,7 +89,7 @@ fn route_elements_to_voices(
         }
     }
 
-    // Build voices in order of definitions, plus any extras
+    // Build voices in order of definitions first
     let mut voices = Vec::new();
     for def in voice_defs {
         let elements = voice_map.remove(&def.id).unwrap_or_default();
@@ -88,7 +101,11 @@ fn route_elements_to_voices(
     }
 
     // Add any voices that were created by VoiceSwitch but not in defs
-    for (id, elements) in voice_map {
+    // Sort by ID for deterministic output
+    let mut extra_voices: Vec<_> = voice_map.into_iter().collect();
+    extra_voices.sort_by(|a, b| a.0.cmp(&b.0));
+
+    for (id, elements) in extra_voices {
         if !elements.is_empty() {
             voices.push(Voice {
                 id: Some(id),
@@ -424,5 +441,62 @@ mod tests {
 
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0], "G");
+    }
+
+    #[test]
+    fn test_multivoice_without_header_defs() {
+        // This is the bug case from session-review-2026-01-05:
+        // V:1 and V:2 in the body WITHOUT voice definitions in header
+        let abc = "X:1\nT:Test\nM:4/4\nL:1/4\nK:C\nV:1\nCD|\nV:2\nEF|\n";
+        let result = parse(abc);
+
+        assert!(!result.has_errors(), "Parse errors: {:?}", result.feedback);
+
+        // Should have TWO voices, not one merged voice
+        assert_eq!(result.value.voices.len(), 2, "Expected 2 voices, got {}. Voices: {:?}",
+            result.value.voices.len(),
+            result.value.voices.iter().map(|v| v.id.clone()).collect::<Vec<_>>());
+
+        // Voice 1 should have C, D
+        let v1_notes: Vec<_> = result.value.voices[0]
+            .elements
+            .iter()
+            .filter_map(|e| match e {
+                Element::Note(n) => Some(n.pitch),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(v1_notes, vec![NoteName::C, NoteName::D], "Voice 1 notes wrong");
+
+        // Voice 2 should have E, F
+        let v2_notes: Vec<_> = result.value.voices[1]
+            .elements
+            .iter()
+            .filter_map(|e| match e {
+                Element::Note(n) => Some(n.pitch),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(v2_notes, vec![NoteName::E, NoteName::F], "Voice 2 notes wrong");
+    }
+
+    #[test]
+    fn test_multivoice_midi_simultaneous() {
+        // Verify that multi-voice ABC produces MIDI with simultaneous notes
+        let abc = "X:1\nT:Test\nM:4/4\nL:1/4\nK:C\nV:1\nc|\nV:2\nC|\n";
+        let result = parse(abc);
+        assert!(!result.has_errors());
+        assert_eq!(result.value.voices.len(), 2);
+
+        // Generate MIDI
+        let midi = crate::midi::generate(&result.value, &crate::MidiParams::default());
+
+        // Should be format 1 (multi-track) - byte 9 should be 0x01
+        assert_eq!(&midi[0..4], b"MThd", "Not valid MIDI header");
+        assert_eq!(midi[9], 1, "Should be MIDI format 1 (multi-track)");
+
+        // Should have 3 tracks (tempo + 2 voices) - bytes 10-11
+        let track_count = u16::from_be_bytes([midi[10], midi[11]]);
+        assert_eq!(track_count, 3, "Expected 3 tracks (tempo + 2 voices)");
     }
 }
