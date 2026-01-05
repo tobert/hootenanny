@@ -1003,6 +1003,81 @@ pub fn garden_set_tempo_request() -> Value {
     })
 }
 
+/// Schema for GardenCreateRegionRequest
+pub fn garden_create_region_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "position": {
+                "type": "number",
+                "description": "Beat position for the region"
+            },
+            "duration": {
+                "type": "number",
+                "description": "Duration in beats"
+            },
+            "behavior_type": {
+                "type": "string",
+                "description": "Type of region behavior (e.g., 'play_audio')"
+            },
+            "content_id": {
+                "type": "string",
+                "description": "Content identifier (artifact ID or CAS hash)"
+            }
+        },
+        "required": ["position", "duration", "behavior_type", "content_id"]
+    })
+}
+
+/// Schema for GardenDeleteRegionRequest
+pub fn garden_delete_region_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "region_id": {
+                "type": "string",
+                "description": "UUID of the region to delete"
+            }
+        },
+        "required": ["region_id"]
+    })
+}
+
+/// Schema for GardenMoveRegionRequest
+pub fn garden_move_region_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "region_id": {
+                "type": "string",
+                "description": "UUID of the region to move"
+            },
+            "new_position": {
+                "type": "number",
+                "description": "New beat position"
+            }
+        },
+        "required": ["region_id", "new_position"]
+    })
+}
+
+/// Schema for GardenGetRegionsRequest
+pub fn garden_get_regions_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "start": {
+                "type": ["number", "null"],
+                "description": "Start of range in beats (optional)"
+            },
+            "end": {
+                "type": ["number", "null"],
+                "description": "End of range in beats (optional)"
+            }
+        }
+    })
+}
+
 /// Schema for ConfigGetRequest
 pub fn config_get_request() -> Value {
     json!({

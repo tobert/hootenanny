@@ -706,7 +706,8 @@ impl TypedDispatcher {
             | ToolRequest::GardenEmergencyPause
             | ToolRequest::GardenCreateRegion(_)
             | ToolRequest::GardenDeleteRegion(_)
-            | ToolRequest::GardenMoveRegion(_) => {
+            | ToolRequest::GardenMoveRegion(_)
+            | ToolRequest::GardenClearRegions => {
                 unreachable!(
                     "FireAndForget tools should be routed via dispatch_fire_and_forget"
                 )
@@ -883,6 +884,12 @@ impl TypedDispatcher {
                         "moved region {} to position {}",
                         req.region_id, req.new_position
                     ))),
+                    Err(e) => Err(e.message().to_string()),
+                }
+            }
+            ToolRequest::GardenClearRegions => {
+                match self.server.garden_clear_regions_fire(Some(&job_id_str)).await {
+                    Ok(count) => Ok(ToolResponse::ack(format!("cleared {} regions", count))),
                     Err(e) => Err(e.message().to_string()),
                 }
             }

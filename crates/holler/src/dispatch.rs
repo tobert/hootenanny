@@ -152,6 +152,7 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 new_position: p.new_position,
             })))
         }
+        "garden_clear_regions" => Ok(Payload::ToolRequest(ToolRequest::GardenClearRegions)),
         "garden_get_regions" => {
             let p: GardenGetRegionsArgs = serde_json::from_value(args).unwrap_or_default();
             Ok(Payload::ToolRequest(ToolRequest::GardenGetRegions(request::GardenGetRegionsRequest {

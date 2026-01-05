@@ -221,6 +221,7 @@ const GARDEN_HELP: &str = r#"# garden_* - Timeline & playback
 - garden_get_regions: List scheduled regions
 - garden_delete_region: Remove by ID
 - garden_move_region: Reposition
+- garden_clear_regions: Remove all regions
 
 ## Status
 - garden_status: Full state

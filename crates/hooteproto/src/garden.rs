@@ -307,6 +307,7 @@ pub enum ShellRequest {
         region_id: Uuid,
         new_position: Beat,
     },
+    ClearRegions,
 
     // Latent state updates
     UpdateLatentStarted {

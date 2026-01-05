@@ -221,6 +221,31 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Get audio input status".to_string(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
         },
+        ToolInfo {
+            name: "garden_create_region".to_string(),
+            description: "Create a region on the timeline".to_string(),
+            input_schema: manual_schemas::garden_create_region_request(),
+        },
+        ToolInfo {
+            name: "garden_delete_region".to_string(),
+            description: "Delete a region from the timeline".to_string(),
+            input_schema: manual_schemas::garden_delete_region_request(),
+        },
+        ToolInfo {
+            name: "garden_move_region".to_string(),
+            description: "Move a region to a new position".to_string(),
+            input_schema: manual_schemas::garden_move_region_request(),
+        },
+        ToolInfo {
+            name: "garden_clear_regions".to_string(),
+            description: "Clear all regions from the timeline".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        ToolInfo {
+            name: "garden_get_regions".to_string(),
+            description: "Get regions in a time range".to_string(),
+            input_schema: manual_schemas::garden_get_regions_request(),
+        },
 
         // ==========================================================================
         // Config Tools

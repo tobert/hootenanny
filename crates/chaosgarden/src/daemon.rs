@@ -847,6 +847,14 @@ impl GardenDaemon {
         deleted
     }
 
+    fn clear_regions(&self) -> usize {
+        let mut regions = self.regions.write().unwrap();
+        let count = regions.len();
+        regions.clear();
+        info!("Cleared {} regions", count);
+        count
+    }
+
     fn move_region(&self, region_id: Uuid, new_position: Beat) -> bool {
         let mut regions = self.regions.write().unwrap();
         if let Some(region) = regions.iter_mut().find(|r| r.id == region_id) {
@@ -1161,6 +1169,12 @@ impl GardenDaemon {
                         error: format!("Region {} not found", region_id),
                         traceback: None,
                     }
+                }
+            }
+            ShellRequest::ClearRegions => {
+                let count = self.clear_regions();
+                ShellReply::Ok {
+                    result: serde_json::json!({"cleared": count}),
                 }
             }
             ShellRequest::MoveRegion { region_id, new_position } => {

@@ -127,6 +127,8 @@ pub enum ToolRequest {
     GardenInputStatus,
     /// Set monitor
     GardenSetMonitor(GardenSetMonitorRequest),
+    /// Clear all regions
+    GardenClearRegions,
 
     // ==========================================================================
     // Tool Help
@@ -283,7 +285,8 @@ impl ToolRequest {
             | Self::GardenEmergencyPause => ToolTiming::FireAndForget,
             Self::GardenCreateRegion(_)
             | Self::GardenDeleteRegion(_)
-            | Self::GardenMoveRegion(_) => ToolTiming::FireAndForget,
+            | Self::GardenMoveRegion(_)
+            | Self::GardenClearRegions => ToolTiming::FireAndForget,
         }
     }
 
@@ -326,6 +329,7 @@ impl ToolRequest {
             Self::GardenCreateRegion(_) => "garden_create_region",
             Self::GardenDeleteRegion(_) => "garden_delete_region",
             Self::GardenMoveRegion(_) => "garden_move_region",
+            Self::GardenClearRegions => "garden_clear_regions",
             Self::GardenQuery(_) => "garden_query",
             Self::GardenEmergencyPause => "garden_emergency_pause",
             Self::GardenAttachAudio(_) => "garden_attach_audio",

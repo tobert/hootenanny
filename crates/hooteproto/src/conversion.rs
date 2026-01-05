@@ -596,6 +596,7 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             s.set_gain(req.gain.unwrap_or(1.0));
             s.set_gain_set(req.gain.is_some());
         }
+        ToolRequest::GardenClearRegions => builder.reborrow().set_garden_clear_regions(()),
         ToolRequest::GetToolHelp(req) => builder.reborrow().init_get_tool_help().set_topic(req.topic.as_deref().unwrap_or("")),
         ToolRequest::Schedule(req) => {
             let mut s = builder.reborrow().init_schedule();
@@ -1072,6 +1073,7 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
                 gain: if s.get_gain_set() { Some(s.get_gain()) } else { None },
             }))
         }
+        tools_capnp::tool_request::GardenClearRegions(()) => Ok(ToolRequest::GardenClearRegions),
         tools_capnp::tool_request::GetToolHelp(h) => Ok(ToolRequest::GetToolHelp(GetToolHelpRequest { topic: capnp_optional_string(h?.get_topic()?) })),
         tools_capnp::tool_request::Schedule(s) => {
             let s = s?;

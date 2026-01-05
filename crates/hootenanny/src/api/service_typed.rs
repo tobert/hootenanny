@@ -551,6 +551,39 @@ impl EventDualityServer {
         }
     }
 
+    pub async fn garden_clear_regions_fire(
+        &self,
+        _job_id: Option<&str>,
+    ) -> Result<usize, ToolError> {
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
+
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
+
+        let request = ToolRequest::GardenClearRegions;
+
+        match manager.tool_request(request).await {
+            Ok(ToolResponse::Ack(ack)) => {
+                // Parse count from ack message if needed, default to 0
+                let count = ack.message.split_whitespace()
+                    .find_map(|s| s.parse::<usize>().ok())
+                    .unwrap_or(0);
+                Ok(count)
+            }
+            Ok(other) => Err(ToolError::internal(format!(
+                "Unexpected response for ClearRegions: {:?}",
+                other
+            ))),
+            Err(e) => Err(ToolError::service(
+                "chaosgarden",
+                "clear_regions_failed",
+                e.to_string(),
+            )),
+        }
+    }
+
     // =========================================================================
     // Jobs - Typed
     // =========================================================================

@@ -109,6 +109,7 @@ struct ToolRequest {
     gardenDetachInput @67 :Void;
     gardenInputStatus @68 :Void;
     gardenSetMonitor @69 :Garden.SetMonitor;
+    gardenClearRegions @78 :Void;
 
     # === Help & Model-Native ===
     getToolHelp @70 :GetToolHelp;
