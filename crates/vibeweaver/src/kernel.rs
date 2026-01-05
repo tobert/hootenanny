@@ -21,6 +21,9 @@ impl Kernel {
             let builtins = py.import("builtins")?;
             globals.set_item("__builtins__", builtins)?;
 
+            // Ensure user site-packages is in sys.path (for pip install --user packages)
+            Self::ensure_user_site_packages(py)?;
+
             Self::inject_vibeweaver_api(py, &globals)?;
 
             Ok(Self {
@@ -28,6 +31,34 @@ impl Kernel {
             })
         })
         .context("Failed to initialize Python kernel")
+    }
+
+    /// Add user site-packages to sys.path if it exists
+    ///
+    /// PyO3's embedded Python doesn't automatically include user site-packages,
+    /// so packages installed with `pip install --user` aren't visible.
+    /// This uses Python's site module to detect and add the correct path.
+    fn ensure_user_site_packages(py: Python<'_>) -> PyResult<()> {
+        let site = py.import("site")?;
+        let sys = py.import("sys")?;
+
+        // Get user site-packages directory from site module
+        let user_site = site.call_method0("getusersitepackages")?;
+        let user_site_str: String = user_site.extract()?;
+
+        // Only add if the directory exists
+        if std::path::Path::new(&user_site_str).exists() {
+            let sys_path = sys.getattr("path")?;
+            let path_list: Vec<String> = sys_path.extract()?;
+
+            // Only add if not already in path
+            if !path_list.contains(&user_site_str) {
+                sys_path.call_method1("append", (&user_site_str,))?;
+                tracing::info!("Added user site-packages to sys.path: {}", user_site_str);
+            }
+        }
+
+        Ok(())
     }
 
     /// Inject vibeweaver API functions into globals
