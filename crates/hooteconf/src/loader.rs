@@ -1,5 +1,9 @@
 //! Config file discovery, loading, and environment variable overlay.
 
+use crate::infra::{
+    BindConfig, ChaosgardenConfig, GatewayConfig, HttpConfig, TelemetryConfig,
+    VibeweaverConfig,
+};
 use crate::{BootstrapConfig, ConfigError, HootConfig, InfraConfig};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -211,6 +215,11 @@ pub fn merge_configs(base: HootConfig, overlay: HootConfig) -> HootConfig {
                 },
             },
             bind: crate::infra::BindConfig {
+                http_address: if overlay.infra.bind.http_address != BindConfig::default().http_address {
+                    overlay.infra.bind.http_address
+                } else {
+                    base.infra.bind.http_address
+                },
                 http_port: if overlay.infra.bind.http_port != BindConfig::default().http_port {
                     overlay.infra.bind.http_port
                 } else {
@@ -225,6 +234,23 @@ pub fn merge_configs(base: HootConfig, overlay: HootConfig) -> HootConfig {
                     overlay.infra.bind.zmq_pub
                 } else {
                     base.infra.bind.zmq_pub
+                },
+            },
+            http: crate::infra::HttpConfig {
+                hostname: if overlay.infra.http.hostname.is_some() {
+                    overlay.infra.http.hostname
+                } else {
+                    base.infra.http.hostname
+                },
+                port: if overlay.infra.http.port.is_some() {
+                    overlay.infra.http.port
+                } else {
+                    base.infra.http.port
+                },
+                scheme: if overlay.infra.http.scheme != HttpConfig::default().scheme {
+                    overlay.infra.http.scheme
+                } else {
+                    base.infra.http.scheme
                 },
             },
             telemetry: crate::infra::TelemetryConfig {
@@ -302,11 +328,6 @@ pub fn merge_configs(base: HootConfig, overlay: HootConfig) -> HootConfig {
     }
 }
 
-use crate::infra::{
-    BindConfig, ChaosgardenConfig, GatewayConfig, TelemetryConfig,
-    VibeweaverConfig,
-};
-
 /// Apply environment variable overrides to config.
 pub fn apply_env_overrides(config: &mut HootConfig, sources: &mut ConfigSources) {
     // Infrastructure paths
@@ -329,6 +350,10 @@ pub fn apply_env_overrides(config: &mut HootConfig, sources: &mut ConfigSources)
     }
 
     // Bind addresses
+    if let Ok(v) = env::var("HOOTENANNY_HTTP_ADDRESS") {
+        config.infra.bind.http_address = v;
+        sources.env_overrides.push("HOOTENANNY_HTTP_ADDRESS".to_string());
+    }
     if let Ok(v) = env::var("HOOTENANNY_HTTP_PORT") {
         if let Ok(port) = v.parse() {
             config.infra.bind.http_port = port;
@@ -342,6 +367,22 @@ pub fn apply_env_overrides(config: &mut HootConfig, sources: &mut ConfigSources)
     if let Ok(v) = env::var("HOOTENANNY_ZMQ_PUB") {
         config.infra.bind.zmq_pub = v;
         sources.env_overrides.push("HOOTENANNY_ZMQ_PUB".to_string());
+    }
+
+    // External HTTP access config (for URL construction)
+    if let Ok(v) = env::var("HOOTENANNY_HTTP_HOSTNAME") {
+        config.infra.http.hostname = Some(v);
+        sources.env_overrides.push("HOOTENANNY_HTTP_HOSTNAME".to_string());
+    }
+    if let Ok(v) = env::var("HOOTENANNY_HTTP_EXTERNAL_PORT") {
+        if let Ok(port) = v.parse() {
+            config.infra.http.port = Some(port);
+            sources.env_overrides.push("HOOTENANNY_HTTP_EXTERNAL_PORT".to_string());
+        }
+    }
+    if let Ok(v) = env::var("HOOTENANNY_HTTP_SCHEME") {
+        config.infra.http.scheme = v;
+        sources.env_overrides.push("HOOTENANNY_HTTP_SCHEME".to_string());
     }
 
     // Telemetry

@@ -67,7 +67,7 @@ pub mod loader;
 
 pub use bootstrap::{BootstrapConfig, ConnectionsConfig, DefaultsConfig, MediaConfig, ModelsConfig};
 pub use infra::{
-    BindConfig, ChaosgardenConfig, GatewayConfig, InfraConfig, PathsConfig,
+    BindConfig, ChaosgardenConfig, GatewayConfig, HttpConfig, InfraConfig, PathsConfig,
     ServicesConfig, TelemetryConfig, VibeweaverConfig,
 };
 pub use loader::{ConfigSources, discover_config_files_with_override};
@@ -170,9 +170,19 @@ impl HootConfig {
         }
 
         output.push_str("\n[bind]\n");
+        output.push_str(&format!("http_address = \"{}\"\n", self.infra.bind.http_address));
         output.push_str(&format!("http_port = {}\n", self.infra.bind.http_port));
         output.push_str(&format!("zmq_router = \"{}\"\n", self.infra.bind.zmq_router));
         output.push_str(&format!("zmq_pub = \"{}\"\n", self.infra.bind.zmq_pub));
+
+        output.push_str("\n[http]\n");
+        if let Some(hostname) = &self.infra.http.hostname {
+            output.push_str(&format!("hostname = \"{}\"\n", hostname));
+        }
+        if let Some(port) = self.infra.http.port {
+            output.push_str(&format!("port = {}\n", port));
+        }
+        output.push_str(&format!("scheme = \"{}\"\n", self.infra.http.scheme));
 
         output.push_str("\n[telemetry]\n");
         output.push_str(&format!(

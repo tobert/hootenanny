@@ -245,10 +245,9 @@ async fn main() -> Result<()> {
         None
     };
 
-    let http_port = config.infra.bind.http_port;
+    let http_addr = config.infra.bind.http_bind_addr();
     let zmq_router = &config.infra.bind.zmq_router;
     let zmq_pub = &config.infra.bind.zmq_pub;
-    let addr = format!("0.0.0.0:{}", http_port);
 
     // --- Event Buffer for cursor-based polling ---
     info!("📋 Creating event buffer...");
@@ -349,11 +348,13 @@ async fn main() -> Result<()> {
         info!("   Vibeweaver proxy: enabled (via EventDualityServer)");
     }
 
-    info!("🎵 Hootenanny starting on http://{}", addr);
-    info!("   Artifact Content: GET http://{}/artifact/:id", addr);
-    info!("   Artifact Meta: GET http://{}/artifact/:id/meta", addr);
-    info!("   Artifacts List: GET http://{}/artifacts", addr);
-    info!("   Health: GET http://{}/health", addr);
+    info!("🎵 Hootenanny starting on http://{}", http_addr);
+    info!("   UI: http://{}/ui", http_addr);
+    info!("   Live Stream: ws://{}/stream/live", http_addr);
+    info!("   Artifact Content: GET http://{}/artifact/:id", http_addr);
+    info!("   Artifact Meta: GET http://{}/artifact/:id/meta", http_addr);
+    info!("   Artifacts List: GET http://{}/artifacts", http_addr);
+    info!("   Health: GET http://{}/health", http_addr);
     info!("   ZMQ ROUTER: {} (for holler MCP gateway)", zmq_router);
     info!("   ZMQ PUB: {} (for SSE broadcasts)", zmq_pub);
 
@@ -430,7 +431,7 @@ async fn main() -> Result<()> {
         .merge(health_router)
         .merge(artifact_router);
 
-    let bind_addr: std::net::SocketAddr = addr.parse().context("Failed to parse bind address")?;
+    let bind_addr: std::net::SocketAddr = http_addr.parse().context("Failed to parse bind address")?;
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
 
     info!("🌐 Router created, starting server...");

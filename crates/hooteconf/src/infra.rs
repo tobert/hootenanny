@@ -64,6 +64,12 @@ impl Default for PathsConfig {
 /// Network bind addresses for this process.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BindConfig {
+    /// HTTP bind address (IP only, without port).
+    /// Default: "127.0.0.1" (localhost-only for security)
+    /// Example: "0.0.0.0" (all interfaces), "100.64.x.y" (tailscale)
+    #[serde(default = "BindConfig::default_http_address")]
+    pub http_address: String,
+
     /// HTTP port for artifacts and health endpoints.
     /// Default: 8082
     #[serde(default = "BindConfig::default_http_port")]
@@ -81,6 +87,10 @@ pub struct BindConfig {
 }
 
 impl BindConfig {
+    fn default_http_address() -> String {
+        "127.0.0.1".to_string()
+    }
+
     fn default_http_port() -> u16 {
         8082
     }
@@ -92,14 +102,76 @@ impl BindConfig {
     fn default_zmq_pub() -> String {
         "tcp://0.0.0.0:5581".to_string()
     }
+
+    /// Get the full HTTP bind address as "ip:port".
+    pub fn http_bind_addr(&self) -> String {
+        format!("{}:{}", self.http_address, self.http_port)
+    }
 }
 
 impl Default for BindConfig {
     fn default() -> Self {
         Self {
+            http_address: Self::default_http_address(),
             http_port: Self::default_http_port(),
             zmq_router: Self::default_zmq_router(),
             zmq_pub: Self::default_zmq_pub(),
+        }
+    }
+}
+
+/// External HTTP access configuration for URL construction.
+///
+/// This is separate from bind addresses because the external URL
+/// may differ (e.g., behind a proxy, or using a tailscale hostname).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpConfig {
+    /// External hostname/IP for constructing URLs that agents can use.
+    /// If unset, falls back to bind.http_address.
+    /// Example: "beast.tail1234.ts.net" or "100.64.1.2"
+    pub hostname: Option<String>,
+
+    /// External port (if different from bind port, e.g., behind proxy).
+    /// If unset, falls back to bind.http_port.
+    pub port: Option<u16>,
+
+    /// URL scheme. Default: "http".
+    /// Future: "https" when TLS is added.
+    #[serde(default = "HttpConfig::default_scheme")]
+    pub scheme: String,
+}
+
+impl HttpConfig {
+    fn default_scheme() -> String {
+        "http".to_string()
+    }
+
+    /// Construct base URL for external access.
+    pub fn base_url(&self, bind: &BindConfig) -> String {
+        let host = self.hostname.as_deref().unwrap_or(&bind.http_address);
+        let port = self.port.unwrap_or(bind.http_port);
+        format!("{}://{}:{}", self.scheme, host, port)
+    }
+
+    /// Construct full artifact URL for agent-friendly responses.
+    pub fn artifact_url(&self, bind: &BindConfig, artifact_id: &str) -> String {
+        format!("{}/artifact/{}", self.base_url(bind), artifact_id)
+    }
+
+    /// Construct full stream URL.
+    pub fn stream_url(&self, bind: &BindConfig) -> String {
+        let host = self.hostname.as_deref().unwrap_or(&bind.http_address);
+        let port = self.port.unwrap_or(bind.http_port);
+        format!("ws://{}:{}/stream/live", host, port)
+    }
+}
+
+impl Default for HttpConfig {
+    fn default() -> Self {
+        Self {
+            hostname: None,
+            port: None,
+            scheme: Self::default_scheme(),
         }
     }
 }
@@ -302,6 +374,10 @@ pub struct InfraConfig {
     #[serde(default)]
     pub bind: BindConfig,
 
+    /// External HTTP access configuration (for URL construction).
+    #[serde(default)]
+    pub http: HttpConfig,
+
     /// Telemetry settings.
     #[serde(default)]
     pub telemetry: TelemetryConfig,
@@ -350,9 +426,48 @@ mod tests {
     #[test]
     fn test_bind_defaults() {
         let bind = BindConfig::default();
+        assert_eq!(bind.http_address, "127.0.0.1");
         assert_eq!(bind.http_port, 8082);
         assert_eq!(bind.zmq_router, "tcp://0.0.0.0:5580");
         assert_eq!(bind.zmq_pub, "tcp://0.0.0.0:5581");
+        assert_eq!(bind.http_bind_addr(), "127.0.0.1:8082");
+    }
+
+    #[test]
+    fn test_http_config_defaults() {
+        let http = HttpConfig::default();
+        assert!(http.hostname.is_none());
+        assert!(http.port.is_none());
+        assert_eq!(http.scheme, "http");
+    }
+
+    #[test]
+    fn test_http_config_url_construction() {
+        let bind = BindConfig::default();
+
+        // With defaults, uses bind address
+        let http = HttpConfig::default();
+        assert_eq!(http.base_url(&bind), "http://127.0.0.1:8082");
+        assert_eq!(
+            http.artifact_url(&bind, "artifact_123"),
+            "http://127.0.0.1:8082/artifact/artifact_123"
+        );
+
+        // With custom hostname
+        let http = HttpConfig {
+            hostname: Some("beast.ts.net".to_string()),
+            port: None,
+            scheme: "http".to_string(),
+        };
+        assert_eq!(http.base_url(&bind), "http://beast.ts.net:8082");
+
+        // With custom hostname and port
+        let http = HttpConfig {
+            hostname: Some("beast.ts.net".to_string()),
+            port: Some(443),
+            scheme: "https".to_string(),
+        };
+        assert_eq!(http.base_url(&bind), "https://beast.ts.net:443");
     }
 
     #[test]

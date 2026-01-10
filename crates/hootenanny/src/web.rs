@@ -8,13 +8,17 @@
 use crate::artifact_store::{ArtifactStore, FileStore};
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Path, Query, State,
+    },
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Json, Router,
 };
 use cas::{ContentStore, FileStore as CasFileStore};
+use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 use tokio_util::io::ReaderStream;
@@ -31,8 +35,344 @@ pub fn router(state: WebState) -> Router {
         .route("/artifact/{id}", get(download_artifact))
         .route("/artifact/{id}/meta", get(artifact_meta))
         .route("/artifacts", get(list_artifacts))
+        .route("/ui", get(serve_ui))
+        .route("/stream/live", get(stream_live_ws))
+        .route("/stream/live/status", get(stream_status))
+        .route("/", get(serve_root))
         .with_state(state)
 }
+
+/// Serve root discovery endpoint
+async fn serve_root() -> impl IntoResponse {
+    let links = serde_json::json!({
+        "name": "Hootenanny",
+        "version": env!("CARGO_PKG_VERSION"),
+        "links": {
+            "ui": "/ui",
+            "artifacts": "/artifacts",
+            "health": "/health",
+        }
+    });
+    Json(links)
+}
+
+/// Serve the UI page
+async fn serve_ui() -> impl IntoResponse {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .body(UI_HTML.to_string())
+        .unwrap()
+}
+
+/// WebSocket handler for live audio streaming
+async fn stream_live_ws(ws: WebSocketUpgrade) -> impl IntoResponse {
+    ws.on_upgrade(handle_live_stream)
+}
+
+/// Handle a live stream WebSocket connection
+async fn handle_live_stream(socket: WebSocket) {
+    let (mut sender, mut receiver) = socket.split();
+
+    // Wait for client to send start message
+    while let Some(Ok(msg)) = receiver.next().await {
+        if let Message::Text(text) = msg {
+            if let Ok(cmd) = serde_json::from_str::<StreamCommand>(&text) {
+                match cmd.r#type.as_str() {
+                    "start" => {
+                        tracing::info!("Live stream started, buffer_ms: {:?}", cmd.buffer_ms);
+                        break;
+                    }
+                    "stop" => {
+                        tracing::info!("Live stream stopped by client");
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Stream audio data
+    // TODO: Wire this to chaosgarden audio snapshot when implemented
+    // For now, send silence at 48kHz stereo
+    let sample_rate: u32 = 48000;
+    let channels: u16 = 2;
+    let format: u16 = 0; // f32le
+    let samples_per_packet = 512;
+
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(10));
+
+    loop {
+        interval.tick().await;
+
+        // Build packet: 8-byte header + PCM samples
+        let mut packet = Vec::with_capacity(8 + samples_per_packet * 2 * 4);
+
+        // Header: sample_rate (u32) + channels (u16) + format (u16)
+        packet.extend_from_slice(&sample_rate.to_le_bytes());
+        packet.extend_from_slice(&channels.to_le_bytes());
+        packet.extend_from_slice(&format.to_le_bytes());
+
+        // Silence samples (interleaved stereo f32)
+        for _ in 0..(samples_per_packet * 2) {
+            packet.extend_from_slice(&0.0_f32.to_le_bytes());
+        }
+
+        if sender.send(Message::Binary(packet.into())).await.is_err() {
+            break;
+        }
+
+        // Check for stop command
+        if let Ok(Some(Ok(Message::Text(text)))) =
+            tokio::time::timeout(tokio::time::Duration::from_millis(1), receiver.next()).await
+        {
+            if let Ok(cmd) = serde_json::from_str::<StreamCommand>(&text) {
+                if cmd.r#type == "stop" {
+                    tracing::info!("Live stream stopped by client");
+                    break;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct StreamCommand {
+    r#type: String,
+    buffer_ms: Option<u32>,
+}
+
+/// Get stream status
+async fn stream_status() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "status": "available",
+        "sample_rate": 48000,
+        "channels": 2,
+        "format": "f32le",
+        "note": "Audio streaming not yet connected to chaosgarden"
+    }))
+}
+
+/// HTML template for the artifact browser UI
+const UI_HTML: &str = r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hootenanny</title>
+  <style>
+    :root { --bg: #1a1a2e; --card: #16213e; --accent: #e94560; --text: #eee; --muted: #888; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); padding: 1rem; min-height: 100vh; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem; }
+    h1 { font-size: 1.5rem; display: flex; align-items: center; gap: 0.5rem; }
+    .live-toggle { background: var(--accent); border: none; color: white; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; font-size: 0.9rem; }
+    .live-toggle:hover { opacity: 0.9; }
+    .live-toggle.active { background: #0c6; }
+    .filters { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .filters input, .filters select { padding: 0.5rem; border: 1px solid #333; border-radius: 4px; background: var(--card); color: var(--text); font-size: 0.9rem; }
+    .filters input { flex: 1; min-width: 150px; }
+    .artifacts { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
+    .artifact { background: var(--card); padding: 1rem; border-radius: 8px; }
+    .artifact-type { font-size: 0.7rem; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
+    .artifact-id { font-weight: 600; margin: 0.25rem 0; word-break: break-all; font-size: 0.95rem; }
+    .artifact-meta { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.5rem; }
+    .artifact audio { width: 100%; margin-top: 0.5rem; height: 36px; }
+    .artifact a { color: var(--accent); text-decoration: none; font-size: 0.85rem; }
+    .artifact a:hover { text-decoration: underline; }
+    .live-section { background: var(--card); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; }
+    .live-section h3 { font-size: 1rem; margin-bottom: 0.5rem; }
+    .visualizer { height: 60px; background: #0a0a15; border-radius: 4px; margin-bottom: 0.5rem; }
+    .status { font-size: 0.8rem; color: var(--muted); }
+    .empty { text-align: center; padding: 3rem; color: var(--muted); }
+    .tag { display: inline-block; background: #2a2a4e; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.7rem; margin-right: 0.25rem; margin-top: 0.25rem; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🎵 Hootenanny</h1>
+    <button class="live-toggle" id="liveToggle" title="Stream live audio output">▶ Live</button>
+  </div>
+
+  <div class="live-section" id="liveSection" style="display:none;">
+    <h3>Live Output</h3>
+    <canvas class="visualizer" id="visualizer"></canvas>
+    <div class="status" id="streamStatus">Click Live to connect...</div>
+  </div>
+
+  <div class="filters">
+    <input type="search" id="search" placeholder="Search artifacts...">
+    <select id="typeFilter">
+      <option value="">All types</option>
+      <option value="audio">Audio</option>
+      <option value="midi">MIDI</option>
+      <option value="soundfont">SoundFont</option>
+    </select>
+    <select id="creatorFilter">
+      <option value="">All creators</option>
+    </select>
+  </div>
+
+  <div class="artifacts" id="artifactList">
+    <div class="empty">Loading artifacts...</div>
+  </div>
+
+  <script>
+    const API_BASE = '';
+    let allArtifacts = [];
+    let ws = null;
+    let audioCtx = null;
+    let workletNode = null;
+
+    async function loadArtifacts() {
+      try {
+        const res = await fetch(`${API_BASE}/artifacts?limit=200`);
+        allArtifacts = await res.json();
+        populateCreatorFilter();
+        renderArtifacts();
+      } catch (e) {
+        document.getElementById('artifactList').innerHTML = '<div class="empty">Failed to load artifacts</div>';
+      }
+    }
+
+    function populateCreatorFilter() {
+      const creators = [...new Set(allArtifacts.map(a => a.creator))].sort();
+      const select = document.getElementById('creatorFilter');
+      creators.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.textContent = c;
+        select.appendChild(opt);
+      });
+    }
+
+    function renderArtifacts() {
+      const search = document.getElementById('search').value.toLowerCase();
+      const typeFilter = document.getElementById('typeFilter').value;
+      const creatorFilter = document.getElementById('creatorFilter').value;
+
+      const filtered = allArtifacts.filter(a => {
+        if (search && !a.id.toLowerCase().includes(search) && !a.tags.some(t => t.toLowerCase().includes(search))) return false;
+        if (typeFilter && !a.tags.some(t => t === `type:${typeFilter}`)) return false;
+        if (creatorFilter && a.creator !== creatorFilter) return false;
+        return true;
+      });
+
+      const list = document.getElementById('artifactList');
+      if (filtered.length === 0) {
+        list.innerHTML = '<div class="empty">No artifacts found</div>';
+        return;
+      }
+
+      list.innerHTML = filtered.map(a => `
+        <div class="artifact">
+          <div class="artifact-type">${getType(a.tags)}</div>
+          <div class="artifact-id">${a.id}</div>
+          <div class="artifact-meta">${a.creator} · ${new Date(a.created_at).toLocaleDateString()}</div>
+          <div>${a.tags.map(t => `<span class="tag">${t}</span>`).join('')}</div>
+          ${isAudio(a.tags) ? `<audio controls preload="none" src="${a.content_url}"></audio>` : `<a href="${a.content_url}" target="_blank">Download</a>`}
+        </div>
+      `).join('');
+    }
+
+    function getType(tags) {
+      const typeTag = tags.find(t => t.startsWith('type:'));
+      return typeTag ? typeTag.split(':')[1] : 'unknown';
+    }
+
+    function isAudio(tags) {
+      return tags.some(t => t === 'type:audio' || t === 'type:wav' || t.includes('audio'));
+    }
+
+    // Live streaming with AudioWorklet
+    async function startLive() {
+      if (!audioCtx) {
+        audioCtx = new AudioContext({ sampleRate: 48000 });
+        const workletCode = `
+          class PCMProcessor extends AudioWorkletProcessor {
+            constructor() {
+              super();
+              this.buffer = [];
+              this.port.onmessage = e => {
+                this.buffer.push(...e.data);
+                if (this.buffer.length > 48000) this.buffer.splice(0, this.buffer.length - 48000);
+              };
+            }
+            process(inputs, outputs) {
+              const out = outputs[0];
+              const needed = out[0].length * 2;
+              for (let ch = 0; ch < out.length; ch++) {
+                for (let i = 0; i < out[ch].length; i++) {
+                  const idx = i * 2 + ch;
+                  out[ch][i] = idx < this.buffer.length ? this.buffer[idx] : 0;
+                }
+              }
+              if (this.buffer.length >= needed) this.buffer.splice(0, needed);
+              return true;
+            }
+          }
+          registerProcessor('pcm-processor', PCMProcessor);
+        `;
+        const blob = new Blob([workletCode], { type: 'application/javascript' });
+        await audioCtx.audioWorklet.addModule(URL.createObjectURL(blob));
+        workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor');
+        workletNode.connect(audioCtx.destination);
+      }
+
+      const wsUrl = `ws://${location.host}/stream/live`;
+      ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+      document.getElementById('streamStatus').textContent = 'Connecting...';
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ type: 'start', buffer_ms: 150 }));
+        document.getElementById('streamStatus').textContent = 'Connected - streaming audio';
+      };
+
+      ws.onmessage = (e) => {
+        if (e.data instanceof ArrayBuffer && e.data.byteLength > 8) {
+          const samples = new Float32Array(e.data, 8);
+          workletNode.port.postMessage(Array.from(samples));
+        }
+      };
+
+      ws.onerror = () => {
+        document.getElementById('streamStatus').textContent = 'Connection error';
+      };
+
+      ws.onclose = () => {
+        document.getElementById('streamStatus').textContent = 'Disconnected';
+      };
+    }
+
+    function stopLive() {
+      if (ws) { ws.close(); ws = null; }
+      document.getElementById('streamStatus').textContent = 'Click Live to connect...';
+    }
+
+    document.getElementById('liveToggle').onclick = function() {
+      const section = document.getElementById('liveSection');
+      if (this.classList.toggle('active')) {
+        section.style.display = 'block';
+        this.textContent = '⏹ Stop';
+        startLive();
+      } else {
+        section.style.display = 'none';
+        this.textContent = '▶ Live';
+        stopLive();
+      }
+    };
+
+    document.getElementById('search').oninput = renderArtifacts;
+    document.getElementById('typeFilter').onchange = renderArtifacts;
+    document.getElementById('creatorFilter').onchange = renderArtifacts;
+
+    loadArtifacts();
+  </script>
+</body>
+</html>
+"##;
 
 /// Download artifact content
 ///

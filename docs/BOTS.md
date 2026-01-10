@@ -1,252 +1,201 @@
-# BOTS.md - Coding Agent Context for Hootenanny
+# CLAUDE.md - Agent Context for Hootenanny
 
-Hootenanny is an ensemble performance space for large language model agents, music models, and humans to create
-music interactively.
+Hootenanny is an MCP server that exposes music creation tools to AI agents. It uses ZeroMQ for service communication, Cap'n Proto for serialization, and PipeWire for audio.
 
-## 📜 Project Philosophy
+## Spirit of the Project
 
-- **Expressiveness over Performance:** We favor code that is rich in meaning. Use Rust's type system to tell a story. Create types that model the domain, even for simple concepts.
-- **Compiler as Creative Partner:** We use the compiler to validate our ideas. A clean compile isn't just a technical requirement; it's a sign that our concepts are sound.
-- **Embrace the Unknown:** This is a creative endeavor. We will explore, experiment, and sometimes refactor heavily as our understanding of the world we're building evolves.
+This is an instrument, not just infrastructure.
+We're building tools for ears - human and AI alike.
 
-## Development Guidelines
+**Sound is the purpose.** Every abstraction should make musical sense.
+A `Beat` is a moment in time. A `Region` is a phrase waiting to be heard.
+An `Artifact` is a creative act with lineage.
+
+**Exploration is the method.** This is research into what's possible when
+AI and humans make music together. Try things. Question assumptions.
+The best patterns emerge from play.
+
+**Collaboration is the medium.** Many minds touch this code - human and AI,
+Claude and Gemini and whatever comes next. Write for the contributor who
+follows you. Leave the codebase more welcoming than you found it.
+
+**Expression matters.** Beautiful code isn't vanity - it's clarity.
+Rich types, clear names, thoughtful structure. The code should teach as it runs.
+
+Make it work. Make it clear. Make it sing.
+
+## Quick Orientation
+
+**Crate structure:**
+- `holler` — MCP gateway, routes JSON tool calls to ZMQ backends
+- `hootenanny` — Control plane: jobs, artifacts, GPU service clients
+- `hooteproto` — Wire protocol: Cap'n Proto schemas, Rust types, serialization
+- `chaosgarden` — Audio daemon: PipeWire, timeline, transport
+- `vibeweaver` — Python kernel via PyO3
+- `cas` — Content-addressed storage (BLAKE3)
+- `abc` — ABC notation parser
+- `audio-graph-mcp` — Trustfall query adapter
+- `hooteconf` — Configuration loading
+
+**Key files when adding tools:**
+- `crates/hooteproto/schemas/tools.capnp` — Schema definitions
+- `crates/hooteproto/src/request.rs` — Rust request types
+- `crates/holler/src/dispatch.rs` — JSON → protocol conversion
+- `crates/hootenanny/src/api/typed_dispatcher.rs` — Tool execution
+- `crates/holler/src/tools_registry.rs` — MCP tool schemas
+
+## Development Rules
 
 ### Error Handling
 
-- Use `anyhow::Result` for all fallible operations
-- Never use `unwrap()` - always propagate errors with `?`
-- Add context with `.context()` for debugging
-- Never silently discard errors with `let _ =`
-- Handle reconnection gracefully on network failures
+- Use `anyhow::Result` for fallible operations
+- Never use `unwrap()` — propagate with `?`
+- Add context: `.context("what we were trying to do")`
+- Never discard errors with `let _ =`
 
 ### Code Style
 
-- Prioritize correctness and clarity over performance
-- No organizational comments that summarize code
-- Comments should only explain "why" when non-obvious
-- Implement functionality in existing files unless it's a new logical component
-- Avoid `mod.rs` files - use `src/module_name.rs` directly
-- Use full words for variable names (no abbreviations)
-- **Rich Types:** Avoid "primitive obsession." Instead of `String`, `u64`, etc., create newtypes (e.g., `struct UserId(u64);`, `struct SessionKey(String);`). This makes the code self-documenting and prevents logic errors.
-- **Enums as Storytellers:** Use enums to represent states, choices, and variations. `Result<T, E>` is a story about success or failure. `Option<T>` is a story about presence or absence. Let's use them to their full potential.
-- **Traits for Capabilities:** Define custom traits to describe the capabilities of your types. This allows for a more modular and extensible design.
+- Correctness and clarity over performance
+- No summary comments — code should be self-explanatory
+- Comments only for non-obvious "why"
+- Add to existing files unless it's a new logical component
+- Avoid `mod.rs` — use `src/module_name.rs`
+- Full words for names, no abbreviations
+- Prefer newtypes over primitives: `struct JobId(Uuid)` not `Uuid`
+- Use enums for states and variants
+- Define traits for shared capabilities
 
-### Version Control Hygiene
+### Version Control
 
-- **NEVER use wildcards when staging files.** No `git add .`. Never `git add -A`. We create a lot of ephemeral files and do a lot in parallel.
-- **Always add files by explicit path.** Review what you're committing: `git status`, `git add src/foo.rs src/bar.rs`, `git status`. Use precise filenames even when there are a lot of them.
-- **Review before pushing.** Use `git diff --staged` to verify exactly what's going in. Catching a stray file now saves reverting commits later.
-- **Commit frequently.** The git changelog can be our historical context. The git commits should be written to be easy
-  to analyze in bulk later on. We will tell our story of developing this via commits.
+- **Never `git add .` or `git add -A`** — always explicit paths
+- Review with `git status` before and after staging
+- Use `git diff --staged` before committing
+- Commit frequently with clear messages
 
-### Model Attributions
+### Commit Attribution
 
-Use Co-Authored-By in all commits, including models, humans, and agents who contributed to the commit.
+Include Co-Authored-By for all contributors:
+- `🤖 Claude <claude@anthropic.com>`
+- `💎 Gemini <gemini@google.com>`
 
-- Claude: `🤖 Claude <claude@anthropic.com>`
-- Gemini: `💎 Gemini <gemini@google.com>`
+## Tool System
 
-## 🛠️ MCP Tool Reference
+### Tool Prefixes
 
-### Tool Naming Conventions
+| Prefix | Domain |
+|--------|--------|
+| `orpheus_*` | MIDI generation |
+| `abc_*` | ABC notation |
+| `midi_*` | MIDI operations |
+| `audio_*` | Audio I/O |
+| `musicgen_*` | Text→audio |
+| `yue_*` | Lyrics→song |
+| `beats_detect` | Rhythm analysis |
+| `audio_analyze` | CLAP embeddings |
+| `timeline_*` | Timeline regions |
+| `play/pause/stop/seek/tempo` | Transport |
+| `artifact_*` | Storage |
+| `job_*` | Job management |
+| `graph_*` | Trustfall queries |
+| `kernel_*` | Python kernel |
+| `config/status/storage_stats` | System |
+| `help` | Documentation |
 
-All tools use consistent prefixes for discoverability. Use `help()` to browse all 51 tools.
+### Adding a New Tool
 
-| Prefix/Name | Domain | Examples |
-|-------------|--------|----------|
-| `orpheus_*` | MIDI generation | `orpheus_generate`, `orpheus_continue`, `orpheus_bridge` |
-| `abc_*` | ABC notation | `abc_validate`, `abc_to_midi` |
-| `midi_*` | MIDI operations | `midi_render`, `midi_classify`, `midi_info` |
-| `audio_*` | Audio I/O | `audio_output_attach`, `audio_input_attach`, `audio_monitor` |
-| `beats_detect` | Beat detection | `beats_detect` |
-| `audio_analyze` | CLAP analysis | `audio_analyze` |
-| `timeline_*` | Timeline regions | `timeline_region_create`, `timeline_region_list`, `timeline_clear` |
-| `job_*` | Job management | `job_poll`, `job_cancel`, `job_list` |
-| `graph_*` | Audio routing | `graph_bind`, `graph_connect`, `graph_query`, `graph_context` |
-| `kernel_*` | Python kernel | `kernel_eval`, `kernel_session`, `kernel_reset` |
-| `artifact_*` | Artifacts | `artifact_upload`, `artifact_list`, `artifact_get` |
-| bare verbs | Playback | `play`, `pause`, `stop`, `seek`, `tempo`, `status` |
-| `help` | Documentation | `help` (call with `tool:` or `category:` params) |
+1. **Schema** — `crates/hooteproto/schemas/tools.capnp`
+   - Add request struct
+   - Add variant to `ToolRequest` union
 
-### Adding New Tools & Cap'n Proto Schemas
+2. **Rust Types** — `crates/hooteproto/src/request.rs`
+   - Add request struct with serde derives
+   - Add enum variant
+   - Implement `tool_name()` and `timing()`
 
-When adding new tools or modifying the protocol, follow this checklist to ensure cargo properly rebuilds:
+3. **Serialization** — `crates/hooteproto/src/conversion.rs`
+   - Add to `request_to_capnp_tool_request()`
+   - Add to `capnp_tool_request_to_request()`
 
-#### Adding a New Schema File
+4. **MCP Dispatch** — `crates/holler/src/dispatch.rs`
+   - Add JSON args struct
+   - Add match arm in `json_to_payload()`
 
-1. Create `crates/hooteproto/schemas/newschema.capnp`
-2. **Update `build.rs`** - Add both the file reference AND the rerun directive:
-   ```rust
-   // In the schemas array:
-   "schemas/newschema.capnp",
-   ```
-3. Add the generated module to `lib.rs`:
-   ```rust
-   pub mod newschema_capnp {
-       include!(concat!(env!("OUT_DIR"), "/newschema_capnp.rs"));
-   }
-   ```
+5. **Execution** — `crates/hootenanny/src/api/typed_dispatcher.rs`
+   - Add match arm in `dispatch_async()` or `dispatch_fire_and_forget()`
 
-#### Modifying Existing Schemas
+6. **Discovery** — `crates/holler/src/tools_registry.rs`
+   - Add to `list_tools()` with JSON schema
 
-When you change a `.capnp` file, cargo should automatically rebuild thanks to `build.rs` watching each file individually. If it doesn't rebuild:
+### Cap'n Proto Rebuilds
 
+If schema changes don't trigger rebuilds:
 ```bash
-# Force rebuild of hooteproto
 cargo clean -p hooteproto && cargo build -p hooteproto
 ```
 
-**Why this matters:** Cargo's directory watching (`rerun-if-changed=schemas/`) only detects file additions/removals, not content changes. We explicitly list each schema file to ensure content changes trigger rebuilds.
+## Trustfall Queries
 
-#### Adding a New Tool (Full Checklist)
-
-1. **Schema** (`crates/hooteproto/schemas/tools.capnp`)
-   - Add request struct (e.g., `struct MyToolRequest { ... }`)
-   - Add variant to `ToolRequest` union with next available ordinal
-
-2. **Rust Types** (`crates/hooteproto/src/request.rs`)
-   - Add `MyToolRequest` struct with serde derives
-   - Add `MyTool(MyToolRequest)` variant to `ToolRequest` enum
-   - Implement `tool_name()` and `timing()` for the variant
-
-3. **Serialization** (`crates/hooteproto/src/conversion.rs`)
-   - Add serialization in `request_to_capnp_tool_request()`
-   - Add deserialization in `capnp_tool_request_to_request()`
-
-4. **Response** (if tool returns data)
-   - Add response struct to `schemas/responses.capnp`
-   - Add Rust type to `crates/hooteproto/src/responses.rs`
-   - Add serialization/deserialization in `conversion.rs`
-
-5. **MCP Dispatch** (`crates/holler/src/dispatch.rs`)
-   - Add JSON args struct (e.g., `struct MyToolArgs { ... }`)
-   - Add match arm in `json_to_payload()` for `"my_tool"`
-
-6. **Typed Dispatcher** (`crates/hootenanny/src/api/typed_dispatcher.rs`)
-   - Add match arm in `dispatch_async()` or `dispatch_fire_and_forget()` based on timing
-
-7. **Tool Schema** (`crates/hootenanny/src/api/tools_registry.rs`)
-   - Add to `list_tools()` with JSON schema for MCP discovery
-
-## 🔮 Trustfall: The Unified Query Layer
-
-**All graph queries go through Trustfall.** The `audio-graph-mcp` crate provides a Trustfall adapter that exposes a unified schema for querying:
-
-- **Artifacts** - MIDI files, audio, SoundFonts, saved queries
-- **Identities** - Named audio devices with hints and tags
-- **PipeWireNodes** - Live audio routing state
-- **Relationships** - Parent/child artifacts, variation sets, device connections
-
-### Extending the Schema
-
-When adding new queryable types:
-
-1. **Define the type in `schema.graphql`** - Entry points go in `Query`, types get their own blocks
-2. **Add a Vertex variant** - `enum Vertex { ..., NewType(Arc<NewType>) }`
-3. **Implement resolution** - `resolve_starting_vertices`, `resolve_property`, `resolve_neighbors`
-4. **Wire up data sources** - The adapter can pull from multiple stores (artifact_store, audio_graph_db, etc.)
-
-### Data Source Pattern
-
-The adapter bridges multiple data sources into one queryable graph:
-
-```rust
-pub struct AudioGraphAdapter {
-    db: Arc<Database>,              // Identities, tags, hints
-    artifact_store: Arc<RwLock<FileStore>>,  // Artifacts, metadata
-    pipewire_snapshot: Arc<PipeWireSnapshot>, // Live audio state
-    schema: Arc<Schema>,
-}
-```
-
-### Query Examples
+All graph queries use `graph_query()` with Trustfall syntax:
 
 ```graphql
-# Find all MIDI artifacts tagged as "jazzy"
-{ Artifact(tag: "type:midi") { id tags { tag @filter(op: "=", value: ["vibe:jazzy"]) } } }
+# Find MIDI artifacts
+{ Artifact(tag: "type:midi") { id @output creator @output } }
 
-# Find identities with Roland USB devices
-{ Identity { name hints @filter(op: "has_substring", value: ["roland"]) { value } } }
+# Traverse lineage
+{ Artifact(id: "abc123") { id parent { id parent { id } } } }
 
-# Traverse artifact lineage
-{ Artifact(id: "artifact_abc123") { id parent { id parent { id } } } }
+# Find devices
+{ Identity { name hints { value @filter(op: "has_substring", value: ["roland"]) } } }
 ```
 
-**Never bypass Trustfall for queries.** If you need to filter/search/traverse, extend the schema.
+Queryable types: `Artifact`, `Identity`, `PipeWireNode`, `Region`
 
-### Garden Query Timing
+## Timeline Timing
 
-All Region timing in chaosgarden uses **beats** (not seconds or samples):
-
-| Concept | `schedule` tool | Region schema | Unit |
-|---------|-----------------|---------------|------|
-| Start position | `at` | `position` | beats |
-| Length | `duration` | `duration` | beats |
-| End position | (computed) | `end` | beats |
-
-Example: `schedule(at=0, duration=4)` creates a Region with `position=0`, `duration=4`, `end=4`.
-
-Query regions with Trustfall:
-```graphql
-{ Region { id @output position @output duration @output behavior_type @output } }
-```
-
-### Artifact-Centric Access
-
-**Share artifacts.** Artifacts have identity, context, and access tracking.
-
-Prefer artifacts over cas links. Use cas links when a tool or program needs direct file
-access for performance or to integrate with existing tools like ffmpeg or sox.
-
-```
-# HTTP endpoints for artifacts
-GET /artifact/{id}        → Stream content with MIME type
-GET /artifact/{id}/meta   → JSON metadata + lineage
-GET /artifacts            → List all (filterable by tag, creator)
-
-# MCP resources
-artifacts://summary       → Counts by type/phase
-artifacts://recent        → Latest 10 artifacts
-artifacts://by-tag/{tag}  → Filter by tag
-artifacts://lineage/{id}  → Parent chain
-```
-
-## 📚 ZeroMQ Reference Material
-
-Local clones of authoritative ZeroMQ documentation (for protocol work):
-
-| Repo | Path | Key Files |
-|------|------|-----------|
-| ZeroMQ Guide | `~/src/zguide/` | `site/content/docs/chapter4.md` (Paranoid Pirate, Majordomo, heartbeating) |
-| ZeroMQ RFCs | `~/src/rfc/` | `content/docs/rfcs/7/README.md` (MDP 0.1), `content/docs/rfcs/18/README.md` (MDP 0.2) |
-
-Our protocol (`HOOT01`) is inspired by MDP but simplified for our use case. See
-`docs/ARCHITECTURE.md` for the system design.
-
-### Lazy Pirate Pattern
-
-All ZMQ DEALER clients must follow the **Lazy Pirate** pattern from zguide Chapter 4
-(`~/src/zguide/site/content/docs/chapter4.md`):
-
-- **connect() is non-blocking** - ZMQ handles reconnection automatically, peers don't need to exist
-- **Retry failed requests** - Timeout and retry up to `max_retries` times before failing
-- **Track health via responses** - "Connected" means peer is responding, not that socket is connected
-- **Never destroy sockets** - Let ZMQ handle reconnection; destroying sockets loses queued messages
-
-Services can start in any order. `hooteproto::HootClient` implements this pattern.
-
-### Async Pattern
-
-Most tools are async and return `job_id` immediately:
+All timeline positions use **beats**, not seconds:
 
 ```javascript
-// 1. Launch job
-job = orpheus_generate({temperature: 1.0})
-
-// 2. Poll for completion
-result = job_poll({job_ids: [job.job_id], timeout_ms: 60000})
-
-// 3. Access artifact
-// http://localhost:8080/artifact/{result.artifact_id}
+timeline_region_create({
+  position: 0,    // beat 0
+  duration: 4,    // 4 beats
+  behavior_type: "play_audio",
+  content_id: "artifact_123"
+})
 ```
 
+## Async Jobs
+
+Generation tools return immediately with `job_id`:
+
+```javascript
+job = orpheus_generate({temperature: 1.0})
+result = job_poll({job_ids: [job.job_id], timeout_ms: 60000})
+// result.artifact_id contains the output
+```
+
+## ZeroMQ Patterns
+
+Services use Lazy Pirate pattern:
+- `connect()` is non-blocking — peers don't need to exist yet
+- Timeout and retry on failures
+- Services can start in any order
+- Never destroy sockets — let ZMQ handle reconnection
+
+## Artifacts
+
+Prefer artifact IDs over raw CAS hashes:
+- Artifacts track lineage (parent chains)
+- Artifacts have tags and metadata
+- Use CAS hashes only for direct file access (ffmpeg, etc.)
+
+```
+GET /artifact/{id}       → Content stream
+GET /artifact/{id}/meta  → JSON metadata
+GET /artifacts           → List (filterable)
+```
+
+## Reference Docs
+
+- ZeroMQ Guide: `~/src/zguide/` (Chapter 4 for Lazy Pirate)
+- ZeroMQ RFCs: `~/src/rfc/` (MDP protocol specs)
+- Architecture: `docs/ARCHITECTURE.md`
