@@ -301,7 +301,7 @@ Experimental research software exploring human-AI music collaboration. We use it
 
 Built collaboratively with Claude and Gemini. Contributions welcome.
 
-See [CLAUDE.md](CLAUDE.md) for coding guidelines — the same instructions we give our AI collaborators.
+See [BOTS.md](docs/BOTS.md) for coding guidelines — the same instructions we give our AI collaborators.
 
 ---
 
