@@ -3362,11 +3362,30 @@ impl EventDualityServer {
         &self,
         request: hooteproto::request::AnalyzeRequest,
     ) -> Result<hooteproto::responses::ToolResponse, ToolError> {
+        use crate::artifact_store::ArtifactStore;
         use hooteproto::responses::{AnalyzeResultResponse, ToolResponse};
 
         // Dispatch based on content type and tasks
         let encoding = &request.encoding;
         let tasks = &request.tasks;
+
+        // Resolve encoding to content_hash (looking up artifact if needed)
+        let (content_hash, artifact_id) = match encoding {
+            hooteproto::Encoding::Hash { content_hash, .. } => (content_hash.clone(), None),
+            hooteproto::Encoding::Midi { artifact_id } | hooteproto::Encoding::Audio { artifact_id } => {
+                let store = self.artifact_store.read().map_err(|_| ToolError::internal("Lock poisoned"))?;
+                let hash = store.get(artifact_id)
+                    .map_err(|e| ToolError::internal(format!("Failed to get artifact: {}", e)))?
+                    .ok_or_else(|| ToolError::validation("not_found", format!("Artifact not found: {}", artifact_id)))?
+                    .content_hash
+                    .as_str()
+                    .to_string();
+                (hash, Some(artifact_id.clone()))
+            }
+            hooteproto::Encoding::Abc { .. } => {
+                return Err(ToolError::validation("invalid_encoding", "ABC notation cannot be analyzed directly"));
+            }
+        };
 
         // For now, dispatch to the appropriate single-task analyzer
         // A full implementation would combine results from multiple analyzers
@@ -3376,52 +3395,48 @@ impl EventDualityServer {
         for task in tasks {
             match task {
                 hooteproto::AnalysisTask::Classify => {
-                    // Use orpheus_classify for MIDI (synchronous)
-                    if let hooteproto::Encoding::Midi { artifact_id } | hooteproto::Encoding::Hash { content_hash: artifact_id, .. } = encoding {
-                        match self.orpheus_classify_typed(artifact_id).await {
-                            Ok(resp) => {
-                                // OrpheusClassifiedResponse has `classifications: Vec<MidiClassification>`
-                                // Each classification has label and confidence
-                                let classifications: Vec<_> = resp.classifications.iter()
-                                    .map(|c| serde_json::json!({
-                                        "label": c.label,
-                                        "confidence": c.confidence
-                                    }))
-                                    .collect();
+                    // Use orpheus_classify for MIDI (synchronous) - needs content_hash
+                    match self.orpheus_classify_typed(&content_hash).await {
+                        Ok(resp) => {
+                            // OrpheusClassifiedResponse has `classifications: Vec<MidiClassification>`
+                            // Each classification has label and confidence
+                            let classifications: Vec<_> = resp.classifications.iter()
+                                .map(|c| serde_json::json!({
+                                    "label": c.label,
+                                    "confidence": c.confidence
+                                }))
+                                .collect();
 
-                                // Get top classification for summary
-                                let top = resp.classifications.iter()
-                                    .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap_or(std::cmp::Ordering::Equal));
+                            // Get top classification for summary
+                            let top = resp.classifications.iter()
+                                .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap_or(std::cmp::Ordering::Equal));
 
-                                results.insert("classify".to_string(), serde_json::json!({
-                                    "classifications": classifications,
-                                }));
+                            results.insert("classify".to_string(), serde_json::json!({
+                                "classifications": classifications,
+                            }));
 
-                                if let Some(top_class) = top {
-                                    summaries.push(format!("Classified as {} ({:.1}% confidence)",
-                                        top_class.label, top_class.confidence * 100.0));
-                                } else {
-                                    summaries.push("No classifications returned".to_string());
-                                }
+                            if let Some(top_class) = top {
+                                summaries.push(format!("Classified as {} ({:.1}% confidence)",
+                                    top_class.label, top_class.confidence * 100.0));
+                            } else {
+                                summaries.push("No classifications returned".to_string());
                             }
-                            Err(e) => summaries.push(format!("Classification failed: {:?}", e)),
                         }
+                        Err(e) => summaries.push(format!("Classification failed: {:?}", e)),
                     }
                 }
                 hooteproto::AnalysisTask::Beats => {
-                    // BeatThis is async - spawn job and include job_id in results
-                    if let hooteproto::Encoding::Audio { artifact_id } | hooteproto::Encoding::Hash { content_hash: artifact_id, .. } = encoding {
-                        match self.beatthis_analyze_typed(Some(artifact_id.clone()), None, false).await {
-                            Ok(job_resp) => {
-                                results.insert("beats".to_string(), serde_json::json!({
-                                    "status": "job_started",
-                                    "job_id": job_resp.job_id,
-                                    "message": "Use job_poll to get results"
-                                }));
-                                summaries.push(format!("Beat analysis started (job {})", job_resp.job_id));
-                            }
-                            Err(e) => summaries.push(format!("Beat analysis failed: {:?}", e)),
+                    // BeatThis needs content_hash for CAS lookup
+                    match self.beatthis_analyze_typed(Some(content_hash.clone()), None, false).await {
+                        Ok(job_resp) => {
+                            results.insert("beats".to_string(), serde_json::json!({
+                                "status": "job_started",
+                                "job_id": job_resp.job_id,
+                                "message": "Use job_poll to get results"
+                            }));
+                            summaries.push(format!("Beat analysis started (job {})", job_resp.job_id));
                         }
+                        Err(e) => summaries.push(format!("Beat analysis failed: {:?}", e)),
                     }
                 }
                 hooteproto::AnalysisTask::Genre | hooteproto::AnalysisTask::Mood | hooteproto::AnalysisTask::Embeddings => {
@@ -3434,18 +3449,6 @@ impl EventDualityServer {
                 }
             }
         }
-
-        let content_hash = match encoding {
-            hooteproto::Encoding::Hash { content_hash, .. } => content_hash.clone(),
-            hooteproto::Encoding::Midi { artifact_id } | hooteproto::Encoding::Audio { artifact_id } => artifact_id.clone(),
-            hooteproto::Encoding::Abc { .. } => "inline_abc".to_string(),
-        };
-
-        // Extract artifact_id if the encoding has one
-        let artifact_id = match encoding {
-            hooteproto::Encoding::Midi { artifact_id } | hooteproto::Encoding::Audio { artifact_id } => Some(artifact_id.clone()),
-            _ => None,
-        };
 
         Ok(ToolResponse::AnalyzeResult(AnalyzeResultResponse {
             content_hash,
