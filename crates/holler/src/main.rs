@@ -236,12 +236,17 @@ async fn main() -> Result<()> {
                 tracing::info!("🎛️ DAW-only mode: exposing only DAW tools");
             }
 
+            // Construct artifact base URL from HttpConfig
+            let artifact_base_url = Some(config.infra.http.base_url(&config.infra.bind));
+            tracing::info!("   Artifact URLs: {}/artifact/{{id}}", artifact_base_url.as_ref().unwrap());
+
             serve::run(serve::ServeConfig {
                 port: config.infra.gateway.http_port,
                 hootenanny: config.infra.gateway.hootenanny,
                 hootenanny_pub: Some(config.infra.gateway.hootenanny_pub),
                 timeout_ms: config.infra.gateway.timeout_ms,
                 daw_only,
+                artifact_base_url,
             })
             .await?;
         }

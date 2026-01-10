@@ -37,6 +37,9 @@ pub struct ServeConfig {
     pub timeout_ms: u64,
     /// Only expose DAW tools (sample, extend, analyze, bridge, project, schedule)
     pub daw_only: bool,
+    /// Base URL for artifact access (e.g., "http://localhost:8082")
+    /// Used to construct artifact_url fields in tool responses.
+    pub artifact_base_url: Option<String>,
 }
 
 /// Server state for health endpoint
@@ -164,11 +167,13 @@ pub async fn run(config: ServeConfig) -> Result<()> {
     let backends_for_factory = Arc::clone(&backends);
     let cache_for_factory = tool_cache.clone();
     let daw_only = config.daw_only;
+    let artifact_base_url = config.artifact_base_url.clone();
     let service = StreamableHttpService::new(
         move || Ok(ZmqHandler::with_shared_cache(
             Arc::clone(&backends_for_factory),
             cache_for_factory.clone(),
             daw_only,
+            artifact_base_url.clone(),
         )),
         LocalSessionManager::default().into(),
         StreamableHttpServerConfig {

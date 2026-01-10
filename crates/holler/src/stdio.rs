@@ -122,7 +122,8 @@ pub async fn run(config: StdioConfig) -> Result<()> {
     }
 
     // Create handler with shared cache and daw_only filter
-    let handler = ZmqHandler::with_shared_cache(Arc::clone(&backends), tool_cache, config.daw_only);
+    // Note: artifact_base_url is None for stdio mode (no HTTP access)
+    let handler = ZmqHandler::with_shared_cache(Arc::clone(&backends), tool_cache, config.daw_only, None);
 
     // Serve via stdio - rmcp handles JSON-RPC framing
     let service = handler

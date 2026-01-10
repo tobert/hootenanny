@@ -70,6 +70,8 @@ pub struct ZmqHandler {
     cached_tools: ToolCache,
     /// Only expose DAW tools
     daw_only: bool,
+    /// Base URL for artifact access (e.g., "http://localhost:8082")
+    artifact_base_url: Option<String>,
 }
 
 impl ZmqHandler {
@@ -79,6 +81,7 @@ impl ZmqHandler {
             backends,
             cached_tools: new_tool_cache(),
             daw_only: false,
+            artifact_base_url: None,
         }
     }
 
@@ -86,11 +89,17 @@ impl ZmqHandler {
     ///
     /// Use this when you need multiple handlers to share the same tool list
     /// (e.g., for recovery callbacks to update tools visible to MCP clients).
-    pub fn with_shared_cache(backends: Arc<RwLock<BackendPool>>, cache: ToolCache, daw_only: bool) -> Self {
+    pub fn with_shared_cache(
+        backends: Arc<RwLock<BackendPool>>,
+        cache: ToolCache,
+        daw_only: bool,
+        artifact_base_url: Option<String>,
+    ) -> Self {
         Self {
             backends,
             cached_tools: cache,
             daw_only,
+            artifact_base_url,
         }
     }
 
@@ -193,7 +202,11 @@ impl ServerHandler for ZmqHandler {
             debug!("📤 Sending {} to backend", name);
             match backend.request(payload).await {
                 Ok(Payload::TypedResponse(envelope)) => {
-                    let result = envelope.to_json();
+                    let mut result = envelope.to_json();
+                    // Augment response with artifact URLs if base URL is configured
+                    if let Some(ref base_url) = self.artifact_base_url {
+                        augment_artifact_urls(&mut result, base_url);
+                    }
                     let text = serde_json::to_string_pretty(&result).unwrap_or_default();
                     Ok(CallToolResult::success(vec![Content::text(text)]))
                 }
@@ -239,4 +252,43 @@ fn tool_info_to_rmcp(info: ToolInfo) -> Tool {
         .cloned()
         .unwrap_or_default();
     Tool::new(info.name, info.description, Arc::new(schema))
+}
+
+/// Augment JSON response with artifact URLs.
+///
+/// Walks the JSON tree and adds `artifact_url` field next to any `artifact_id` field.
+/// Also handles `artifact_ids` arrays by adding `artifact_urls` array.
+fn augment_artifact_urls(value: &mut serde_json::Value, base_url: &str) {
+    match value {
+        serde_json::Value::Object(map) => {
+            // Check for artifact_id field and add artifact_url
+            if let Some(serde_json::Value::String(id)) = map.get("artifact_id") {
+                let url = format!("{}/artifact/{}", base_url, id);
+                map.insert("artifact_url".to_string(), serde_json::Value::String(url));
+            }
+
+            // Check for artifact_ids array and add artifact_urls array
+            if let Some(serde_json::Value::Array(ids)) = map.get("artifact_ids") {
+                let urls: Vec<serde_json::Value> = ids
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|id| serde_json::Value::String(format!("{}/artifact/{}", base_url, id)))
+                    .collect();
+                if !urls.is_empty() {
+                    map.insert("artifact_urls".to_string(), serde_json::Value::Array(urls));
+                }
+            }
+
+            // Recurse into nested objects
+            for (_, v) in map.iter_mut() {
+                augment_artifact_urls(v, base_url);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                augment_artifact_urls(item, base_url);
+            }
+        }
+        _ => {}
+    }
 }
