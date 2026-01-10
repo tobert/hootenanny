@@ -1,174 +1,163 @@
 # Hootenanny Architecture
 
-## Overview
-
-Hootenanny is a Rust workspace composed of two main crates:
-1.  **`hootenanny`**: The main application server. It runs the MCP transport (e.g., SSE, WebSockets), manages client connections, and orchestrates the overall state using an event-sourcing persistence layer.
-2.  **`resonode`**: The core music generation engine. It implements the "Alchemical Codex" to translate emotional states (`EmotionalVector`) into musical expression. It is a pure, stateless library.
-
-This project enables multi-agent collaboration for a human-AI music ensemble.
-
-## System Architecture
+## Crate Overview
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                      Multi-Agent Clients                          │
-│                                                                    │
-│  ┌──────────────┐  ┌──────────────┐  ┌────────┐  ┌───────────┐  │
-│  │ 🤖 Claude    │  │ 💎 Gemini    │  │ 🦙 GUI │  │ 🎹 VST    │  │
-│  │    Code      │  │              │  │ Client │  │  Plugin   │  │
-│  └──────────────┘  └──────────────┘  └────────┘  └───────────┘  │
-│         │                 │               │            │          │
-└─────────┼─────────────────┼───────────────┼────────────┼──────────┘
-          │                 │               │            │
-          └─────────────────┴───────────────┴────────────┘
-                                  │
-                            SSE/WebSocket :8080
-                        (Multi-client transport)
-                                  │
-          ┌───────────────────────▼───────────────────────┐
-          │               Hootenanny Server               │
-          │                                               │
-          │   ┌──────────────────┐  ┌───────────────────┐ │
-          │   │  hootenanny crate  │  │  resonode crate   │ │
-          │   │ - Manages state    │  │ - Implements the  │ │
-          │   │ - Handles network  │  │   Alchemical      │ │
-          │   │ - Persistence      │  │   Codex           │ │
-          │   └──────────────────┘  └───────────────────┘ │
-          └────────────┬─────────────┬──────────┬─────────┘
-                       │             │          │
-          ┌────────────▼────┐   ┌────▼─────┐  ┌▼──────────┐
-          │   Persistence   │   │   Lua    │  │   Music   │
-          │  (Journaling &   │   │  Tools   │  │   Tools   │
-          │   Snapshots)    │   │(Phase 2) │  │ (Phase 3) │
-          └────────┬────────┘   └────┬─────┘  └─┬─────────┘
-                   │                 │           │
-          ┌────────▼────────┐   ┌────▼─────┐  ┌─▼─────────┐
-          │   Filesystem    │   │   sled   │  │  Music    │
-          │ (e.g. /tank/hr) │   │  State   │  │  Models   │
-          └─────────────────┘   └──────────┘  └───────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              MCP Clients                                     │
+│                    (Claude, other AI agents, CLI tools)                      │
+└──────────────────────────────────┬──────────────────────────────────────────┘
+                                   │ HTTP/SSE (MCP Protocol)
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              HOLLER                                          │
+│                         (MCP Gateway + CLI)                                  │
+│  • Thin MCP-to-ZMQ bridge                                                   │
+│  • Routes tool calls to backends via ZMQ                                    │
+│  • CLI subcommands for manual operations                                    │
+└──────────────────────────────────┬──────────────────────────────────────────┘
+                                   │ ZMQ (hooteproto messages)
+                    ┌──────────────┼──────────────┐
+                    │              │              │
+                    ▼              ▼              ▼
+┌─────────────────────────┐ ┌─────────────┐ ┌─────────────────────────────────┐
+│      HOOTENANNY         │ │  LUANETTE   │ │        CHAOSGARDEN              │
+│    (Control Plane)      │ │  (Lua VM)   │ │     (Realtime Audio)            │
+│                         │ │             │ │                                 │
+│ • Job orchestration     │ │ • Scripts   │ │ • PipeWire integration          │
+│ • CAS management        │ │ • Workflows │ │ • Timeline playback             │
+│ • GPU service calls     │ │ • MCP proxy │ │ • Audio routing                 │
+│ • Artifact tracking     │ │             │ │                                 │
+└────────────┬────────────┘ └──────┬──────┘ └─────────────────────────────────┘
+             │                     │
+             │                     │ (calls via ZMQ)
+             └──────────┬──────────┘
+                        │
+                        ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          GPU SERVICES                                        │
+│  (External HTTP services on localhost ports)                                 │
+│                                                                              │
+│  • Orpheus (2000-2003) - MIDI generation, bridge, classifier, loops         │
+│  • MusicGen (2006) - Text-to-music                                          │
+│  • CLAP (2007) - Audio embeddings                                           │
+│  • YuE (2008) - Text-to-song with vocals                                    │
+│  • BeatThis (2012) - Beat detection                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Crate Structure
+## Crate Responsibilities
 
-The project is a Rust workspace with two primary crates located in the `crates/` directory.
+### hooteproto
+**Wire protocol types for ZMQ messaging**
 
-### `hootenanny`
-- **Role**: The main application binary and server.
-- **Responsibilities**:
-    - Manages network transports (SSE, WebSockets).
-    - Handles client connections and communication.
-    - Owns and manages the overall state of the musical session.
-    - Implements the event-sourcing persistence layer (journaling and snapshots).
-    - Orchestrates calls to `resonode` to generate musical content.
+- `Envelope` - Message wrapper with tracing metadata
+- `Payload` - All message types (tool calls, responses, events)
+- `JobId`, `JobStatus`, `JobInfo` - Shared job system types
+- `Broadcast` - PUB/SUB event types
 
-### `resonode`
-- **Role**: The core music generation engine.
-- **Responsibilities**:
-    - Provides the data structures for musical concepts, starting with the `EmotionalVector`.
-    - Implements the transformation logic described in the **[Alchemical Codex](design/01-musical-alchemy.md)**.
-    - Remains a pure, stateless library, taking in emotional state and returning musical data.
+### hootenanny
+**Control plane and orchestration**
 
-## State Management & Persistence
+- MCP server with tools for music generation, CAS, graph queries
+- Job system for async GPU operations
+- HTTP clients for GPU services (Orpheus, MusicGen, etc.)
+- Artifact tracking and lineage
+- ZMQ client for chaosgarden control
 
-The system uses an **Event Sourcing** strategy powered by **AOL** and **Cap'n Proto** to ensure that the state of the musical jam session is durable, fast, and compact. This is managed by the `hootenanny` crate.
+### luanette
+**Lua scripting engine**
 
-### Technology Stack
+- Sandboxed Lua runtime for workflow scripts
+- ZMQ server for receiving script execution requests
+- MCP proxy for calling upstream tools
+- Job system for tracking script execution
 
-- **[AOL (Append-Only Log)](https://docs.rs/aol/)**: Simple, efficient event journal (no need to build our own)
-- **[Cap'n Proto](https://capnproto.org/)**: Zero-copy serialization for speed and compactness
-- **Focus**: Build music systems, not databases
+### holler
+**MCP gateway and CLI**
 
-See **[Persistence Architecture](design/persistence.md)** for detailed rationale.
+- HTTP/SSE server for MCP clients
+- Routes tool calls to backends via ZMQ
+- CLI subcommands for direct tool invocation
+- ZMQ SUB for broadcast events (→ SSE to clients)
 
-### How It Works
+### chaosgarden
+**Realtime audio daemon**
 
-1.  **The Journal** (AOL): Every change to the state is captured as an `Event` and appended to AOL's immutable log. This provides a complete, durable history of the session.
+- PipeWire integration for audio routing
+- Timeline-based playback with transport controls
+- ZMQ server for control messages
+- Audio graph queries via Trustfall
 
-2.  **Serialization** (Cap'n Proto): Events are serialized using Cap'n Proto's zero-copy format, enabling:
-    - **Fast writes**: Minimal overhead when models generate copious musical data
-    - **Instant reads**: Zero-copy deserialization for playback
-    - **Compact storage**: Efficient encoding of musical events and conversation trees
+### baton
+**Generic MCP server library**
 
-3.  **Snapshots**: Periodic snapshots of the current state for fast startup.
+- Axum-based MCP transport (SSE, streamable HTTP)
+- Session management
+- Tool, resource, prompt types
+- Used by hootenanny and luanette for MCP handling
 
-4.  **Startup Process**:
-    - On launch, `hootenanny` loads the most recent snapshot
-    - It then replays any events from AOL that occurred after the snapshot
-    - This brings the system to its exact last-known state, ready to continue
+### cas
+**Content Addressable Storage**
 
-### Why This Matters
+- BLAKE3 hashing
+- File-based store with metadata
+- Shared by hootenanny, chaosgarden, luanette
 
-Models will generate **copious musical data** during jam sessions. Cap'n Proto's zero-copy semantics and AOL's efficient append-only log mean we can handle thousands of events per session without performance degradation.
+### abc
+**ABC notation parsing**
 
-## Key Design Decisions
+- Parser for ABC musical notation
+- MIDI conversion
+- Validation
 
-### 1. Workspace with `hootenanny` and `resonode`
+### audio-graph-mcp
+**Trustfall adapter for audio queries**
 
-**Decision**: Separate the server logic (`hootenanny`) from the music generation logic (`resonode`).
+- Unified query layer over artifacts, devices, connections
+- GraphQL-like queries via Trustfall
 
-**Rationale**:
-- **Logical Separation**: Enforces a clean boundary. `hootenanny` worries about state, time, and networks; `resonode` only worries about turning emotion into music.
-- **Faster Compilation**: Changes to the server logic won't require recompiling the music engine, and vice-versa.
-- **Clear API**: Forces a well-defined interface between the two crates, aligning with the "Compiler as Creative Partner" philosophy.
-- **Reusability**: `resonode` could be used by other applications in the future.
 
-### 2. AOL + Cap'n Proto for Persistence
+**LLM integration**
 
-**Decision**: Use AOL (Append-Only Log) for event sourcing and Cap'n Proto for serialization.
+- Chat state machine
+- Multi-backend support (DeepSeek, Ollama)
+- Agent spawning for sub-tasks
 
-**Rationale**:
-- **Don't Build Our Own**: AOL is simple, efficient infrastructure - focus on music, not databases
-- **Performance**: Cap'n Proto's zero-copy semantics handle copious model-generated data
-- **Durability**: The state of the jam is never lost on restart
-- **Efficiency**: Compact encoding and instant deserialization for replay
-- **Simplicity**: Lightweight append-only log without unnecessary complexity
-- **Focus on Goals**: Build musical collaboration systems, not persistence infrastructure
+## Data Flow
 
-See **[docs/design/persistence.md](design/persistence.md)** for detailed analysis.
-
-### 3. SSE Transport (vs WebSocket)
-
-**Decision**: Start with Server-Sent Events (SSE) for initial transport.
-
-**Rationale**:
-- **Simplicity**: SSE is a simple, one-way communication channel from server to client, which is sufficient for the initial phases.
-- **HTTP-based**: Easier to debug and work with than the WebSocket protocol.
-- **Sufficient for Now**: Can support multiple clients listening to the same stream of events.
-
-**Future**: Can be upgraded to a bidirectional WebSocket transport when agents need to send more complex data back to the server.
-
-## Deployment
-
-### Build
-```bash
-# Build the entire workspace
-cargo build --release
+### Tool Call Flow
+```
+Client → Holler (HTTP) → ZMQ → Hootenanny/Luanette → GPU Service
+                                        ↓
+                                    JobStore
+                                        ↓
+Client ← Holler (SSE) ← ZMQ ← Hootenanny/Luanette
 ```
 
-### Run
-```bash
-# Run the hootenanny server (requires a state directory)
-./target/release/hootenanny --state-dir /path/to/your/state
-
-# Connect clients
-# MCP Inspector: npx @modelcontextprotocol/inspector http://localhost:8080/sse
+### Job Lifecycle
+```
+1. Tool call arrives (e.g., orpheus_generate)
+2. JobStore.create_job() → returns JobId immediately
+3. Background task spawns, calls GPU service
+4. JobStore.mark_running()
+5. GPU service returns result
+6. JobStore.mark_complete() or mark_failed()
+7. Client polls with job_poll or job_status
 ```
 
-## References
+### Broadcast Flow
+```
+Backend (hootenanny/chaosgarden) → ZMQ PUB → Holler SUB → SSE → Clients
+```
 
-- **Alchemical Codex**: `docs/design/01-musical-alchemy.md`
-- **Persistence Architecture**: `docs/design/persistence.md` ⭐ NEW
-- **MCP Specification**: https://modelcontextprotocol.io
-- **rmcp SDK**: https://github.com/modelcontextprotocol/rust-sdk
-- **AOL Documentation**: https://docs.rs/aol/
-- **Cap'n Proto**: https://capnproto.org/
-- **Development Guidelines**: `docs/BOTS.md`
-- **Project Context**: `docs/agents/CONTEXT.md`
-- **Implementation Plans**: `docs/agents/plans/`
+## Shared Types (hooteproto)
 
----
+The following types are defined once in hooteproto and used by multiple crates:
 
-**Last Updated**: 2025-11-16
-**Contributors**: 💎 Gemini (workspace refactor), 🤖 Claude (persistence docs)
-**Architecture Status**: Workspace established. AOL + Cap'n Proto for persistence. Event Duality MCP server working.
+- `JobId` - UUID-based job identifier
+- `JobStatus` - Pending, Running, Complete, Failed, Cancelled
+- `JobInfo` - Full job metadata with timestamps
+- `JobStoreStats` - Aggregate statistics
+
+This ensures wire compatibility and consistent behavior across the system.
