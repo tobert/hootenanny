@@ -1,6 +1,6 @@
 //! Sample tool - unified generation across model spaces.
 //!
-//! This implements the model-native `sample()` API that abstracts different generative
+//! This implements the DAW `sample()` API that abstracts different generative
 //! models (Orpheus, MusicGen, YuE) behind a unified interface based on the `Space` parameter.
 
 use crate::api::service::EventDualityServer;

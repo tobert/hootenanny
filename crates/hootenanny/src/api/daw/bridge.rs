@@ -1,6 +1,6 @@
 //! Bridge tool - creates smooth transitions between MIDI sections.
 //!
-//! This implements the model-native `bridge()` API for creating transitions
+//! This implements the DAW `bridge()` API for creating transitions
 //! between musical sections using the Orpheus bridge model.
 
 use crate::api::service::EventDualityServer;

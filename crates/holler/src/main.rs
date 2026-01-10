@@ -86,12 +86,12 @@ enum Commands {
         #[arg(long)]
         show_config: bool,
 
-        /// Only expose native tools (sample, extend, analyze, bridge, project, schedule)
+        /// Only expose DAW tools (sample, extend, analyze, bridge, project, schedule)
         ///
-        /// This mode provides a focused, high-level interface for model-native
+        /// This mode provides a focused, high-level interface for DAW
         /// operations without exposing the full tool surface.
         #[arg(long)]
-        native_only: bool,
+        daw_only: bool,
     },
 
     /// Run MCP server over stdio (for Claude Code)
@@ -99,12 +99,12 @@ enum Commands {
     /// This transport is simpler than HTTP and works well with
     /// Claude Code and other stdio-based MCP clients.
     Mcp {
-        /// Only expose native tools (sample, extend, analyze, bridge, project, schedule)
+        /// Only expose DAW tools (sample, extend, analyze, bridge, project, schedule)
         ///
-        /// This mode provides a focused, high-level interface for model-native
+        /// This mode provides a focused, high-level interface for DAW
         /// operations without exposing the full tool surface.
         #[arg(long)]
-        native_only: bool,
+        daw_only: bool,
     },
 }
 
@@ -200,7 +200,7 @@ async fn main() -> Result<()> {
                 commands::job_poll(&endpoint, job_ids, timeout, &mode).await?;
             }
         },
-        Commands::Serve { show_config, native_only } => {
+        Commands::Serve { show_config, daw_only } => {
             // Load configuration from files + env
             let (config, sources) = HootConfig::load_with_sources_from(cli.config.as_deref())
                 .context("Failed to load configuration")?;
@@ -232,8 +232,8 @@ async fn main() -> Result<()> {
             if !sources.env_overrides.is_empty() {
                 tracing::info!("   Environment overrides: {:?}", sources.env_overrides);
             }
-            if native_only {
-                tracing::info!("🎯 Native-only mode: exposing only native tools");
+            if daw_only {
+                tracing::info!("🎛️ DAW-only mode: exposing only DAW tools");
             }
 
             serve::run(serve::ServeConfig {
@@ -241,23 +241,23 @@ async fn main() -> Result<()> {
                 hootenanny: config.infra.gateway.hootenanny,
                 hootenanny_pub: Some(config.infra.gateway.hootenanny_pub),
                 timeout_ms: config.infra.gateway.timeout_ms,
-                native_only,
+                daw_only,
             })
             .await?;
         }
-        Commands::Mcp { native_only } => {
+        Commands::Mcp { daw_only } => {
             // Load configuration for hootenanny endpoint
             let (config, _) = HootConfig::load_with_sources_from(cli.config.as_deref())
                 .context("Failed to load configuration")?;
 
-            if native_only {
-                eprintln!("🎯 Native-only mode: exposing only native tools");
+            if daw_only {
+                eprintln!("🎛️ DAW-only mode: exposing only DAW tools");
             }
 
             stdio::run(stdio::StdioConfig {
                 hootenanny: config.infra.gateway.hootenanny,
                 timeout_ms: config.infra.gateway.timeout_ms,
-                native_only,
+                daw_only,
             })
             .await?;
         }

@@ -112,7 +112,7 @@ pub enum ToolResponse {
     // === Timeline Scheduling ===
     Scheduled(ScheduledResponse),
 
-    // === Native Tools ===
+    // === DAW Tools ===
     /// Response from analyze tool (multiple analysis tasks)
     AnalyzeResult(AnalyzeResultResponse),
     /// Response from project tool (format conversion)
@@ -884,7 +884,7 @@ pub struct ScheduledResponse {
 }
 
 // =============================================================================
-// Native Tool Responses
+// DAW Tool Responses
 // =============================================================================
 
 /// Response from the analyze tool with multiple analysis results.

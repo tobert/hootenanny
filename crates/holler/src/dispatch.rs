@@ -223,7 +223,7 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             })))
         }
 
-        // === Native Tools (high-level abstraction) ===
+        // === DAW Tools (high-level abstraction) ===
         "sample" => {
             let args = preprocess_encoding_field(args);
             let p: SampleArgs = serde_json::from_value(args).context("Invalid sample arguments")?;
@@ -555,7 +555,7 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             Ok(Payload::ToolRequest(ToolRequest::GetToolHelp(request::GetToolHelpRequest { topic: p.topic })))
         }
 
-        // === Model-Native API ===
+        // === DAW API ===
         "schedule" => {
             let args = preprocess_encoding_field(args);
             let p: ScheduleArgs = serde_json::from_value(args).context("Invalid schedule arguments")?;

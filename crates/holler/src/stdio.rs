@@ -19,8 +19,8 @@ pub struct StdioConfig {
     pub hootenanny: String,
     /// Request timeout in milliseconds
     pub timeout_ms: u64,
-    /// Only expose native tools (sample, extend, analyze, bridge, project, schedule)
-    pub native_only: bool,
+    /// Only expose DAW tools (sample, extend, analyze, bridge, project, schedule)
+    pub daw_only: bool,
 }
 
 /// Run MCP server over stdio (stdin/stdout).
@@ -121,8 +121,8 @@ pub async fn run(config: StdioConfig) -> Result<()> {
         eprintln!("Warning: No tools loaded from hootenanny - is it running?");
     }
 
-    // Create handler with shared cache and native_only filter
-    let handler = ZmqHandler::with_shared_cache(Arc::clone(&backends), tool_cache, config.native_only);
+    // Create handler with shared cache and daw_only filter
+    let handler = ZmqHandler::with_shared_cache(Arc::clone(&backends), tool_cache, config.daw_only);
 
     // Serve via stdio - rmcp handles JSON-RPC framing
     let service = handler

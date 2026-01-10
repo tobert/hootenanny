@@ -620,9 +620,9 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             }
         }
 
-        // Native high-level tool requests
+        // DAW tool requests
         ToolRequest::Sample(req) => {
-            let mut s = builder.reborrow().init_native_sample();
+            let mut s = builder.reborrow().init_daw_sample();
             s.set_space(space_to_capnp(&req.space));
             inference_to_capnp(s.reborrow().init_inference(), &req.inference);
             s.set_num_variations(req.num_variations.unwrap_or(1));
@@ -637,7 +637,7 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             set_artifact_metadata(&mut s.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
         }
         ToolRequest::Extend(req) => {
-            let mut e = builder.reborrow().init_native_extend();
+            let mut e = builder.reborrow().init_daw_extend();
             encoding_to_capnp(e.reborrow().init_encoding(), &req.encoding);
             if let Some(ref space) = req.space {
                 e.set_has_space(true);
@@ -650,7 +650,7 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             set_artifact_metadata(&mut e.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
         }
         ToolRequest::Bridge(req) => {
-            let mut b = builder.reborrow().init_native_bridge();
+            let mut b = builder.reborrow().init_daw_bridge();
             encoding_to_capnp(b.reborrow().init_from(), &req.from);
             if let Some(ref to) = req.to {
                 b.set_has_to(true);
@@ -662,7 +662,7 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             set_artifact_metadata(&mut b.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
         }
         ToolRequest::Project(req) => {
-            let mut p = builder.reborrow().init_native_project();
+            let mut p = builder.reborrow().init_daw_project();
             encoding_to_capnp(p.reborrow().init_encoding(), &req.encoding);
             projection_target_to_capnp(p.reborrow().init_target(), &req.target);
             set_artifact_metadata(&mut p.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
@@ -1116,8 +1116,8 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
             }))
         }
 
-        // Native high-level tools
-        tools_capnp::tool_request::NativeSample(s) => {
+        // DAW tools
+        tools_capnp::tool_request::DawSample(s) => {
             let s = s?;
             let m = s.get_metadata()?;
             Ok(ToolRequest::Sample(SampleRequest {
@@ -1133,7 +1133,7 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
                 creator: capnp_optional_string(m.get_creator()?),
             }))
         }
-        tools_capnp::tool_request::NativeExtend(e) => {
+        tools_capnp::tool_request::DawExtend(e) => {
             let e = e?;
             let m = e.get_metadata()?;
             Ok(ToolRequest::Extend(ExtendRequest {
@@ -1147,7 +1147,7 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
                 creator: capnp_optional_string(m.get_creator()?),
             }))
         }
-        tools_capnp::tool_request::NativeBridge(b) => {
+        tools_capnp::tool_request::DawBridge(b) => {
             let b = b?;
             let m = b.get_metadata()?;
             Ok(ToolRequest::Bridge(BridgeRequest {
@@ -1160,7 +1160,7 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
                 creator: capnp_optional_string(m.get_creator()?),
             }))
         }
-        tools_capnp::tool_request::NativeProject(p) => {
+        tools_capnp::tool_request::DawProject(p) => {
             let p = p?;
             let m = p.get_metadata()?;
             Ok(ToolRequest::Project(ProjectRequest {
@@ -1311,7 +1311,7 @@ fn analysis_task_to_capnp(task: &AnalysisTask) -> common_capnp::AnalysisTask {
 }
 
 // =============================================================================
-// Native Tool Helper Functions
+// DAW Tool Helper Functions
 // =============================================================================
 
 /// Helper: Convert Rust Space to capnp Space
@@ -1988,7 +1988,7 @@ fn response_to_capnp_tool_response(
             b.set_artifact_id(&r.artifact_id);
         }
 
-        // Native tool responses
+        // DAW tool responses
         ToolResponse::AnalyzeResult(r) => {
             let mut b = builder.reborrow().init_analyze_result();
             b.set_content_hash(&r.content_hash);

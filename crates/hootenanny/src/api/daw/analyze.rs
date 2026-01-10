@@ -1,6 +1,6 @@
 //! Analyze tool - unified analysis across content types.
 //!
-//! This implements the model-native `analyze()` API that dispatches to different
+//! This implements the DAW `analyze()` API that dispatches to different
 //! analysis models (Orpheus classifier, BeatThis, CLAP) based on the content type
 //! and requested analysis tasks.
 

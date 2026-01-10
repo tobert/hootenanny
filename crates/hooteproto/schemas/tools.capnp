@@ -117,11 +117,11 @@ struct ToolRequest {
     schedule @71 :Schedule;
     analyze @72 :Analyze;
 
-    # === Native High-Level Tools ===
-    nativeSample @73 :NativeSample;
-    nativeExtend @75 :NativeExtend;
-    nativeBridge @76 :NativeBridge;
-    nativeProject @77 :NativeProject;
+    # === DAW Tools ===
+    dawSample @73 :DawSample;
+    dawExtend @75 :DawExtend;
+    dawBridge @76 :DawBridge;
+    dawProject @77 :DawProject;
   }
 }
 
@@ -434,10 +434,10 @@ struct Analyze {
   zeroShotLabels @2 :List(Text);  # Labels for zero-shot classification (if task includes zeroShot)
 }
 
-# === Native High-Level Tool Types ===
+# === DAW Tool Types ===
 
 # Sample from generative space
-struct NativeSample {
+struct DawSample {
   space @0 :Common.Space;
   inference @1 :Common.InferenceContext;
   numVariations @2 :UInt32;
@@ -449,7 +449,7 @@ struct NativeSample {
 }
 
 # Extend existing content
-struct NativeExtend {
+struct DawExtend {
   encoding @0 :Common.Encoding;
   space @1 :Common.Space;
   hasSpace @2 :Bool;            # Whether space is explicitly set
@@ -459,7 +459,7 @@ struct NativeExtend {
 }
 
 # Bridge between sections
-struct NativeBridge {
+struct DawBridge {
   from @0 :Common.Encoding;
   to @1 :Common.Encoding;
   hasTo @2 :Bool;               # Whether 'to' is set
@@ -468,7 +468,7 @@ struct NativeBridge {
 }
 
 # Project to different format
-struct NativeProject {
+struct DawProject {
   encoding @0 :Common.Encoding;
   target @1 :Common.ProjectionTarget;
   metadata @2 :Common.ArtifactMetadata;

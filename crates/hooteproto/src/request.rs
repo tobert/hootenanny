@@ -207,7 +207,7 @@ pub enum ToolRequest {
     SampleLlm(SampleLlmRequest),
 
     // ==========================================================================
-    // Model-Native API
+    // DAW API
     // ==========================================================================
     /// Schedule content on timeline
     Schedule(ScheduleRequest),
@@ -888,7 +888,7 @@ pub struct SampleLlmRequest {
 }
 
 // =============================================================================
-// Model-Native Request Types
+// DAW Request Types
 // =============================================================================
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

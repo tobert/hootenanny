@@ -1,4 +1,4 @@
-//! Native tools - unified model-agnostic interfaces.
+//! DAW tools - unified model-agnostic interfaces.
 //!
 //! These tools provide a high-level abstraction over model-specific tools:
 //! - `sample(space)` → unified generation across Orpheus/MusicGen/YuE

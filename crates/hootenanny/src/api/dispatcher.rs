@@ -362,7 +362,7 @@ impl TypedDispatcher {
                 }
             }
 
-            // === Native Tools (sample, extend, bridge, project, analyze) ===
+            // === DAW Tools (sample, extend, bridge, project, analyze) ===
             // These are the high-level abstractions over model-specific tools.
             // They use hooteproto types directly.
             ToolRequest::Sample(req) => {

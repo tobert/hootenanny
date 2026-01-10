@@ -35,8 +35,8 @@ pub struct ServeConfig {
     pub hootenanny_pub: Option<String>,
     /// Request timeout in milliseconds (should be > inner service timeouts)
     pub timeout_ms: u64,
-    /// Only expose native tools (sample, extend, analyze, bridge, project, schedule)
-    pub native_only: bool,
+    /// Only expose DAW tools (sample, extend, analyze, bridge, project, schedule)
+    pub daw_only: bool,
 }
 
 /// Server state for health endpoint
@@ -163,12 +163,12 @@ pub async fn run(config: ServeConfig) -> Result<()> {
     // The service factory creates a fresh handler for each session
     let backends_for_factory = Arc::clone(&backends);
     let cache_for_factory = tool_cache.clone();
-    let native_only = config.native_only;
+    let daw_only = config.daw_only;
     let service = StreamableHttpService::new(
         move || Ok(ZmqHandler::with_shared_cache(
             Arc::clone(&backends_for_factory),
             cache_for_factory.clone(),
-            native_only,
+            daw_only,
         )),
         LocalSessionManager::default().into(),
         StreamableHttpServerConfig {

@@ -1,6 +1,6 @@
 //! Extend tool - continue existing content across supported spaces.
 //!
-//! This implements the model-native `extend()` API that continues/extends existing
+//! This implements the DAW `extend()` API that continues/extends existing
 //! content using the appropriate continuation method for each space.
 
 use crate::api::service::EventDualityServer;

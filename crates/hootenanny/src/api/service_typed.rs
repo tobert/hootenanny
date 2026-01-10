@@ -3073,8 +3073,8 @@ impl EventDualityServer {
     }
 
     // =========================================================================
-    // Native Tools (typed wrappers)
-    // These forward to the existing native implementations but use hooteproto types.
+    // DAW Tools (typed wrappers)
+    // These forward to the existing DAW implementations but use hooteproto types.
     // =========================================================================
 
     /// Sample from a generative space.

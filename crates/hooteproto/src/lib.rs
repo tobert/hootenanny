@@ -531,7 +531,7 @@ pub enum ProjectionTarget {
 }
 
 // =============================================================================
-// Output Types and Impl Blocks for Native Tools
+// Output Types and Impl Blocks for DAW Tools
 // =============================================================================
 
 /// Output format type produced by generative operations.
