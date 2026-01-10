@@ -221,7 +221,7 @@ Local clones of authoritative ZeroMQ documentation (for protocol work):
 | ZeroMQ RFCs | `~/src/rfc/` | `content/docs/rfcs/7/README.md` (MDP 0.1), `content/docs/rfcs/18/README.md` (MDP 0.2) |
 
 Our protocol (`HOOT01`) is inspired by MDP but simplified for our use case. See
-`docs/agents/plans/zmq-mesh-architecture.md` for the full design.
+`docs/ARCHITECTURE.md` for the system design.
 
 ### Lazy Pirate Pattern
 
