@@ -149,8 +149,6 @@ pub enum ToolRequest {
     JobPoll(JobPollRequest),
     /// Cancel a job
     JobCancel(JobCancelRequest),
-    /// Sleep for duration (utility)
-    JobSleep(JobSleepRequest),
     /// Poll for buffered broadcast events
     EventPoll(EventPollRequest),
 
@@ -207,22 +205,6 @@ pub enum ToolRequest {
     SampleLlm(SampleLlmRequest),
 
     // ==========================================================================
-    // DAW API
-    // ==========================================================================
-    /// Schedule content on timeline
-    Schedule(ScheduleRequest),
-    /// Analyze content
-    Analyze(AnalyzeRequest),
-    /// Sample from a generative space
-    Sample(SampleRequest),
-    /// Extend existing content
-    Extend(ExtendRequest),
-    /// Create bridge transitions between sections
-    Bridge(BridgeRequest),
-    /// Project content to a different format
-    Project(ProjectRequest),
-
-    // ==========================================================================
     // Admin
     // ==========================================================================
     /// Ping for liveness
@@ -253,10 +235,9 @@ impl ToolRequest {
             Self::AbcToMidi(_) => ToolTiming::AsyncShort,
             Self::GraphBind(_) | Self::GraphTag(_) | Self::GraphConnect(_) => ToolTiming::AsyncShort,
             Self::AddAnnotation(_) => ToolTiming::AsyncShort,
-            Self::JobPoll(_) | Self::JobCancel(_) | Self::JobSleep(_) | Self::EventPoll(_) => ToolTiming::AsyncShort,
+            Self::JobPoll(_) | Self::JobCancel(_) | Self::EventPoll(_) => ToolTiming::AsyncShort,
             Self::WeaveEval(_) | Self::WeaveSession | Self::WeaveReset(_) | Self::WeaveHelp(_) => ToolTiming::AsyncShort,
             Self::Complete(_) | Self::SampleLlm(_) => ToolTiming::AsyncShort,
-            Self::Schedule(_) => ToolTiming::AsyncShort,
             Self::GardenAttachAudio(_) | Self::GardenDetachAudio | Self::GardenAudioStatus => ToolTiming::AsyncShort,
             Self::GardenAttachInput(_) | Self::GardenDetachInput | Self::GardenInputStatus => ToolTiming::AsyncShort,
             Self::GardenSetMonitor(_) => ToolTiming::AsyncShort,
@@ -269,9 +250,6 @@ impl ToolRequest {
             | Self::OrpheusContinue(_)
             | Self::OrpheusBridge(_)
             | Self::OrpheusLoops(_) => ToolTiming::AsyncMedium,
-            Self::Analyze(_) => ToolTiming::AsyncMedium,
-            Self::Sample(_) | Self::Extend(_) | Self::Bridge(_) => ToolTiming::AsyncMedium,
-            Self::Project(_) => ToolTiming::AsyncMedium,
 
             // AsyncLong - long running, client manages
             Self::MusicgenGenerate(_) => ToolTiming::AsyncLong,
@@ -348,7 +326,6 @@ impl ToolRequest {
             Self::JobList(_) => "job_list",
             Self::JobPoll(_) => "job_poll",
             Self::JobCancel(_) => "job_cancel",
-            Self::JobSleep(_) => "job_sleep",
             Self::EventPoll(_) => "event_poll",
             Self::GraphBind(_) => "graph_bind",
             Self::GraphTag(_) => "graph_tag",
@@ -366,12 +343,6 @@ impl ToolRequest {
             Self::ListResources => "list_resources",
             Self::Complete(_) => "complete",
             Self::SampleLlm(_) => "sample_llm",
-            Self::Schedule(_) => "schedule",
-            Self::Analyze(_) => "analyze",
-            Self::Sample(_) => "sample",
-            Self::Extend(_) => "extend",
-            Self::Bridge(_) => "bridge",
-            Self::Project(_) => "project",
             Self::Ping => "ping",
         }
     }
@@ -724,11 +695,6 @@ pub struct JobCancelRequest {
     pub job_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct JobSleepRequest {
-    pub milliseconds: u64,
-}
-
 // =============================================================================
 // Event Polling Request Types
 // =============================================================================
@@ -885,156 +851,6 @@ pub struct SampleLlmRequest {
     pub max_tokens: Option<u32>,
     pub temperature: Option<f64>,
     pub system_prompt: Option<String>,
-}
-
-// =============================================================================
-// DAW Request Types
-// =============================================================================
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ScheduleRequest {
-    pub encoding: crate::Encoding,
-    pub at: f64,
-    pub duration: Option<f64>,
-    pub gain: Option<f64>,
-    pub rate: Option<f64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AnalyzeRequest {
-    pub encoding: crate::Encoding,
-    pub tasks: Vec<crate::AnalysisTask>,
-}
-
-fn default_one() -> Option<u32> {
-    Some(1)
-}
-
-fn default_creator() -> Option<String> {
-    Some("unknown".to_string())
-}
-
-/// Request to sample from a generative space.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SampleRequest {
-    /// Generative space to sample from
-    pub space: crate::Space,
-
-    /// Inference parameters
-    #[serde(default)]
-    pub inference: crate::InferenceContext,
-
-    /// Number of variations to generate (default: 1)
-    #[serde(default = "default_one")]
-    pub num_variations: Option<u32>,
-
-    /// Text prompt (for prompted spaces like musicgen, yue)
-    pub prompt: Option<String>,
-
-    /// Seed encoding to condition on
-    pub seed: Option<crate::Encoding>,
-
-    /// Generate as loopable pattern (orpheus only)
-    #[serde(default)]
-    pub as_loop: bool,
-
-    /// Variation set ID for grouping
-    pub variation_set_id: Option<String>,
-
-    /// Parent artifact ID for refinements
-    pub parent_id: Option<String>,
-
-    /// Tags for organizing
-    #[serde(default)]
-    pub tags: Vec<String>,
-
-    /// Creator identifier
-    #[serde(default = "default_creator")]
-    pub creator: Option<String>,
-}
-
-/// Request to extend existing content.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ExtendRequest {
-    /// Content to continue from
-    pub encoding: crate::Encoding,
-
-    /// Space to use (inferred from encoding if omitted)
-    pub space: Option<crate::Space>,
-
-    /// Inference parameters
-    #[serde(default)]
-    pub inference: crate::InferenceContext,
-
-    /// Number of variations to generate (default: 1)
-    #[serde(default = "default_one")]
-    pub num_variations: Option<u32>,
-
-    /// Variation set ID for grouping
-    pub variation_set_id: Option<String>,
-
-    /// Parent artifact ID for refinements
-    pub parent_id: Option<String>,
-
-    /// Tags for organizing
-    #[serde(default)]
-    pub tags: Vec<String>,
-
-    /// Creator identifier
-    #[serde(default = "default_creator")]
-    pub creator: Option<String>,
-}
-
-/// Request to create a bridge transition between sections.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BridgeRequest {
-    /// Starting content (section A)
-    pub from: crate::Encoding,
-
-    /// Target content (section B) - optional for A->B bridging
-    pub to: Option<crate::Encoding>,
-
-    /// Inference parameters
-    #[serde(default)]
-    pub inference: crate::InferenceContext,
-
-    /// Variation set ID for grouping
-    pub variation_set_id: Option<String>,
-
-    /// Parent artifact ID for refinements
-    pub parent_id: Option<String>,
-
-    /// Tags for organizing
-    #[serde(default)]
-    pub tags: Vec<String>,
-
-    /// Creator identifier
-    #[serde(default = "default_creator")]
-    pub creator: Option<String>,
-}
-
-/// Request to project content to a different format.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ProjectRequest {
-    /// Source content to project
-    pub encoding: crate::Encoding,
-
-    /// Target format/space
-    pub target: crate::ProjectionTarget,
-
-    /// Variation set ID for grouping
-    pub variation_set_id: Option<String>,
-
-    /// Parent artifact ID
-    pub parent_id: Option<String>,
-
-    /// Tags for organizing
-    #[serde(default)]
-    pub tags: Vec<String>,
-
-    /// Creator identifier
-    #[serde(default = "default_creator")]
-    pub creator: Option<String>,
 }
 
 // =============================================================================

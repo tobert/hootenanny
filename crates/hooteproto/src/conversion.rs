@@ -528,7 +528,6 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
         }
         ToolRequest::JobCancel(req) => builder.reborrow().init_job_cancel().set_job_id(&req.job_id),
         ToolRequest::JobList(req) => builder.reborrow().init_job_list().set_status(req.status.as_deref().unwrap_or("")),
-        ToolRequest::JobSleep(req) => builder.reborrow().init_job_sleep().set_milliseconds(req.milliseconds),
         ToolRequest::EventPoll(_) => {
             // EventPoll is MCP-only, not sent over ZMQ
             unimplemented!("EventPoll is MCP-only, use JSON serialization")
@@ -603,70 +602,6 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
         }
         ToolRequest::GardenClearRegions => builder.reborrow().set_garden_clear_regions(()),
         ToolRequest::GetToolHelp(req) => builder.reborrow().init_get_tool_help().set_topic(req.topic.as_deref().unwrap_or("")),
-        ToolRequest::Schedule(req) => {
-            let mut s = builder.reborrow().init_schedule();
-            encoding_to_capnp(s.reborrow().init_encoding(), &req.encoding);
-            s.set_at(req.at);
-            s.set_duration(req.duration.unwrap_or(0.0));
-            s.set_gain(req.gain.unwrap_or(1.0));
-            s.set_rate(req.rate.unwrap_or(1.0));
-        }
-        ToolRequest::Analyze(req) => {
-            let mut a = builder.reborrow().init_analyze();
-            encoding_to_capnp(a.reborrow().init_encoding(), &req.encoding);
-            let mut t = a.init_tasks(req.tasks.len() as u32);
-            for (i, task) in req.tasks.iter().enumerate() {
-                t.set(i as u32, analysis_task_to_capnp(task));
-            }
-        }
-
-        // DAW tool requests
-        ToolRequest::Sample(req) => {
-            let mut s = builder.reborrow().init_daw_sample();
-            s.set_space(space_to_capnp(&req.space));
-            inference_to_capnp(s.reborrow().init_inference(), &req.inference);
-            s.set_num_variations(req.num_variations.unwrap_or(1));
-            s.set_prompt(req.prompt.as_deref().unwrap_or(""));
-            if let Some(ref seed) = req.seed {
-                s.set_has_seed(true);
-                encoding_to_capnp(s.reborrow().init_seed(), seed);
-            } else {
-                s.set_has_seed(false);
-            }
-            s.set_as_loop(req.as_loop);
-            set_artifact_metadata(&mut s.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
-        }
-        ToolRequest::Extend(req) => {
-            let mut e = builder.reborrow().init_daw_extend();
-            encoding_to_capnp(e.reborrow().init_encoding(), &req.encoding);
-            if let Some(ref space) = req.space {
-                e.set_has_space(true);
-                e.set_space(space_to_capnp(space));
-            } else {
-                e.set_has_space(false);
-            }
-            inference_to_capnp(e.reborrow().init_inference(), &req.inference);
-            e.set_num_variations(req.num_variations.unwrap_or(1));
-            set_artifact_metadata(&mut e.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
-        }
-        ToolRequest::Bridge(req) => {
-            let mut b = builder.reborrow().init_daw_bridge();
-            encoding_to_capnp(b.reborrow().init_from(), &req.from);
-            if let Some(ref to) = req.to {
-                b.set_has_to(true);
-                encoding_to_capnp(b.reborrow().init_to(), to);
-            } else {
-                b.set_has_to(false);
-            }
-            inference_to_capnp(b.reborrow().init_inference(), &req.inference);
-            set_artifact_metadata(&mut b.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
-        }
-        ToolRequest::Project(req) => {
-            let mut p = builder.reborrow().init_daw_project();
-            encoding_to_capnp(p.reborrow().init_encoding(), &req.encoding);
-            projection_target_to_capnp(p.reborrow().init_target(), &req.target);
-            set_artifact_metadata(&mut p.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
-        }
 
         ToolRequest::Ping => {
             // Should be handled by payload_to_capnp_payload
@@ -996,7 +931,6 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
         }
         tools_capnp::tool_request::JobCancel(j) => { let j = j?; Ok(ToolRequest::JobCancel(JobCancelRequest { job_id: j.get_job_id()?.to_str()?.to_string() })) }
         tools_capnp::tool_request::JobList(j) => { let j = j?; Ok(ToolRequest::JobList(JobListRequest { status: capnp_optional_string(j.get_status()?) })) }
-        tools_capnp::tool_request::JobSleep(j) => { let j = j?; Ok(ToolRequest::JobSleep(JobSleepRequest { milliseconds: j.get_milliseconds() })) }
         tools_capnp::tool_request::ReadResource(r) => { let r = r?; Ok(ToolRequest::ReadResource(ReadResourceRequest { uri: r.get_uri()?.to_str()?.to_string() })) }
         tools_capnp::tool_request::ListResources(()) => Ok(ToolRequest::ListResources),
         tools_capnp::tool_request::Complete(c) => {
@@ -1087,91 +1021,6 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
         }
         tools_capnp::tool_request::GardenClearRegions(()) => Ok(ToolRequest::GardenClearRegions),
         tools_capnp::tool_request::GetToolHelp(h) => Ok(ToolRequest::GetToolHelp(GetToolHelpRequest { topic: capnp_optional_string(h?.get_topic()?) })),
-        tools_capnp::tool_request::Schedule(s) => {
-            let s = s?;
-            Ok(ToolRequest::Schedule(ScheduleRequest {
-                encoding: capnp_to_encoding(s.get_encoding()?)?,
-                at: s.get_at(),
-                duration: if s.get_duration() == 0.0 { None } else { Some(s.get_duration()) },
-                gain: if s.get_gain() == 1.0 { None } else { Some(s.get_gain()) },
-                rate: if s.get_rate() == 1.0 { None } else { Some(s.get_rate()) },
-            }))
-        }
-        tools_capnp::tool_request::Analyze(a) => {
-            let a = a?;
-            // Read zero-shot labels (shared across all ZeroShot tasks)
-            let zero_shot_labels = if a.has_zero_shot_labels() {
-                capnp_string_list(a.get_zero_shot_labels()?)
-            } else {
-                Vec::new()
-            };
-            let mut tasks = Vec::new();
-            let tr = a.get_tasks()?;
-            for i in 0..tr.len() {
-                tasks.push(capnp_to_analysis_task(tr.get(i)?, zero_shot_labels.clone()));
-            }
-            Ok(ToolRequest::Analyze(AnalyzeRequest {
-                encoding: capnp_to_encoding(a.get_encoding()?)?,
-                tasks,
-            }))
-        }
-
-        // DAW tools
-        tools_capnp::tool_request::DawSample(s) => {
-            let s = s?;
-            let m = s.get_metadata()?;
-            Ok(ToolRequest::Sample(SampleRequest {
-                space: capnp_to_space(s.get_space()?),
-                inference: capnp_to_inference(s.get_inference()?)?,
-                num_variations: Some(s.get_num_variations()).filter(|&v| v != 0),
-                prompt: capnp_optional_string(s.get_prompt()?),
-                seed: if s.get_has_seed() { Some(capnp_to_encoding(s.get_seed()?)?) } else { None },
-                as_loop: s.get_as_loop(),
-                variation_set_id: capnp_optional_string(m.get_variation_set_id()?),
-                parent_id: capnp_optional_string(m.get_parent_id()?),
-                tags: capnp_string_list(m.get_tags()?),
-                creator: capnp_optional_string(m.get_creator()?),
-            }))
-        }
-        tools_capnp::tool_request::DawExtend(e) => {
-            let e = e?;
-            let m = e.get_metadata()?;
-            Ok(ToolRequest::Extend(ExtendRequest {
-                encoding: capnp_to_encoding(e.get_encoding()?)?,
-                space: if e.get_has_space() { Some(capnp_to_space(e.get_space()?)) } else { None },
-                inference: capnp_to_inference(e.get_inference()?)?,
-                num_variations: Some(e.get_num_variations()).filter(|&v| v != 0),
-                variation_set_id: capnp_optional_string(m.get_variation_set_id()?),
-                parent_id: capnp_optional_string(m.get_parent_id()?),
-                tags: capnp_string_list(m.get_tags()?),
-                creator: capnp_optional_string(m.get_creator()?),
-            }))
-        }
-        tools_capnp::tool_request::DawBridge(b) => {
-            let b = b?;
-            let m = b.get_metadata()?;
-            Ok(ToolRequest::Bridge(BridgeRequest {
-                from: capnp_to_encoding(b.get_from()?)?,
-                to: if b.get_has_to() { Some(capnp_to_encoding(b.get_to()?)?) } else { None },
-                inference: capnp_to_inference(b.get_inference()?)?,
-                variation_set_id: capnp_optional_string(m.get_variation_set_id()?),
-                parent_id: capnp_optional_string(m.get_parent_id()?),
-                tags: capnp_string_list(m.get_tags()?),
-                creator: capnp_optional_string(m.get_creator()?),
-            }))
-        }
-        tools_capnp::tool_request::DawProject(p) => {
-            let p = p?;
-            let m = p.get_metadata()?;
-            Ok(ToolRequest::Project(ProjectRequest {
-                encoding: capnp_to_encoding(p.get_encoding()?)?,
-                target: capnp_to_projection_target(p.get_target()?)?,
-                variation_set_id: capnp_optional_string(m.get_variation_set_id()?),
-                parent_id: capnp_optional_string(m.get_parent_id()?),
-                tags: capnp_string_list(m.get_tags()?),
-                creator: capnp_optional_string(m.get_creator()?),
-            }))
-        }
 
         _ => Err(capnp::Error::failed("Unsupported ToolRequest variant".to_string())),
     }
@@ -1581,10 +1430,6 @@ fn response_to_capnp_tool_response(
             b.set_job_id(&r.job_id);
             b.set_cancelled(r.cancelled);
         }
-        ToolResponse::JobSleep(r) => {
-            builder.reborrow().init_job_sleep().set_slept_ms(r.slept_ms);
-        }
-
         // Event Polling (MCP-only, not serialized over ZMQ)
         ToolResponse::EventPoll(_) => {
             // EventPoll is handled directly by holler/dispatcher, not sent over ZMQ
@@ -2810,13 +2655,6 @@ fn capnp_tool_response_to_response(
                 cancelled: r.get_cancelled(),
             }))
         }
-        Which::JobSleep(r) => {
-            let r = r?;
-            Ok(ToolResponse::JobSleep(JobSleepResponse {
-                slept_ms: r.get_slept_ms(),
-            }))
-        }
-
         // Audio Conversion responses
         Which::AbcToMidi(r) => {
             let r = r?;
@@ -2868,42 +2706,5 @@ fn capnp_to_weave_output_type(output_type: responses_capnp::WeaveOutputType) -> 
     match output_type {
         responses_capnp::WeaveOutputType::Expression => WeaveOutputType::Expression,
         responses_capnp::WeaveOutputType::Statement => WeaveOutputType::Statement,
-    }
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{Payload, Space, InferenceContext, request::SampleRequest};
-    use uuid::Uuid;
-
-    #[test]
-    fn test_sample_request_serialization() {
-        let req = SampleRequest {
-            space: Space::Orpheus,
-            inference: InferenceContext {
-                temperature: Some(1.0),
-                top_p: None,
-                top_k: None,
-                seed: None,
-                max_tokens: Some(512),
-                duration_seconds: None,
-                guidance_scale: None,
-                variant: None,
-            },
-            num_variations: Some(1),
-            prompt: None,
-            seed: None,
-            as_loop: false,
-            variation_set_id: None,
-            parent_id: None,
-            tags: vec!["test".to_string()],
-            creator: Some("claude".to_string()),
-        };
-        
-        let payload = Payload::ToolRequest(crate::request::ToolRequest::Sample(req));
-        let request_id = Uuid::new_v4();
-        
-        let result = payload_to_capnp_envelope(request_id, &payload);
-        assert!(result.is_ok(), "Serialization failed: {:?}", result.err());
     }
 }

@@ -166,12 +166,6 @@ impl TypedDispatcher {
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
-            ToolRequest::JobSleep(req) => {
-                match self.server.job_sleep_typed(req.milliseconds).await {
-                    Ok(resp) => ResponseEnvelope::success(ToolResponse::JobSleep(resp)),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
             ToolRequest::EventPoll(req) => {
                 match self
                     .server
@@ -350,48 +344,6 @@ impl TypedDispatcher {
                     .await
                 {
                     Ok(resp) => ResponseEnvelope::success(ToolResponse::AnnotationAdded(resp)),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
-
-            // === Timeline Scheduling ===
-            ToolRequest::Schedule(req) => {
-                match self.server.schedule_typed(req).await {
-                    Ok(resp) => ResponseEnvelope::success(ToolResponse::Scheduled(resp)),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
-
-            // === DAW Tools (sample, extend, bridge, project, analyze) ===
-            // These are the high-level abstractions over model-specific tools.
-            // They use hooteproto types directly.
-            ToolRequest::Sample(req) => {
-                match self.server.sample_typed(req).await {
-                    Ok(resp) => ResponseEnvelope::success(resp),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
-            ToolRequest::Extend(req) => {
-                match self.server.extend_typed(req).await {
-                    Ok(resp) => ResponseEnvelope::success(resp),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
-            ToolRequest::Bridge(req) => {
-                match self.server.bridge_typed(req).await {
-                    Ok(resp) => ResponseEnvelope::success(resp),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
-            ToolRequest::Project(req) => {
-                match self.server.project_typed(req).await {
-                    Ok(resp) => ResponseEnvelope::success(resp),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
-            ToolRequest::Analyze(req) => {
-                match self.server.analyze_typed(req).await {
-                    Ok(resp) => ResponseEnvelope::success(resp),
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }

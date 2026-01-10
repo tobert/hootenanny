@@ -86,40 +86,20 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             })))
         }
 
-        // === CAS Tools ===
-        "cas_store" => {
-            let p: CasStoreArgs = serde_json::from_value(args).context("Invalid cas_store arguments")?;
-            let data = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &p.content_base64)
-                .context("Invalid base64 in content_base64")?;
-            Ok(Payload::ToolRequest(ToolRequest::CasStore(request::CasStoreRequest {
-                data,
-                mime_type: p.mime_type,
-            })))
-        }
-        "cas_inspect" => {
-            let p: CasInspectArgs = serde_json::from_value(args).context("Invalid cas_inspect arguments")?;
-            Ok(Payload::ToolRequest(ToolRequest::CasInspect(request::CasInspectRequest { hash: p.hash })))
-        }
-        "cas_upload_file" => {
-            let p: CasUploadFileArgs = serde_json::from_value(args).context("Invalid cas_upload_file arguments")?;
-            Ok(Payload::ToolRequest(ToolRequest::CasUploadFile(request::CasUploadFileRequest {
-                file_path: p.file_path,
-                mime_type: p.mime_type,
-            })))
-        }
-        "cas_stats" => Ok(Payload::ToolRequest(ToolRequest::CasStats)),
+        // === System Tools ===
+        "storage_stats" => Ok(Payload::ToolRequest(ToolRequest::CasStats)),
 
-        // === Garden Tools ===
-        "garden_status" => Ok(Payload::ToolRequest(ToolRequest::GardenStatus)),
-        "garden_play" => Ok(Payload::ToolRequest(ToolRequest::GardenPlay)),
-        "garden_pause" => Ok(Payload::ToolRequest(ToolRequest::GardenPause)),
-        "garden_stop" => Ok(Payload::ToolRequest(ToolRequest::GardenStop)),
-        "garden_seek" => {
-            let p: GardenSeekArgs = serde_json::from_value(args).context("Invalid garden_seek arguments")?;
+        // === Playback Tools ===
+        "status" => Ok(Payload::ToolRequest(ToolRequest::GardenStatus)),
+        "play" => Ok(Payload::ToolRequest(ToolRequest::GardenPlay)),
+        "pause" => Ok(Payload::ToolRequest(ToolRequest::GardenPause)),
+        "stop" => Ok(Payload::ToolRequest(ToolRequest::GardenStop)),
+        "seek" => {
+            let p: GardenSeekArgs = serde_json::from_value(args).context("Invalid seek arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::GardenSeek(request::GardenSeekRequest { beat: p.beat })))
         }
-        "garden_set_tempo" => {
-            let p: GardenSetTempoArgs = serde_json::from_value(args).context("Invalid garden_set_tempo arguments")?;
+        "tempo" => {
+            let p: GardenSetTempoArgs = serde_json::from_value(args).context("Invalid tempo arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::GardenSetTempo(request::GardenSetTempoRequest { bpm: p.bpm })))
         }
         "garden_query" => {
@@ -129,9 +109,10 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 variables: p.variables,
             })))
         }
-        "garden_emergency_pause" => Ok(Payload::ToolRequest(ToolRequest::GardenEmergencyPause)),
-        "garden_create_region" => {
-            let p: GardenCreateRegionArgs = serde_json::from_value(args).context("Invalid garden_create_region arguments")?;
+
+        // === Timeline Tools ===
+        "timeline_region_create" => {
+            let p: GardenCreateRegionArgs = serde_json::from_value(args).context("Invalid timeline_region_create arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::GardenCreateRegion(request::GardenCreateRegionRequest {
                 position: p.position,
                 duration: p.duration,
@@ -139,28 +120,30 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 content_id: p.content_id,
             })))
         }
-        "garden_delete_region" => {
-            let p: GardenDeleteRegionArgs = serde_json::from_value(args).context("Invalid garden_delete_region arguments")?;
+        "timeline_region_delete" => {
+            let p: GardenDeleteRegionArgs = serde_json::from_value(args).context("Invalid timeline_region_delete arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::GardenDeleteRegion(request::GardenDeleteRegionRequest {
                 region_id: p.region_id,
             })))
         }
-        "garden_move_region" => {
-            let p: GardenMoveRegionArgs = serde_json::from_value(args).context("Invalid garden_move_region arguments")?;
+        "timeline_region_move" => {
+            let p: GardenMoveRegionArgs = serde_json::from_value(args).context("Invalid timeline_region_move arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::GardenMoveRegion(request::GardenMoveRegionRequest {
                 region_id: p.region_id,
                 new_position: p.new_position,
             })))
         }
-        "garden_clear_regions" => Ok(Payload::ToolRequest(ToolRequest::GardenClearRegions)),
-        "garden_get_regions" => {
+        "timeline_clear" => Ok(Payload::ToolRequest(ToolRequest::GardenClearRegions)),
+        "timeline_region_list" => {
             let p: GardenGetRegionsArgs = serde_json::from_value(args).unwrap_or_default();
             Ok(Payload::ToolRequest(ToolRequest::GardenGetRegions(request::GardenGetRegionsRequest {
                 start: p.start,
                 end: p.end,
             })))
         }
-        "garden_attach_audio" => {
+
+        // === Audio I/O Tools ===
+        "audio_output_attach" => {
             let p: GardenAttachAudioArgs = serde_json::from_value(args).unwrap_or_default();
             Ok(Payload::ToolRequest(ToolRequest::GardenAttachAudio(request::GardenAttachAudioRequest {
                 device_name: p.device_name,
@@ -168,18 +151,18 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 latency_frames: p.latency_frames,
             })))
         }
-        "garden_detach_audio" => Ok(Payload::ToolRequest(ToolRequest::GardenDetachAudio)),
-        "garden_audio_status" => Ok(Payload::ToolRequest(ToolRequest::GardenAudioStatus)),
-        "garden_attach_input" => {
+        "audio_output_detach" => Ok(Payload::ToolRequest(ToolRequest::GardenDetachAudio)),
+        "audio_output_status" => Ok(Payload::ToolRequest(ToolRequest::GardenAudioStatus)),
+        "audio_input_attach" => {
             let p: GardenAttachInputArgs = serde_json::from_value(args).unwrap_or_default();
             Ok(Payload::ToolRequest(ToolRequest::GardenAttachInput(request::GardenAttachInputRequest {
                 device_name: p.device_name,
                 sample_rate: p.sample_rate,
             })))
         }
-        "garden_detach_input" => Ok(Payload::ToolRequest(ToolRequest::GardenDetachInput)),
-        "garden_input_status" => Ok(Payload::ToolRequest(ToolRequest::GardenInputStatus)),
-        "garden_set_monitor" => {
+        "audio_input_detach" => Ok(Payload::ToolRequest(ToolRequest::GardenDetachInput)),
+        "audio_input_status" => Ok(Payload::ToolRequest(ToolRequest::GardenInputStatus)),
+        "audio_monitor" => {
             let p: GardenSetMonitorArgs = serde_json::from_value(args).unwrap_or_default();
             Ok(Payload::ToolRequest(ToolRequest::GardenSetMonitor(request::GardenSetMonitorRequest {
                 enabled: p.enabled,
@@ -188,10 +171,6 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
         }
 
         // === Job Tools ===
-        "job_status" => {
-            let p: JobStatusArgs = serde_json::from_value(args).context("Invalid job_status arguments")?;
-            Ok(Payload::ToolRequest(ToolRequest::JobStatus(request::JobStatusRequest { job_id: p.job_id })))
-        }
         "job_list" => {
             let p: JobListArgs = serde_json::from_value(args).unwrap_or_default();
             Ok(Payload::ToolRequest(ToolRequest::JobList(request::JobListRequest { status: p.status })))
@@ -208,10 +187,6 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             let p: JobCancelArgs = serde_json::from_value(args).context("Invalid job_cancel arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::JobCancel(request::JobCancelRequest { job_id: p.job_id })))
         }
-        "job_sleep" => {
-            let p: JobSleepArgs = serde_json::from_value(args).context("Invalid job_sleep arguments")?;
-            Ok(Payload::ToolRequest(ToolRequest::JobSleep(request::JobSleepRequest { milliseconds: p.milliseconds })))
-        }
         "event_poll" => {
             let p: EventPollArgs = serde_json::from_value(args).unwrap_or_default();
             Ok(Payload::ToolRequest(ToolRequest::EventPoll(request::EventPollRequest {
@@ -220,63 +195,6 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 types: p.types,
                 timeout_ms: p.timeout_ms,
                 limit: p.limit,
-            })))
-        }
-
-        // === DAW Tools (high-level abstraction) ===
-        "sample" => {
-            let args = preprocess_encoding_field(args);
-            let p: SampleArgs = serde_json::from_value(args).context("Invalid sample arguments")?;
-            Ok(Payload::ToolRequest(ToolRequest::Sample(request::SampleRequest {
-                space: p.space,
-                inference: p.inference.unwrap_or_default(),
-                num_variations: p.num_variations,
-                prompt: p.prompt,
-                seed: p.seed,
-                as_loop: p.as_loop.unwrap_or(false),
-                variation_set_id: p.variation_set_id,
-                parent_id: p.parent_id,
-                tags: p.tags.unwrap_or_default(),
-                creator: p.creator,
-            })))
-        }
-        "extend" => {
-            let args = preprocess_encoding_field(args);
-            let p: ExtendArgs = serde_json::from_value(args).context("Invalid extend arguments")?;
-            Ok(Payload::ToolRequest(ToolRequest::Extend(request::ExtendRequest {
-                encoding: p.encoding,
-                space: p.space,
-                inference: p.inference.unwrap_or_default(),
-                num_variations: p.num_variations,
-                variation_set_id: p.variation_set_id,
-                parent_id: p.parent_id,
-                tags: p.tags.unwrap_or_default(),
-                creator: p.creator,
-            })))
-        }
-        "bridge" => {
-            let args = preprocess_encoding_field(args);
-            let p: BridgeArgs = serde_json::from_value(args).context("Invalid bridge arguments")?;
-            Ok(Payload::ToolRequest(ToolRequest::Bridge(request::BridgeRequest {
-                from: p.from,
-                to: p.to,
-                inference: p.inference.unwrap_or_default(),
-                variation_set_id: p.variation_set_id,
-                parent_id: p.parent_id,
-                tags: p.tags.unwrap_or_default(),
-                creator: p.creator,
-            })))
-        }
-        "project" => {
-            let args = preprocess_encoding_field(args);
-            let p: ProjectArgs = serde_json::from_value(args).context("Invalid project arguments")?;
-            Ok(Payload::ToolRequest(ToolRequest::Project(request::ProjectRequest {
-                encoding: p.encoding,
-                target: p.target,
-                variation_set_id: p.variation_set_id,
-                parent_id: p.parent_id,
-                tags: p.tags.unwrap_or_default(),
-                creator: p.creator,
             })))
         }
 
@@ -339,8 +257,8 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 creator: p.creator,
             })))
         }
-        "orpheus_classify" => {
-            let p: OrpheusClassifyArgs = serde_json::from_value(args).context("Invalid orpheus_classify arguments")?;
+        "orpheus_classify" | "midi_classify" => {
+            let p: OrpheusClassifyArgs = serde_json::from_value(args).context("Invalid midi_classify arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::OrpheusClassify(request::OrpheusClassifyRequest { midi_hash: p.midi_hash })))
         }
 
@@ -375,16 +293,16 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 variation_set_id: p.variation_set_id,
             })))
         }
-        "beatthis_analyze" => {
-            let p: BeatthisAnalyzeArgs = serde_json::from_value(args).context("Invalid beatthis_analyze arguments")?;
+        "beats_detect" => {
+            let p: BeatthisAnalyzeArgs = serde_json::from_value(args).context("Invalid beats_detect arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::BeatthisAnalyze(request::BeatthisAnalyzeRequest {
                 audio_hash: p.audio_hash,
                 audio_path: p.audio_path,
                 include_frames: p.include_frames.unwrap_or(false),
             })))
         }
-        "clap_analyze" => {
-            let p: ClapAnalyzeArgs = serde_json::from_value(args).context("Invalid clap_analyze arguments")?;
+        "audio_analyze" => {
+            let p: ClapAnalyzeArgs = serde_json::from_value(args).context("Invalid audio_analyze arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::ClapAnalyze(request::ClapAnalyzeRequest {
                 audio_hash: p.audio_hash,
                 audio_b_hash: p.audio_b_hash,
@@ -496,9 +414,9 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             })))
         }
 
-        // === MIDI/Audio Tools ===
-        "convert_midi_to_wav" => {
-            let p: ConvertMidiToWavArgs = serde_json::from_value(args).context("Invalid convert_midi_to_wav arguments")?;
+        // === Rendering Tools ===
+        "convert_midi_to_wav" | "midi_render" => {
+            let p: ConvertMidiToWavArgs = serde_json::from_value(args).context("Invalid midi_render arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::MidiToWav(request::MidiToWavRequest {
                 input_hash: p.input_hash,
                 soundfont_hash: p.soundfont_hash,
@@ -517,8 +435,8 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             })))
         }
 
-        // === Config Tools ===
-        "config_get" => {
+        // === System Tools ===
+        "config" => {
             let p: ConfigGetArgs = serde_json::from_value(args).unwrap_or_default();
             Ok(Payload::ToolRequest(ToolRequest::ConfigGet(request::ConfigGetRequest {
                 section: p.section,
@@ -526,26 +444,20 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             })))
         }
 
-        // === Vibeweaver Tools ===
-        "weave_eval" => {
-            let p: WeaveEvalArgs = serde_json::from_value(args).context("Invalid weave_eval arguments")?;
+        // === Kernel Tools ===
+        "kernel_eval" => {
+            let p: WeaveEvalArgs = serde_json::from_value(args).context("Invalid kernel_eval arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::WeaveEval(request::WeaveEvalRequest {
                 code: p.code,
             })))
         }
-        "weave_session" => {
+        "kernel_session" => {
             Ok(Payload::ToolRequest(ToolRequest::WeaveSession))
         }
-        "weave_reset" => {
+        "kernel_reset" => {
             let p: WeaveResetArgs = serde_json::from_value(args).unwrap_or_default();
             Ok(Payload::ToolRequest(ToolRequest::WeaveReset(request::WeaveResetRequest {
                 clear_session: p.clear_session,
-            })))
-        }
-        "weave_help" => {
-            let p: WeaveHelpArgs = serde_json::from_value(args).unwrap_or_default();
-            Ok(Payload::ToolRequest(ToolRequest::WeaveHelp(request::WeaveHelpRequest {
-                topic: p.topic,
             })))
         }
 
@@ -553,27 +465,6 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
         "holler_help" | "get_tool_help" => {
             let p: GetToolHelpArgs = serde_json::from_value(args).unwrap_or_default();
             Ok(Payload::ToolRequest(ToolRequest::GetToolHelp(request::GetToolHelpRequest { topic: p.topic })))
-        }
-
-        // === DAW API ===
-        "schedule" => {
-            let args = preprocess_encoding_field(args);
-            let p: ScheduleArgs = serde_json::from_value(args).context("Invalid schedule arguments")?;
-            Ok(Payload::ToolRequest(ToolRequest::Schedule(request::ScheduleRequest {
-                encoding: p.encoding,
-                at: p.at,
-                duration: p.duration,
-                gain: p.gain,
-                rate: p.rate,
-            })))
-        }
-        "analyze" => {
-            let args = preprocess_encoding_field(args);
-            let p: AnalyzeArgs = serde_json::from_value(args).context("Invalid analyze arguments")?;
-            Ok(Payload::ToolRequest(ToolRequest::Analyze(request::AnalyzeRequest {
-                encoding: p.encoding,
-                tasks: p.tasks,
-            })))
         }
 
         // === Fallback: Unknown tool ===
@@ -614,23 +505,6 @@ struct AbcTransposeArgs {
     abc: String,
     semitones: Option<i8>,
     target_key: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CasStoreArgs {
-    content_base64: String,
-    mime_type: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CasInspectArgs {
-    hash: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CasUploadFileArgs {
-    file_path: String,
-    mime_type: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -693,11 +567,6 @@ struct GardenSetMonitorArgs {
     gain: Option<f32>,
 }
 
-#[derive(Debug, Deserialize)]
-struct JobStatusArgs {
-    job_id: String,
-}
-
 #[derive(Debug, Default, Deserialize)]
 struct JobListArgs {
     status: Option<String>,
@@ -713,11 +582,6 @@ struct JobPollArgs {
 #[derive(Debug, Deserialize)]
 struct JobCancelArgs {
     job_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct JobSleepArgs {
-    milliseconds: u64,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -963,68 +827,6 @@ struct GetToolHelpArgs {
 }
 
 #[derive(Debug, Deserialize)]
-struct ScheduleArgs {
-    encoding: hooteproto::Encoding,
-    at: f64,
-    duration: Option<f64>,
-    gain: Option<f64>,
-    rate: Option<f64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AnalyzeArgs {
-    encoding: hooteproto::Encoding,
-    tasks: Vec<hooteproto::AnalysisTask>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SampleArgs {
-    space: hooteproto::Space,
-    inference: Option<hooteproto::InferenceContext>,
-    num_variations: Option<u32>,
-    prompt: Option<String>,
-    seed: Option<hooteproto::Encoding>,
-    as_loop: Option<bool>,
-    variation_set_id: Option<String>,
-    parent_id: Option<String>,
-    tags: Option<Vec<String>>,
-    creator: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ExtendArgs {
-    encoding: hooteproto::Encoding,
-    space: Option<hooteproto::Space>,
-    inference: Option<hooteproto::InferenceContext>,
-    num_variations: Option<u32>,
-    variation_set_id: Option<String>,
-    parent_id: Option<String>,
-    tags: Option<Vec<String>>,
-    creator: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BridgeArgs {
-    from: hooteproto::Encoding,
-    to: Option<hooteproto::Encoding>,
-    inference: Option<hooteproto::InferenceContext>,
-    variation_set_id: Option<String>,
-    parent_id: Option<String>,
-    tags: Option<Vec<String>>,
-    creator: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ProjectArgs {
-    encoding: hooteproto::Encoding,
-    target: hooteproto::ProjectionTarget,
-    variation_set_id: Option<String>,
-    parent_id: Option<String>,
-    tags: Option<Vec<String>>,
-    creator: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 struct WeaveEvalArgs {
     code: String,
 }
@@ -1033,9 +835,4 @@ struct WeaveEvalArgs {
 struct WeaveResetArgs {
     #[serde(default)]
     clear_session: bool,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct WeaveHelpArgs {
-    topic: Option<String>,
 }

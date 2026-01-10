@@ -262,9 +262,6 @@ job_poll({"job_ids": ["uuid1", "uuid2"], "timeout_ms": 60000})
 - job_status: Check specific job
 - job_list: All jobs with optional status filter
 - job_cancel: Cancel running job
-
-## Sleep
-- job_sleep: Simple delay (max 30s)
 "#;
 
 const GRAPH_HELP: &str = r#"# Graph Tools

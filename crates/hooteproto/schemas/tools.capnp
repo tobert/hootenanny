@@ -12,7 +12,7 @@ struct ToolRequest {
     casInspect @1 :CasInspect;
     casGet @2 :CasGet;
     casUploadFile @3 :CasUploadFile;
-    casStats @74 :Void;
+    casStats @71 :Void;
 
     # === Orpheus Tools ===
     orpheusGenerate @4 :OrpheusGenerate;
@@ -36,7 +36,7 @@ struct ToolRequest {
     # === Analysis Tools ===
     beatthisAnalyze @17 :BeatthisAnalyze;
     clapAnalyze @18 :ClapAnalyze;
-    midiInfo @79 :MidiInfo;
+    midiInfo @72 :MidiInfo;
 
     # === Generation Tools ===
     musicgenGenerate @19 :MusicgenGenerate;
@@ -72,56 +72,47 @@ struct ToolRequest {
     jobPoll @39 :Jobs.JobPoll;
     jobCancel @40 :Jobs.JobCancel;
     jobList @41 :Jobs.JobList;
-    jobSleep @42 :Jobs.JobSleep;
 
     # === Resource Tools ===
-    readResource @43 :ReadResource;
-    listResources @44 :Void;
+    readResource @42 :ReadResource;
+    listResources @43 :Void;
 
     # === Completion Tools ===
-    complete @45 :Complete;
+    complete @44 :Complete;
 
     # === Misc Tools ===
-    sampleLlm @46 :SampleLlm;
+    sampleLlm @45 :SampleLlm;
 
     # === Vibeweaver Tools ===
-    weaveEval @47 :WeaveEval;
-    weaveSession @48 :Void;
-    weaveReset @49 :WeaveReset;
-    weaveHelp @50 :WeaveHelp;
+    weaveEval @46 :WeaveEval;
+    weaveSession @47 :Void;
+    weaveReset @48 :WeaveReset;
+    weaveHelp @49 :WeaveHelp;
 
     # === Garden Tools ===
-    gardenStatus @51 :Void;
-    gardenPlay @52 :Void;
-    gardenPause @53 :Void;
-    gardenStop @54 :Void;
-    gardenSeek @55 :Garden.Seek;
-    gardenSetTempo @56 :Garden.SetTempo;
-    gardenQuery @57 :Garden.Query;
-    gardenEmergencyPause @58 :Void;
-    gardenCreateRegion @59 :Garden.CreateRegion;
-    gardenDeleteRegion @60 :Garden.DeleteRegion;
-    gardenMoveRegion @61 :Garden.MoveRegion;
-    gardenGetRegions @62 :Garden.GetRegions;
-    gardenAttachAudio @63 :Garden.AttachAudio;
-    gardenDetachAudio @64 :Void;
-    gardenAudioStatus @65 :Void;
-    gardenAttachInput @66 :Garden.AttachInput;
-    gardenDetachInput @67 :Void;
-    gardenInputStatus @68 :Void;
-    gardenSetMonitor @69 :Garden.SetMonitor;
-    gardenClearRegions @78 :Void;
+    gardenStatus @50 :Void;
+    gardenPlay @51 :Void;
+    gardenPause @52 :Void;
+    gardenStop @53 :Void;
+    gardenSeek @54 :Garden.Seek;
+    gardenSetTempo @55 :Garden.SetTempo;
+    gardenQuery @56 :Garden.Query;
+    gardenEmergencyPause @57 :Void;
+    gardenCreateRegion @58 :Garden.CreateRegion;
+    gardenDeleteRegion @59 :Garden.DeleteRegion;
+    gardenMoveRegion @60 :Garden.MoveRegion;
+    gardenGetRegions @61 :Garden.GetRegions;
+    gardenAttachAudio @62 :Garden.AttachAudio;
+    gardenDetachAudio @63 :Void;
+    gardenAudioStatus @64 :Void;
+    gardenAttachInput @65 :Garden.AttachInput;
+    gardenDetachInput @66 :Void;
+    gardenInputStatus @67 :Void;
+    gardenSetMonitor @68 :Garden.SetMonitor;
+    gardenClearRegions @69 :Void;
 
-    # === Help & Model-Native ===
+    # === Help ===
     getToolHelp @70 :GetToolHelp;
-    schedule @71 :Schedule;
-    analyze @72 :Analyze;
-
-    # === DAW Tools ===
-    dawSample @73 :DawSample;
-    dawExtend @75 :DawExtend;
-    dawBridge @76 :DawBridge;
-    dawProject @77 :DawProject;
   }
 }
 
@@ -417,59 +408,4 @@ struct WeaveHelp {
 # === Help Types ===
 struct GetToolHelp {
   topic @0 :Text;
-}
-
-# === Model-Native Types ===
-struct Schedule {
-  encoding @0 :Common.Encoding;
-  at @1 :Float64;
-  duration @2 :Float64;
-  gain @3 :Float64;
-  rate @4 :Float64;
-}
-
-struct Analyze {
-  encoding @0 :Common.Encoding;
-  tasks @1 :List(Common.AnalysisTask);
-  zeroShotLabels @2 :List(Text);  # Labels for zero-shot classification (if task includes zeroShot)
-}
-
-# === DAW Tool Types ===
-
-# Sample from generative space
-struct DawSample {
-  space @0 :Common.Space;
-  inference @1 :Common.InferenceContext;
-  numVariations @2 :UInt32;
-  prompt @3 :Text;
-  seed @4 :Common.Encoding;     # Optional seed encoding
-  hasSeed @5 :Bool;             # Whether seed is set
-  asLoop @6 :Bool;
-  metadata @7 :Common.ArtifactMetadata;
-}
-
-# Extend existing content
-struct DawExtend {
-  encoding @0 :Common.Encoding;
-  space @1 :Common.Space;
-  hasSpace @2 :Bool;            # Whether space is explicitly set
-  inference @3 :Common.InferenceContext;
-  numVariations @4 :UInt32;
-  metadata @5 :Common.ArtifactMetadata;
-}
-
-# Bridge between sections
-struct DawBridge {
-  from @0 :Common.Encoding;
-  to @1 :Common.Encoding;
-  hasTo @2 :Bool;               # Whether 'to' is set
-  inference @3 :Common.InferenceContext;
-  metadata @4 :Common.ArtifactMetadata;
-}
-
-# Project to different format
-struct DawProject {
-  encoding @0 :Common.Encoding;
-  target @1 :Common.ProjectionTarget;
-  metadata @2 :Common.ArtifactMetadata;
 }

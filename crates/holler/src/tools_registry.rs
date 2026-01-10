@@ -11,30 +11,6 @@ use hooteproto::ToolInfo;
 pub fn list_tools() -> Vec<ToolInfo> {
     vec![
         // ==========================================================================
-        // CAS Tools
-        // ==========================================================================
-        ToolInfo {
-            name: "cas_store".to_string(),
-            description: "Store raw content in CAS".to_string(),
-            input_schema: manual_schemas::cas_store_request(),
-        },
-        ToolInfo {
-            name: "cas_inspect".to_string(),
-            description: "Inspect content in CAS".to_string(),
-            input_schema: manual_schemas::cas_inspect_request(),
-        },
-        ToolInfo {
-            name: "cas_stats".to_string(),
-            description: "Get CAS storage statistics".to_string(),
-            input_schema: serde_json::json!({"type": "object"}),
-        },
-        ToolInfo {
-            name: "cas_upload_file".to_string(),
-            description: "Upload file from disk to CAS".to_string(),
-            input_schema: manual_schemas::upload_file_request(),
-        },
-
-        // ==========================================================================
         // Artifact Tools
         // ==========================================================================
         ToolInfo {
@@ -54,22 +30,87 @@ pub fn list_tools() -> Vec<ToolInfo> {
         },
 
         // ==========================================================================
-        // SoundFont Tools
+        // Generation Tools
+        // ==========================================================================
+        ToolInfo {
+            name: "orpheus_generate".to_string(),
+            description: "Generate MIDI".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "temperature": { "type": "number" },
+                    "top_p": { "type": "number" },
+                    "max_tokens": { "type": "integer" },
+                    "num_variations": { "type": "integer" },
+                    "seed_hash": { "type": "string", "description": "Optional seed MIDI hash" },
+                    "as_loop": { "type": "boolean", "description": "Generate as loop" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "creator": { "type": "string" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "orpheus_continue".to_string(),
+            description: "Continue MIDI".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["input_hash"],
+                "properties": {
+                    "input_hash": { "type": "string", "description": "MIDI to continue from" },
+                    "temperature": { "type": "number" },
+                    "top_p": { "type": "number" },
+                    "max_tokens": { "type": "integer" },
+                    "num_variations": { "type": "integer" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "creator": { "type": "string" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "orpheus_bridge".to_string(),
+            description: "Bridge sections".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["section_a_hash"],
+                "properties": {
+                    "section_a_hash": { "type": "string", "description": "First section" },
+                    "section_b_hash": { "type": "string", "description": "Optional target section" },
+                    "temperature": { "type": "number" },
+                    "top_p": { "type": "number" },
+                    "max_tokens": { "type": "integer" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "creator": { "type": "string" }
+                }
+            }),
+        },
+
+        // ==========================================================================
+        // Rendering Tools
         // ==========================================================================
         ToolInfo {
             name: "soundfont_inspect".to_string(),
-            description: "Inspect SoundFont presets".to_string(),
+            description: "List presets".to_string(),
             input_schema: manual_schemas::soundfont_inspect_request(),
+        },
+        ToolInfo {
+            name: "midi_render".to_string(),
+            description: "MIDI to audio".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["input_hash", "soundfont_hash"],
+                "properties": {
+                    "input_hash": { "type": "string", "description": "MIDI CAS hash" },
+                    "soundfont_hash": { "type": "string", "description": "SoundFont CAS hash" },
+                    "sample_rate": { "type": "integer" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "creator": { "type": "string" }
+                }
+            }),
         },
 
         // ==========================================================================
         // Job Tools
         // ==========================================================================
-        ToolInfo {
-            name: "job_status".to_string(),
-            description: "Get status of a job".to_string(),
-            input_schema: manual_schemas::get_job_status_request(),
-        },
         ToolInfo {
             name: "job_list".to_string(),
             description: "List all jobs".to_string(),
@@ -90,11 +131,6 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Poll for job completion".to_string(),
             input_schema: manual_schemas::poll_request(),
         },
-        ToolInfo {
-            name: "job_sleep".to_string(),
-            description: "Sleep for a duration".to_string(),
-            input_schema: manual_schemas::sleep_request(),
-        },
 
         // ==========================================================================
         // Event Polling
@@ -110,17 +146,17 @@ pub fn list_tools() -> Vec<ToolInfo> {
         // ==========================================================================
         ToolInfo {
             name: "graph_bind".to_string(),
-            description: "Bind an identity to a device".to_string(),
+            description: "Bind identity".to_string(),
             input_schema: manual_schemas::graph_bind_request(),
         },
         ToolInfo {
             name: "graph_tag".to_string(),
-            description: "Tag an identity".to_string(),
+            description: "Tag identity".to_string(),
             input_schema: manual_schemas::graph_tag_request(),
         },
         ToolInfo {
             name: "graph_connect".to_string(),
-            description: "Connect two identities".to_string(),
+            description: "Connect identities".to_string(),
             input_schema: manual_schemas::graph_connect_request(),
         },
         ToolInfo {
@@ -130,12 +166,12 @@ pub fn list_tools() -> Vec<ToolInfo> {
         },
         ToolInfo {
             name: "graph_context".to_string(),
-            description: "Get graph context for LLM".to_string(),
+            description: "LLM context".to_string(),
             input_schema: manual_schemas::graph_context_request(),
         },
         ToolInfo {
             name: "graph_query".to_string(),
-            description: "Execute Trustfall query on graph".to_string(),
+            description: "Trustfall query".to_string(),
             input_schema: manual_schemas::graph_query_request(),
         },
 
@@ -144,150 +180,146 @@ pub fn list_tools() -> Vec<ToolInfo> {
         // ==========================================================================
         ToolInfo {
             name: "abc_validate".to_string(),
-            description: "Validate ABC notation".to_string(),
+            description: "Validate notation".to_string(),
             input_schema: manual_schemas::abc_validate_request(),
+        },
+        ToolInfo {
+            name: "abc_to_midi".to_string(),
+            description: "Convert to MIDI".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["abc"],
+                "properties": {
+                    "abc": { "type": "string", "description": "ABC notation" },
+                    "tempo_override": { "type": "integer" },
+                    "transpose": { "type": "integer" },
+                    "velocity": { "type": "integer" },
+                    "channel": { "type": "integer" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "creator": { "type": "string" }
+                }
+            }),
         },
 
         // ==========================================================================
-        // Garden Tools
+        // Playback Tools
         // ==========================================================================
         ToolInfo {
-            name: "garden_status".to_string(),
-            description: "Get chaosgarden status".to_string(),
+            name: "status".to_string(),
+            description: "System status".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
         },
         ToolInfo {
-            name: "garden_play".to_string(),
+            name: "play".to_string(),
             description: "Start playback".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
         },
         ToolInfo {
-            name: "garden_pause".to_string(),
+            name: "pause".to_string(),
             description: "Pause playback".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
         },
         ToolInfo {
-            name: "garden_stop".to_string(),
+            name: "stop".to_string(),
             description: "Stop playback".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
         },
         ToolInfo {
-            name: "garden_seek".to_string(),
-            description: "Seek to position".to_string(),
+            name: "seek".to_string(),
+            description: "Seek to beat".to_string(),
             input_schema: manual_schemas::garden_seek_request(),
         },
         ToolInfo {
-            name: "garden_set_tempo".to_string(),
-            description: "Set tempo".to_string(),
+            name: "tempo".to_string(),
+            description: "Set BPM".to_string(),
             input_schema: manual_schemas::garden_set_tempo_request(),
         },
         ToolInfo {
             name: "garden_query".to_string(),
-            description: "Query garden state".to_string(),
+            description: "Trustfall query".to_string(),
             input_schema: manual_schemas::garden_query_request(),
         },
+
+        // ==========================================================================
+        // Audio I/O Tools
+        // ==========================================================================
         ToolInfo {
-            name: "garden_attach_audio".to_string(),
-            description: "Attach audio output device".to_string(),
+            name: "audio_output_attach".to_string(),
+            description: "Attach output".to_string(),
             input_schema: manual_schemas::garden_attach_audio_request(),
         },
         ToolInfo {
-            name: "garden_detach_audio".to_string(),
-            description: "Detach audio output device".to_string(),
+            name: "audio_output_detach".to_string(),
+            description: "Detach output".to_string(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
         },
         ToolInfo {
-            name: "garden_audio_status".to_string(),
-            description: "Get audio output status".to_string(),
+            name: "audio_output_status".to_string(),
+            description: "Output status".to_string(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
         },
         ToolInfo {
-            name: "garden_set_monitor".to_string(),
-            description: "Enable/disable audio monitoring".to_string(),
+            name: "audio_monitor".to_string(),
+            description: "Monitor gain".to_string(),
             input_schema: manual_schemas::garden_set_monitor_request(),
         },
         ToolInfo {
-            name: "garden_attach_input".to_string(),
-            description: "Attach audio input device".to_string(),
+            name: "audio_input_attach".to_string(),
+            description: "Attach input".to_string(),
             input_schema: manual_schemas::garden_attach_input_request(),
         },
         ToolInfo {
-            name: "garden_detach_input".to_string(),
-            description: "Detach audio input device".to_string(),
+            name: "audio_input_detach".to_string(),
+            description: "Detach input".to_string(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
         },
         ToolInfo {
-            name: "garden_input_status".to_string(),
-            description: "Get audio input status".to_string(),
+            name: "audio_input_status".to_string(),
+            description: "Input status".to_string(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
         },
+
+        // ==========================================================================
+        // Timeline Tools
+        // ==========================================================================
         ToolInfo {
-            name: "garden_create_region".to_string(),
-            description: "Create a region on the timeline".to_string(),
+            name: "timeline_region_create".to_string(),
+            description: "Create region".to_string(),
             input_schema: manual_schemas::garden_create_region_request(),
         },
         ToolInfo {
-            name: "garden_delete_region".to_string(),
-            description: "Delete a region from the timeline".to_string(),
+            name: "timeline_region_delete".to_string(),
+            description: "Delete region".to_string(),
             input_schema: manual_schemas::garden_delete_region_request(),
         },
         ToolInfo {
-            name: "garden_move_region".to_string(),
-            description: "Move a region to a new position".to_string(),
+            name: "timeline_region_move".to_string(),
+            description: "Move region".to_string(),
             input_schema: manual_schemas::garden_move_region_request(),
         },
         ToolInfo {
-            name: "garden_clear_regions".to_string(),
-            description: "Clear all regions from the timeline".to_string(),
+            name: "timeline_clear".to_string(),
+            description: "Clear timeline".to_string(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
         },
         ToolInfo {
-            name: "garden_get_regions".to_string(),
-            description: "Get regions in a time range".to_string(),
+            name: "timeline_region_list".to_string(),
+            description: "List regions".to_string(),
             input_schema: manual_schemas::garden_get_regions_request(),
         },
 
         // ==========================================================================
-        // Config Tools
+        // System Tools
         // ==========================================================================
         ToolInfo {
-            name: "config_get".to_string(),
-            description: "Get configuration values".to_string(),
+            name: "config".to_string(),
+            description: "Get config".to_string(),
             input_schema: manual_schemas::config_get_request(),
         },
-
-        // ==========================================================================
-        // Generation Tools (sample, extend, bridge, project, analyze)
-        // ==========================================================================
         ToolInfo {
-            name: "sample".to_string(),
-            description: "Generate MIDI from scratch".to_string(),
-            input_schema: manual_schemas::sample_request(),
-        },
-        ToolInfo {
-            name: "extend".to_string(),
-            description: "Continue existing MIDI content".to_string(),
-            input_schema: manual_schemas::extend_request(),
-        },
-        ToolInfo {
-            name: "bridge".to_string(),
-            description: "Create bridge transitions between MIDI sections".to_string(),
-            input_schema: manual_schemas::bridge_request(),
-        },
-        ToolInfo {
-            name: "project".to_string(),
-            description: "Project content to different format (MIDI→audio, ABC→MIDI)".to_string(),
-            input_schema: manual_schemas::project_request(),
-        },
-        ToolInfo {
-            name: "analyze".to_string(),
-            description: "Run analysis tasks on content (classify, beats, genre, mood, embeddings)".to_string(),
-            input_schema: manual_schemas::analyze_request(),
-        },
-        ToolInfo {
-            name: "schedule".to_string(),
-            description: "Schedule content on timeline".to_string(),
-            input_schema: manual_schemas::schedule_request(),
+            name: "storage_stats".to_string(),
+            description: "Storage statistics".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
         },
 
         // ==========================================================================
@@ -328,8 +360,8 @@ pub fn list_tools() -> Vec<ToolInfo> {
             }),
         },
         ToolInfo {
-            name: "beatthis_analyze".to_string(),
-            description: "Analyze audio for beat detection".to_string(),
+            name: "beats_detect".to_string(),
+            description: "Detect beats".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -340,8 +372,8 @@ pub fn list_tools() -> Vec<ToolInfo> {
             }),
         },
         ToolInfo {
-            name: "clap_analyze".to_string(),
-            description: "Analyze audio with CLAP model".to_string(),
+            name: "audio_analyze".to_string(),
+            description: "Audio embeddings".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "required": ["audio_hash"],
@@ -355,8 +387,19 @@ pub fn list_tools() -> Vec<ToolInfo> {
             }),
         },
         ToolInfo {
+            name: "midi_classify".to_string(),
+            description: "Classify MIDI".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["midi_hash"],
+                "properties": {
+                    "midi_hash": { "type": "string", "description": "MIDI CAS hash" }
+                }
+            }),
+        },
+        ToolInfo {
             name: "midi_info".to_string(),
-            description: "Extract MIDI file metadata (tempo, time signature, duration)".to_string(),
+            description: "MIDI metadata".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -367,27 +410,37 @@ pub fn list_tools() -> Vec<ToolInfo> {
         },
 
         // ==========================================================================
-        // Vibeweaver Tools (Python Kernel)
+        // Kernel Tools (Python)
         // ==========================================================================
         ToolInfo {
-            name: "weave_eval".to_string(),
-            description: "Execute Python code in vibeweaver kernel".to_string(),
+            name: "kernel_eval".to_string(),
+            description: "Execute Python".to_string(),
             input_schema: manual_schemas::weave_eval_request(),
         },
         ToolInfo {
-            name: "weave_session".to_string(),
-            description: "Get current vibeweaver session state".to_string(),
+            name: "kernel_session".to_string(),
+            description: "Session state".to_string(),
             input_schema: manual_schemas::weave_session_request(),
         },
         ToolInfo {
-            name: "weave_reset".to_string(),
-            description: "Reset vibeweaver kernel".to_string(),
+            name: "kernel_reset".to_string(),
+            description: "Reset kernel".to_string(),
             input_schema: manual_schemas::weave_reset_request(),
         },
+
+        // ==========================================================================
+        // Help Tool
+        // ==========================================================================
         ToolInfo {
-            name: "weave_help".to_string(),
-            description: "Get vibeweaver help documentation".to_string(),
-            input_schema: manual_schemas::weave_help_request(),
+            name: "help".to_string(),
+            description: "Tool documentation".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "tool": { "type": "string", "description": "Tool name to get help for" },
+                    "category": { "type": "string", "description": "Category to list (generation, abc, analysis, rendering, playback, timeline, audio, artifacts, jobs, system, kernel, graph)" }
+                }
+            }),
         },
     ]
 }

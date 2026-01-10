@@ -154,6 +154,14 @@ impl ServerHandler for ZmqHandler {
 
             info!(tool = %name, args = ?arguments, "📥 Tool call received");
 
+            // Handle help tool locally (doesn't need backend)
+            if name == "help" {
+                let help_args: crate::help::HelpArgs = serde_json::from_value(arguments).unwrap_or_default();
+                let response = crate::help::help(help_args);
+                let text = serde_json::to_string_pretty(&response).unwrap_or_default();
+                return Ok(CallToolResult::success(vec![Content::text(text)]));
+            }
+
             let backend = {
                 let backends_guard = self.backends.read().await;
                 match backends_guard.route_tool(name) {

@@ -14,6 +14,7 @@ pub mod client;
 pub mod commands;
 pub mod dispatch;
 pub mod handler;
+pub mod help;
 pub mod manual_schemas;
 pub mod serve;
 pub mod stdio;

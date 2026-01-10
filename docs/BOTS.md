@@ -50,20 +50,23 @@ Use Co-Authored-By in all commits, including models, humans, and agents who cont
 
 ### Tool Naming Conventions
 
-All tools use consistent prefixes for discoverability:
+All tools use consistent prefixes for discoverability. Use `help()` to browse all 51 tools.
 
-| Prefix | Domain | Examples |
-|--------|--------|----------|
-| `cas_*` | Content addressable storage | `cas_store`, `cas_inspect`, `cas_upload_file` |
-| `orpheus_*` | MIDI generation | `orpheus_generate`, `orpheus_continue` |
-| `abc_*` | ABC notation | `abc_parse`, `abc_to_midi`, `abc_validate` |
-| `convert_*` | Format conversion | `convert_midi_to_wav` |
-| `soundfont_*` | SoundFont inspection | `soundfont_inspect`, `soundfont_preset_inspect` |
-| `beatthis_*` | BeatThis model | `beatthis_analyze` |
-| `job_*` | Job management | `job_status`, `job_poll`, `job_list` |
-| `graph_*` | Audio routing & queries | `graph_bind`, `graph_connect`, `graph_query` |
-| `agent_chat_*` | LLM sub-agents | `agent_chat_new`, `agent_chat_send` |
-| `weave_*` | Python kernel (vibeweaver) | `weave_eval`, `weave_session`, `weave_reset` |
+| Prefix/Name | Domain | Examples |
+|-------------|--------|----------|
+| `orpheus_*` | MIDI generation | `orpheus_generate`, `orpheus_continue`, `orpheus_bridge` |
+| `abc_*` | ABC notation | `abc_validate`, `abc_to_midi` |
+| `midi_*` | MIDI operations | `midi_render`, `midi_classify`, `midi_info` |
+| `audio_*` | Audio I/O | `audio_output_attach`, `audio_input_attach`, `audio_monitor` |
+| `beats_detect` | Beat detection | `beats_detect` |
+| `audio_analyze` | CLAP analysis | `audio_analyze` |
+| `timeline_*` | Timeline regions | `timeline_region_create`, `timeline_region_list`, `timeline_clear` |
+| `job_*` | Job management | `job_poll`, `job_cancel`, `job_list` |
+| `graph_*` | Audio routing | `graph_bind`, `graph_connect`, `graph_query`, `graph_context` |
+| `kernel_*` | Python kernel | `kernel_eval`, `kernel_session`, `kernel_reset` |
+| `artifact_*` | Artifacts | `artifact_upload`, `artifact_list`, `artifact_get` |
+| bare verbs | Playback | `play`, `pause`, `stop`, `seek`, `tempo`, `status` |
+| `help` | Documentation | `help` (call with `tool:` or `category:` params) |
 
 ### Adding New Tools & Cap'n Proto Schemas
 

@@ -55,95 +55,71 @@ soundfont_inspect         List SoundFont presets
 soundfont_preset_inspect  Inspect specific preset
 ```
 
-### 💾 Content-Addressable Storage (CAS)
+### 📦 Artifacts
 ```
-cas_store                 Store base64 content → hash
-cas_inspect               Get metadata for hash
-cas_get                   Retrieve content by hash
-```
-
-BLAKE3 hashing, automatic deduplication, all content addressable.
-
-### 📦 Artifacts (Shareable Links!)
-
-Artifacts wrap CAS content with context:
-- **HTTP Access**: `GET /artifact/{id}` streams content with MIME type
-- **Metadata**: `GET /artifact/{id}/meta` returns JSON with lineage
-- **Listing**: `GET /artifacts?tag=X&creator=Y` filters artifacts
-- **Tracking**: Access counts, last accessed timestamps
-
-```
-artifact_upload           Upload file from disk as artifact
-artifact_list             List artifacts (filter by tag, creator)
-artifact_get              Get artifact metadata by ID
-add_annotation            Add vibes/notes to artifacts
+artifact_upload           Upload file as artifact
+artifact_list             List artifacts
+artifact_get              Get artifact by ID
 ```
 
-```javascript
-// Generate something
-job = orpheus_generate({temperature: 1.0})
-result = job_poll({job_ids: [job.job_id], timeout_ms: 60000})
-
-// Share via artifact URL (not raw CAS hash!)
-// http://localhost:8082/artifact/artifact_abc123def456
+### ⚡ Jobs
 ```
-
-### ⚡ Async Job System
-```
-job_status                Check job state
-job_list                  List all jobs
-job_cancel                Cancel running job
-job_poll                  Wait for completion (any/all modes)
-job_sleep                 Sleep for duration
+job_list                  List jobs
+job_cancel                Cancel job
+job_poll                  Poll/await jobs
 ```
 
 All slow operations return `job_id` immediately:
 
 ```javascript
-// Launch 3 generations in parallel
 jobs = [
     orpheus_generate({temperature: 0.8}),
-    orpheus_generate({temperature: 1.0}),
-    orpheus_generate({temperature: 1.2})
+    orpheus_generate({temperature: 1.0})
 ]
-
-// Wait for first one
-result = job_poll({
-    timeout_ms: 60000,
-    job_ids: jobs.map(j => j.job_id),
-    mode: "any"
-})
-
-// Or wait for all
-result = job_poll({timeout_ms: 120000, job_ids: [...], mode: "all"})
+result = job_poll({job_ids: jobs.map(j => j.job_id), timeout_ms: 60000, mode: "any"})
 ```
 
-### 🎛️ Audio Graph
+### 🎛️ Graph
 ```
-graph_bind                Bind identity to device
-graph_tag                 Tag an identity
-graph_connect             Connect nodes
-graph_find                Query identities
-graph_context             Get recent artifacts/context for LLM
-graph_query               Trustfall queries across artifacts & devices
-```
-
-### 🎬 Timeline (Chaosgarden)
-```
-garden_status             Get playback state
-garden_play/pause/stop    Transport controls
-garden_seek               Seek to beat position
-garden_set_tempo          Set BPM
-garden_create_region      Place content on timeline
-garden_delete_region      Remove region
-garden_move_region        Reposition region
-garden_get_regions        Query timeline regions
-garden_query              Trustfall queries on garden state
+graph_bind                Bind identity
+graph_tag                 Tag identity
+graph_connect             Connect identities
+graph_find                Find identities
+graph_context             LLM context
+graph_query               Trustfall query
 ```
 
-### ⚙️ Configuration
+### 🎬 Playback & Timeline
 ```
-config_get                Get configuration values (paths, ports, models)
+play/pause/stop           Transport controls
+seek                      Seek to beat
+tempo                     Set BPM
+status                    System status
+timeline_region_create    Create region
+timeline_region_delete    Delete region
+timeline_region_move      Move region
+timeline_region_list      List regions
+timeline_clear            Clear timeline
+garden_query              Trustfall query
+```
+
+### 🔊 Audio I/O
+```
+audio_output_attach       Attach output
+audio_output_detach       Detach output
+audio_output_status       Output status
+audio_input_attach        Attach input
+audio_input_detach        Detach input
+audio_input_status        Input status
+audio_monitor             Monitor gain
+```
+
+### ⚙️ System
+```
+config                    Get config
+storage_stats             Storage stats
+event_poll                Poll events
+help                      Tool docs
 ```
 
 ## 🚀 Deployment
@@ -252,7 +228,7 @@ Vibeweaver embeds system Python via PyO3 for interactive music scripting. Instal
 pip install --user mido numpy mingus pretty-midi
 ```
 
-These are then available in `weave_eval` for creating MIDI, working with music theory, etc.
+These are then available in `kernel_eval` for creating MIDI, working with music theory, etc.
 
 ## 🛠️ Development
 

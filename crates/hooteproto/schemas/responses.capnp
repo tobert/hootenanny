@@ -41,7 +41,7 @@ struct ToolResponse {
     # Audio Analysis
     beatsAnalyzed @19 :BeatsAnalyzedResponse;
     clapAnalyzed @20 :ClapAnalyzedResponse;
-    midiInfo @55 :MidiInfoResponse;
+    midiInfo @54 :MidiInfoResponse;
 
     # Garden/Transport
     gardenStatus @21 :GardenStatusResponse;
@@ -103,11 +103,10 @@ struct ToolResponse {
     # Job Extended (with full details)
     jobPoll @50 :JobPollResponse;
     jobCancel @51 :JobCancelResponse;
-    jobSleep @52 :JobSleepResponse;
 
     # Audio Conversion
-    abcToMidi @53 :AbcToMidiResponse;
-    midiToWav @54 :MidiToWavResponse;
+    abcToMidi @52 :AbcToMidiResponse;
+    midiToWav @53 :MidiToWavResponse;
   }
 }
 
@@ -241,10 +240,6 @@ struct JobPollResponse {
 struct JobCancelResponse {
   jobId @0 :Text;
   cancelled @1 :Bool;
-}
-
-struct JobSleepResponse {
-  sleptMs @0 :UInt64;
 }
 
 # =============================================================================

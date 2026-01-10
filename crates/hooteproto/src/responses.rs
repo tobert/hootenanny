@@ -37,7 +37,6 @@ pub enum ToolResponse {
     JobPollResult(JobPollResultResponse),
     JobPoll(JobPollResponse),
     JobCancel(JobCancelResponse),
-    JobSleep(JobSleepResponse),
 
     // === Event Polling ===
     EventPoll(EventPollResponse),
@@ -285,11 +284,6 @@ pub struct JobPollResponse {
 pub struct JobCancelResponse {
     pub job_id: String,
     pub cancelled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct JobSleepResponse {
-    pub slept_ms: u64,
 }
 
 // =============================================================================

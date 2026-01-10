@@ -46,7 +46,3 @@ struct JobCancel {
 struct JobList {
   status @0 :Text;
 }
-
-struct JobSleep {
-  milliseconds @0 :UInt64;
-}
