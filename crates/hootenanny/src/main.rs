@@ -364,6 +364,7 @@ async fn main() -> Result<()> {
     let web_state = web::WebState {
         artifact_store: artifact_store.clone(),
         cas: Arc::new(cas.clone()),
+        garden_manager: garden_manager.clone(),
     };
     let artifact_router = web::router(web_state);
 

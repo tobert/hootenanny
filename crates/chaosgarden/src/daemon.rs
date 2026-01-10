@@ -118,6 +118,12 @@ pub struct GardenDaemon {
     // This is obtained from the PipeWire output stream when attached
     timeline_ring: RwLock<Option<Arc<Mutex<RingBuffer>>>>,
 
+    // Streaming tap buffer for WebSocket/HTTP audio streaming
+    // This captures a copy of mixed audio for external consumers without
+    // interfering with the RT playback path. Written during process_playback().
+    streaming_tap: Arc<Mutex<RingBuffer>>,
+    streaming_tap_sample_rate: u32,
+
     // Monotonic version counter for snapshot invalidation
     snapshot_version: std::sync::atomic::AtomicU64,
 }
@@ -158,6 +164,13 @@ impl GardenDaemon {
         monitor_channel.enabled.store(false, Ordering::Relaxed);
         monitor_channel.set_gain(0.8); // Default 80% gain
 
+        // Create streaming tap buffer - ~500ms of stereo audio at 48kHz
+        // This allows external consumers to fetch audio snapshots without
+        // interfering with the RT playback path.
+        let streaming_tap_sample_rate = 48000u32;
+        let streaming_tap_capacity = streaming_tap_sample_rate as usize * 2; // ~500ms stereo
+        let streaming_tap = Arc::new(Mutex::new(RingBuffer::new(streaming_tap_capacity)));
+
         Self {
             transport: RwLock::new(TransportState::default()),
             tempo_map,
@@ -178,6 +191,8 @@ impl GardenDaemon {
             playback_engine: RwLock::new(None),
             compiled_graph: RwLock::new(None),
             timeline_ring: RwLock::new(None),
+            streaming_tap,
+            streaming_tap_sample_rate,
             snapshot_version: std::sync::atomic::AtomicU64::new(0),
         }
     }
@@ -583,10 +598,16 @@ impl GardenDaemon {
         // Process one buffer
         match engine.process(graph, &regions) {
             Ok(output_buffer) => {
-                // Write output to timeline ring
+                // Write output to timeline ring (for RT playback)
                 if let Ok(mut ring) = timeline_ring.lock() {
                     // AudioBuffer.samples is interleaved [L, R, L, R, ...]
                     ring.write(&output_buffer.samples);
+                }
+
+                // Also write to streaming tap for WebSocket/HTTP consumers
+                // This is a separate copy that doesn't interfere with RT playback
+                if let Ok(mut tap) = self.streaming_tap.lock() {
+                    tap.write(&output_buffer.samples);
                 }
             }
             Err(e) => {
@@ -815,6 +836,39 @@ impl GardenDaemon {
             let clamped = g.clamp(0.0, 1.0);
             self.monitor_channel.gain.store(clamped, Ordering::Relaxed);
             info!("Monitor gain: {}", clamped);
+        }
+    }
+
+    /// Get an audio snapshot from the streaming tap buffer.
+    ///
+    /// Returns interleaved stereo f32 samples from the most recent output.
+    /// This reads from the streaming tap (which is a copy of output audio)
+    /// without interfering with RT playback.
+    fn get_audio_snapshot(&self, frames: u32) -> ShellReply {
+        let samples_needed = frames as usize * 2; // stereo
+        let mut samples = vec![0.0f32; samples_needed];
+
+        if let Ok(mut tap) = self.streaming_tap.lock() {
+            let available = tap.available();
+            let to_read = samples_needed.min(available);
+
+            if to_read > 0 {
+                tap.read(&mut samples[..to_read]);
+                // If we got fewer samples than requested, trim the vec
+                if to_read < samples_needed {
+                    samples.truncate(to_read);
+                }
+            } else {
+                // No samples available - return empty
+                samples.clear();
+            }
+        }
+
+        ShellReply::AudioSnapshot {
+            sample_rate: self.streaming_tap_sample_rate,
+            channels: 2,
+            format: 0, // 0 = f32le
+            samples,
         }
     }
 
@@ -1350,6 +1404,9 @@ impl GardenDaemon {
                     midi_devices: vec![], // TODO: Add MIDI device tracking
                 }
             }
+
+            // Audio streaming snapshot
+            ShellRequest::GetAudioSnapshot { frames } => self.get_audio_snapshot(frames),
 
             // Unhandled requests
             _ => ShellReply::Error {

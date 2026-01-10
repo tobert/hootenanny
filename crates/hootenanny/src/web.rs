@@ -28,6 +28,8 @@ use tokio_util::io::ReaderStream;
 pub struct WebState {
     pub artifact_store: Arc<RwLock<FileStore>>,
     pub cas: Arc<CasFileStore>,
+    /// Optional connection to chaosgarden for live audio streaming
+    pub garden_manager: Option<Arc<crate::zmq::GardenManager>>,
 }
 
 pub fn router(state: WebState) -> Router {
@@ -66,12 +68,20 @@ async fn serve_ui() -> impl IntoResponse {
 }
 
 /// WebSocket handler for live audio streaming
-async fn stream_live_ws(ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(handle_live_stream)
+async fn stream_live_ws(
+    State(state): State<WebState>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_live_stream(socket, state.garden_manager))
 }
 
 /// Handle a live stream WebSocket connection
-async fn handle_live_stream(socket: WebSocket) {
+async fn handle_live_stream(
+    socket: WebSocket,
+    garden_manager: Option<Arc<crate::zmq::GardenManager>>,
+) {
+    use hooteproto::garden::{ShellReply, ShellRequest};
+
     let (mut sender, mut receiver) = socket.split();
 
     // Wait for client to send start message
@@ -93,30 +103,48 @@ async fn handle_live_stream(socket: WebSocket) {
         }
     }
 
-    // Stream audio data
-    // TODO: Wire this to chaosgarden audio snapshot when implemented
-    // For now, send silence at 48kHz stereo
-    let sample_rate: u32 = 48000;
-    let channels: u16 = 2;
-    let format: u16 = 0; // f32le
-    let samples_per_packet = 512;
+    // Default audio parameters
+    let default_sample_rate: u32 = 48000;
+    let default_channels: u16 = 2;
+    let default_format: u16 = 0; // f32le
+    let frames_per_request: u32 = 512; // ~10.7ms at 48kHz
 
     let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(10));
 
     loop {
         interval.tick().await;
 
+        // Try to get audio from chaosgarden
+        let (sample_rate, channels, format, samples) = if let Some(ref manager) = garden_manager {
+            match manager.request(ShellRequest::GetAudioSnapshot { frames: frames_per_request }).await {
+                Ok(ShellReply::AudioSnapshot { sample_rate, channels, format, samples }) => {
+                    (sample_rate, channels, format, samples)
+                }
+                Ok(_) => {
+                    // Unexpected reply - send silence
+                    (default_sample_rate, default_channels, default_format, vec![0.0f32; frames_per_request as usize * 2])
+                }
+                Err(e) => {
+                    tracing::debug!("Audio snapshot error: {}", e);
+                    (default_sample_rate, default_channels, default_format, vec![0.0f32; frames_per_request as usize * 2])
+                }
+            }
+        } else {
+            // No garden manager - send silence
+            (default_sample_rate, default_channels, default_format, vec![0.0f32; frames_per_request as usize * 2])
+        };
+
         // Build packet: 8-byte header + PCM samples
-        let mut packet = Vec::with_capacity(8 + samples_per_packet * 2 * 4);
+        let mut packet = Vec::with_capacity(8 + samples.len() * 4);
 
         // Header: sample_rate (u32) + channels (u16) + format (u16)
         packet.extend_from_slice(&sample_rate.to_le_bytes());
         packet.extend_from_slice(&channels.to_le_bytes());
         packet.extend_from_slice(&format.to_le_bytes());
 
-        // Silence samples (interleaved stereo f32)
-        for _ in 0..(samples_per_packet * 2) {
-            packet.extend_from_slice(&0.0_f32.to_le_bytes());
+        // PCM samples (interleaved stereo f32)
+        for sample in &samples {
+            packet.extend_from_slice(&sample.to_le_bytes());
         }
 
         if sender.send(Message::Binary(packet.into())).await.is_err() {
@@ -144,13 +172,14 @@ struct StreamCommand {
 }
 
 /// Get stream status
-async fn stream_status() -> impl IntoResponse {
+async fn stream_status(State(state): State<WebState>) -> impl IntoResponse {
+    let connected = state.garden_manager.is_some();
     Json(serde_json::json!({
-        "status": "available",
+        "status": if connected { "available" } else { "no_backend" },
         "sample_rate": 48000,
         "channels": 2,
         "format": "f32le",
-        "note": "Audio streaming not yet connected to chaosgarden"
+        "backend": if connected { "chaosgarden" } else { "none" }
     }))
 }
 
@@ -669,6 +698,7 @@ mod tests {
         let state = WebState {
             artifact_store: Arc::new(RwLock::new(FileStore::new(&artifact_path).unwrap())),
             cas: Arc::new(cas),
+            garden_manager: None, // No chaosgarden connection in tests
         };
 
         (state, temp_dir)

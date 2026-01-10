@@ -433,6 +433,13 @@ pub enum ShellRequest {
         /// Monitor gain 0.0-1.0 (None = don't change)
         gain: Option<f32>,
     },
+
+    /// Request an audio snapshot for streaming (WebSocket, etc.)
+    /// Returns the most recent audio samples from the output mix.
+    GetAudioSnapshot {
+        /// Number of stereo frames to capture (e.g., 512 = ~10.7ms at 48kHz)
+        frames: u32,
+    },
 }
 
 /// Stream format definition for audio/MIDI capture
@@ -534,6 +541,17 @@ pub enum ShellReply {
         outputs: Vec<crate::garden_snapshot::AudioOutput>,
         inputs: Vec<crate::garden_snapshot::AudioInput>,
         midi_devices: Vec<crate::garden_snapshot::MidiDeviceInfo>,
+    },
+    /// Audio snapshot for streaming
+    AudioSnapshot {
+        /// Sample rate in Hz (typically 48000)
+        sample_rate: u32,
+        /// Number of channels (typically 2 for stereo)
+        channels: u16,
+        /// Audio format (0 = f32le)
+        format: u16,
+        /// Interleaved PCM samples [L, R, L, R, ...]
+        samples: Vec<f32>,
     },
 }
 
