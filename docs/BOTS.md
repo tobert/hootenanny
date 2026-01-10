@@ -44,7 +44,7 @@ Make it work. Make it clear. Make it sing.
 - `crates/hootenanny/src/api/typed_dispatcher.rs` — Tool execution
 - `crates/holler/src/tools_registry.rs` — MCP tool schemas
 
-## Development Rules
+## Development Guidelines
 
 ### Error Handling
 
@@ -194,8 +194,8 @@ GET /artifact/{id}/meta  → JSON metadata
 GET /artifacts           → List (filterable)
 ```
 
-## Reference Docs
+## Reference
 
-- ZeroMQ Guide: `~/src/zguide/` (Chapter 4 for Lazy Pirate)
-- ZeroMQ RFCs: `~/src/rfc/` (MDP protocol specs)
 - Architecture: `docs/ARCHITECTURE.md`
+- ZeroMQ Guide: [zguide.zeromq.org](https://zguide.zeromq.org) (Chapter 4 for Lazy Pirate)
+- Trustfall: [docs.rs/trustfall](https://docs.rs/trustfall/latest/trustfall/)
