@@ -21,12 +21,12 @@
                     │              │              │
                     ▼              ▼              ▼
 ┌─────────────────────────┐ ┌─────────────┐ ┌─────────────────────────────────┐
-│      HOOTENANNY         │ │  LUANETTE   │ │        CHAOSGARDEN              │
-│    (Control Plane)      │ │  (Lua VM)   │ │     (Realtime Audio)            │
+│      HOOTENANNY         │ │ VIBEWEAVER  │ │        CHAOSGARDEN              │
+│    (Control Plane)      │ │  (Python)   │ │     (Realtime Audio)            │
 │                         │ │             │ │                                 │
-│ • Job orchestration     │ │ • Scripts   │ │ • PipeWire integration          │
-│ • CAS management        │ │ • Workflows │ │ • Timeline playback             │
-│ • GPU service calls     │ │ • MCP proxy │ │ • Audio routing                 │
+│ • Job orchestration     │ │ • Kernel    │ │ • PipeWire integration          │
+│ • CAS management        │ │ • Sessions  │ │ • Timeline playback             │
+│ • GPU service calls     │ │ • Rules     │ │ • Audio routing                 │
 │ • Artifact tracking     │ │             │ │                                 │
 └────────────┬────────────┘ └──────┬──────┘ └─────────────────────────────────┘
              │                     │
@@ -65,13 +65,13 @@
 - Artifact tracking and lineage
 - ZMQ client for chaosgarden control
 
-### luanette
-**Lua scripting engine**
+### vibeweaver
+**Python scripting kernel**
 
-- Sandboxed Lua runtime for workflow scripts
-- ZMQ server for receiving script execution requests
-- MCP proxy for calling upstream tools
-- Job system for tracking script execution
+- Embedded Python via PyO3
+- ZMQ server for kernel execution requests
+- Tool bridge for calling upstream tools
+- Session persistence and rule-based scheduling
 
 ### holler
 **MCP gateway and CLI**
@@ -95,14 +95,14 @@
 - Axum-based MCP transport (SSE, streamable HTTP)
 - Session management
 - Tool, resource, prompt types
-- Used by hootenanny and luanette for MCP handling
+- Used by hootenanny and vibeweaver for MCP handling
 
 ### cas
 **Content Addressable Storage**
 
 - BLAKE3 hashing
 - File-based store with metadata
-- Shared by hootenanny, chaosgarden, luanette
+- Shared by hootenanny, chaosgarden, vibeweaver
 
 ### abc
 **ABC notation parsing**
@@ -117,22 +117,22 @@
 - Unified query layer over artifacts, devices, connections
 - GraphQL-like queries via Trustfall
 
+### hooteconf
+**Layered configuration loading**
 
-**LLM integration**
-
-- Chat state machine
-- Multi-backend support (DeepSeek, Ollama)
-- Agent spawning for sub-tasks
+- System → user → project → env var hierarchy
+- Splits config into Infrastructure (fixed at startup) and Bootstrap (seeds runtime)
+- Paths, bind addresses, model endpoints, media directories
 
 ## Data Flow
 
 ### Tool Call Flow
 ```
-Client → Holler (HTTP) → ZMQ → Hootenanny/Luanette → GPU Service
+Client → Holler (HTTP) → ZMQ → Hootenanny/Vibeweaver → GPU Service
                                         ↓
                                     JobStore
                                         ↓
-Client ← Holler (SSE) ← ZMQ ← Hootenanny/Luanette
+Client ← Holler (SSE) ← ZMQ ← Hootenanny/Vibeweaver
 ```
 
 ### Job Lifecycle
