@@ -61,18 +61,18 @@ This pattern was reliable once established. Each step has clear inputs/outputs.
 
 ## Pain Points
 
-### 1. No Timeline Cleanup
+### 1. No Timeline Cleanup ✅ FIXED
 **Problem:** Can't clear or delete regions from chaosgarden.
 **Workaround:** Keep seeking to higher beat numbers.
 **Impact:** Timeline accumulates cruft; no way to start fresh.
 
-**Needed:**
-```
-garden_clear()           # Remove all regions
-garden_delete_region(id) # Remove specific region
-```
+**Fix (2026-01-05):** Implemented `garden_clear_regions` tool. Also added MCP schemas for
+the existing `garden_delete_region`, `garden_move_region`, and `garden_get_regions` tools
+that were missing from the registry.
 
-### 2. ABC Notation Flattens Polyphony
+Commit: `17d328f feat(chaosgarden): add garden_clear_regions tool`
+
+### 2. ABC Notation Flattens Polyphony ✅ FIXED
 **Problem:** Multi-voice ABC (`V:1`, `V:2`) serializes sequentially instead of playing simultaneously.
 **Workaround:** Abandoned ABC; used mido directly for polyphonic content.
 **Impact:** ABC is unusable for anything beyond monophonic melodies.
@@ -86,10 +86,25 @@ c2 c2 | d2 d2 |
 ```
 Played as: e-f-g-f-c-c-d-d (sequential) instead of chords.
 
-### 3. Python User Site-Packages Not in sys.path
+**Root cause:** `route_elements_to_voices()` in the ABC parser required voice definitions
+in the header. When `V:` switches appeared only in the body (without header definitions),
+all elements were merged into a single voice and VoiceSwitch elements were filtered out.
+
+**Fix (2026-01-05):** Modified parser to detect VoiceSwitch elements and create separate
+voices even without header definitions. Added tests to verify multi-voice MIDI output.
+
+Commit: `0d7d1e7 fix(abc): handle multi-voice ABC without header definitions`
+
+### 3. Python User Site-Packages Not in sys.path ✅ FIXED
 **Problem:** PyO3's embedded Python doesn't include `~/.local/lib/python3.13/site-packages`.
 **Fix applied:** Added `PYTHONPATH` to vibeweaver.service.
 **Better solution:** Detect and add user site-packages automatically in kernel.rs.
+
+**Fix (2026-01-05):** Added `ensure_user_site_packages()` to vibeweaver's kernel.rs that
+uses Python's `site` module to auto-detect and add user site-packages. The PYTHONPATH
+workaround in vibeweaver.service is no longer needed.
+
+Commit: `f57a54d feat(vibeweaver): auto-detect user site-packages in Python kernel`
 
 ### 4. LilyPond Rhythm Math is Error-Prone
 **Problem:** Manually translating melody to LilyPond notation led to barcheck errors.
@@ -122,27 +137,27 @@ Played as: e-f-g-f-c-c-d-d (sequential) instead of chords.
 ## Feature Requests
 
 ### High Priority
-| Feature | Rationale |
-|---------|-----------|
-| `garden_clear` | Essential for iteration |
-| `garden_delete_region(id)` | Selective cleanup |
-| Fix ABC polyphony | Make ABC useful for real music |
-| Auto-detect user site-packages | Remove manual PYTHONPATH config |
+| Feature | Rationale | Status |
+|---------|-----------|--------|
+| `garden_clear` | Essential for iteration | ✅ Done |
+| `garden_delete_region(id)` | Selective cleanup | ✅ Already existed, added MCP schema |
+| Fix ABC polyphony | Make ABC useful for real music | ✅ Done |
+| Auto-detect user site-packages | Remove manual PYTHONPATH config | ✅ Done |
 
 ### Medium Priority
-| Feature | Rationale |
-|---------|-----------|
-| `midi_to_lilypond` | Generate sheet music from MIDI |
-| Live MIDI preview | Faster iteration without full render |
-| Tempo sync | Match garden to MIDI tempo |
-| Bar-level preview | Hear small sections quickly |
+| Feature | Rationale | Status |
+|---------|-----------|--------|
+| `midi_to_lilypond` | Generate sheet music from MIDI | Not started |
+| Live MIDI preview | Faster iteration without full render | Not started |
+| Tempo sync | Match garden to MIDI tempo | Not started |
+| Bar-level preview | Hear small sections quickly | Not started |
 
 ### Nice to Have
-| Feature | Rationale |
-|---------|-----------|
-| Python music prelude | Built-in `DRUMS`, `chord()`, `scale()`, `humanize()` |
-| `weave_eval` autocomplete | Show available functions in kernel |
-| Variation generator | Create N variations of a pattern |
+| Feature | Rationale | Status |
+|---------|-----------|--------|
+| Python music prelude | Built-in `DRUMS`, `chord()`, `scale()`, `humanize()` | Not started |
+| `weave_eval` autocomplete | Show available functions in kernel | Not started |
+| Variation generator | Create N variations of a pattern | Not started |
 
 ---
 
@@ -208,10 +223,12 @@ project(encoding, target={type: audio, soundfont_hash: hash})
 
 ## Next Steps
 
-1. **Implement `garden_clear` and `garden_delete_region`** - Highest impact for workflow
-2. **Fix ABC polyphony** - Make `V:` directives work correctly
-3. **Auto-add user site-packages** - Improve out-of-box vibeweaver experience
+1. ~~**Implement `garden_clear` and `garden_delete_region`**~~ ✅ Done
+2. ~~**Fix ABC polyphony**~~ ✅ Done
+3. ~~**Auto-add user site-packages**~~ ✅ Done
 4. **Add `midi_to_lilypond` tool** - Close the loop on sheet music generation
+5. **Python music prelude** - Add `DRUMS`, `chord()`, `scale()` helpers to vibeweaver
+6. **Tempo sync** - Extract tempo from MIDI when scheduling
 
 ---
 
@@ -224,7 +241,23 @@ project(encoding, target={type: audio, soundfont_hash: hash})
 - **LilyPond compiles:** 3
 - **Bugs found:** 4 (ABC polyphony, PYTHONPATH, LilyPond rhythm, region accumulation)
 - **Bugs fixed in session:** 2 (PYTHONPATH, LilyPond rhythm)
+- **Bugs fixed post-session:** 3 (ABC polyphony, PYTHONPATH auto-detect, garden_clear)
+
+---
+
+## Follow-up Session: 2026-01-05 (evening)
+
+Fixed all high-priority issues identified above:
+
+| Issue | Fix | Commit |
+|-------|-----|--------|
+| No timeline cleanup | Added `garden_clear_regions` tool | `17d328f` |
+| ABC polyphony bug | Fixed voice routing in parser | `0d7d1e7` |
+| PYTHONPATH workaround | Auto-detect user site-packages | `f57a54d` |
+
+All fixes verified with tests and live service restart.
 
 ---
 
 *Report generated by Claude, 2026-01-05*
+*Updated with fixes, 2026-01-05*
