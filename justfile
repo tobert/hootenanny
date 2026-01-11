@@ -44,17 +44,17 @@ restart-chaosgarden: build
     @sleep 1
     systemctl --user status chaosgarden --no-pager | head -8
 
-# Restart all services (hootenanny, holler, vibeweaver, chaosgarden)
+# Restart all services (hootenanny, holler, vibeweaver, chaosgarden, rave)
 restart-all: build
-    systemctl --user restart hootenanny holler vibeweaver chaosgarden
+    systemctl --user restart hootenanny holler vibeweaver chaosgarden rave
     @sleep 2
     @just status
 
 # Show status of all services
 status:
     @echo "=== Hootenanny Services ==="
-    @systemctl --user is-active hootenanny holler vibeweaver chaosgarden 2>/dev/null | paste - - - - || true
-    @systemctl --user list-units hootenanny.service holler.service vibeweaver.service chaosgarden.service --no-pager --no-legend
+    @systemctl --user is-active hootenanny holler vibeweaver chaosgarden rave 2>/dev/null | paste - - - - - || true
+    @systemctl --user list-units hootenanny.service holler.service vibeweaver.service chaosgarden.service rave.service --no-pager --no-legend
 
 # Install systemd unit files (symlinks to repo)
 install-services:
@@ -63,16 +63,17 @@ install-services:
     ln -sf $(pwd)/systemd/holler.service ~/.config/systemd/user/
     ln -sf $(pwd)/systemd/vibeweaver.service ~/.config/systemd/user/
     ln -sf $(pwd)/systemd/chaosgarden.service ~/.config/systemd/user/
+    ln -sf $(pwd)/systemd/rave.service ~/.config/systemd/user/
     systemctl --user daemon-reload
-    @echo "Unit files installed. Enable with: systemctl --user enable hootenanny holler vibeweaver chaosgarden"
+    @echo "Unit files installed. Enable with: systemctl --user enable hootenanny holler vibeweaver chaosgarden rave"
 
 # Enable all services to start on login
 enable-services:
-    systemctl --user enable hootenanny holler vibeweaver chaosgarden
+    systemctl --user enable hootenanny holler vibeweaver chaosgarden rave
 
 # Disable all services
 disable-services:
-    systemctl --user disable hootenanny holler vibeweaver chaosgarden
+    systemctl --user disable hootenanny holler vibeweaver chaosgarden rave
 
 # Generate Python client from running hootenanny
 # Requires: hootenanny running, uv installed

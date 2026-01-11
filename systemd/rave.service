@@ -1,0 +1,24 @@
+[Unit]
+Description=RAVE Audio Codec Service (hootpy)
+Documentation=https://github.com/halfremembered/hootenanny
+After=network.target
+# RAVE can run standalone, but typically used with hootenanny
+Wants=hootenanny.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/src/hootenanny/python/services/rave
+ExecStart=%h/.local/bin/uv run python -m rave.service
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+# RAVE needs GPU access
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=PYTHONUNBUFFERED=1
+
+# ZMQ endpoint - matches default in hootpy
+Environment=RAVE_ENDPOINT=tcp://127.0.0.1:5591
+
+[Install]
+WantedBy=default.target
