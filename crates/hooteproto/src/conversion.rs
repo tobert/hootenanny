@@ -1892,6 +1892,68 @@ fn response_to_capnp_tool_response(
             b.set_duration_seconds(r.duration_seconds.unwrap_or(0.0));
             b.set_sample_rate(r.sample_rate.unwrap_or(0));
         }
+
+        // RAVE responses
+        ToolResponse::RaveEncoded(r) => {
+            let mut b = builder.reborrow().init_rave_encoded();
+            b.set_artifact_id(&r.artifact_id);
+            b.set_content_hash(&r.content_hash);
+            let mut shape = b.reborrow().init_latent_shape(r.latent_shape.len() as u32);
+            for (i, dim) in r.latent_shape.iter().enumerate() {
+                shape.set(i as u32, *dim);
+            }
+            b.set_latent_dim(r.latent_dim);
+            b.set_model(&r.model);
+            b.set_sample_rate(r.sample_rate);
+        }
+        ToolResponse::RaveDecoded(r) => {
+            let mut b = builder.reborrow().init_rave_decoded();
+            b.set_artifact_id(&r.artifact_id);
+            b.set_content_hash(&r.content_hash);
+            b.set_duration_seconds(r.duration_seconds);
+            b.set_sample_rate(r.sample_rate);
+            b.set_model(&r.model);
+        }
+        ToolResponse::RaveReconstructed(r) => {
+            let mut b = builder.reborrow().init_rave_reconstructed();
+            b.set_artifact_id(&r.artifact_id);
+            b.set_content_hash(&r.content_hash);
+            b.set_duration_seconds(r.duration_seconds);
+            b.set_sample_rate(r.sample_rate);
+            b.set_model(&r.model);
+        }
+        ToolResponse::RaveGenerated(r) => {
+            let mut b = builder.reborrow().init_rave_generated();
+            b.set_artifact_id(&r.artifact_id);
+            b.set_content_hash(&r.content_hash);
+            b.set_duration_seconds(r.duration_seconds);
+            b.set_sample_rate(r.sample_rate);
+            b.set_model(&r.model);
+            b.set_temperature(r.temperature);
+        }
+        ToolResponse::RaveStreamStarted(r) => {
+            let mut b = builder.reborrow().init_rave_stream_started();
+            b.set_stream_id(&r.stream_id);
+            b.set_model(&r.model);
+            b.set_input_identity(&r.input_identity);
+            b.set_output_identity(&r.output_identity);
+            b.set_latency_ms(r.latency_ms);
+        }
+        ToolResponse::RaveStreamStopped(r) => {
+            let mut b = builder.reborrow().init_rave_stream_stopped();
+            b.set_stream_id(&r.stream_id);
+            b.set_duration_seconds(r.duration_seconds);
+        }
+        ToolResponse::RaveStreamStatus(r) => {
+            let mut b = builder.reborrow().init_rave_stream_status();
+            b.set_stream_id(&r.stream_id);
+            b.set_running(r.running);
+            b.set_model(&r.model);
+            b.set_input_identity(&r.input_identity);
+            b.set_output_identity(&r.output_identity);
+            b.set_frames_processed(r.frames_processed);
+            b.set_latency_ms(r.latency_ms);
+        }
     }
     Ok(())
 }
@@ -2714,6 +2776,80 @@ fn capnp_tool_response_to_response(
                 content_hash: r.get_content_hash()?.to_string()?,
                 sample_rate: r.get_sample_rate(),
                 duration_secs: if duration_secs > 0.0 { Some(duration_secs) } else { None },
+            }))
+        }
+
+        // RAVE responses
+        Which::RaveEncoded(r) => {
+            let r = r?;
+            let latent_shape: Vec<u32> = r.get_latent_shape()?.iter().collect();
+            Ok(ToolResponse::RaveEncoded(RaveEncodedResponse {
+                artifact_id: r.get_artifact_id()?.to_string()?,
+                content_hash: r.get_content_hash()?.to_string()?,
+                latent_shape,
+                latent_dim: r.get_latent_dim(),
+                model: r.get_model()?.to_string()?,
+                sample_rate: r.get_sample_rate(),
+            }))
+        }
+        Which::RaveDecoded(r) => {
+            let r = r?;
+            Ok(ToolResponse::RaveDecoded(RaveDecodedResponse {
+                artifact_id: r.get_artifact_id()?.to_string()?,
+                content_hash: r.get_content_hash()?.to_string()?,
+                duration_seconds: r.get_duration_seconds(),
+                sample_rate: r.get_sample_rate(),
+                model: r.get_model()?.to_string()?,
+            }))
+        }
+        Which::RaveReconstructed(r) => {
+            let r = r?;
+            Ok(ToolResponse::RaveReconstructed(RaveReconstructedResponse {
+                artifact_id: r.get_artifact_id()?.to_string()?,
+                content_hash: r.get_content_hash()?.to_string()?,
+                duration_seconds: r.get_duration_seconds(),
+                sample_rate: r.get_sample_rate(),
+                model: r.get_model()?.to_string()?,
+            }))
+        }
+        Which::RaveGenerated(r) => {
+            let r = r?;
+            Ok(ToolResponse::RaveGenerated(RaveGeneratedResponse {
+                artifact_id: r.get_artifact_id()?.to_string()?,
+                content_hash: r.get_content_hash()?.to_string()?,
+                duration_seconds: r.get_duration_seconds(),
+                sample_rate: r.get_sample_rate(),
+                model: r.get_model()?.to_string()?,
+                temperature: r.get_temperature(),
+            }))
+        }
+        Which::RaveStreamStarted(r) => {
+            let r = r?;
+            Ok(ToolResponse::RaveStreamStarted(RaveStreamStartedResponse {
+                stream_id: r.get_stream_id()?.to_string()?,
+                model: r.get_model()?.to_string()?,
+                input_identity: r.get_input_identity()?.to_string()?,
+                output_identity: r.get_output_identity()?.to_string()?,
+                latency_ms: r.get_latency_ms(),
+            }))
+        }
+        Which::RaveStreamStopped(r) => {
+            let r = r?;
+            Ok(ToolResponse::RaveStreamStopped(RaveStreamStoppedResponse {
+                stream_id: r.get_stream_id()?.to_string()?,
+                duration_seconds: r.get_duration_seconds(),
+            }))
+        }
+        Which::RaveStreamStatus(r) => {
+            let r = r?;
+            Ok(ToolResponse::RaveStreamStatus(RaveStreamStatusResponse {
+                stream_id: r.get_stream_id()?.to_string()?,
+                running: r.get_running(),
+                model: r.get_model()?.to_string()?,
+                input_identity: r.get_input_identity()?.to_string()?,
+                output_identity: r.get_output_identity()?.to_string()?,
+                frames_processed: r.get_frames_processed(),
+                latency_ms: r.get_latency_ms(),
             }))
         }
     }

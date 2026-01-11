@@ -467,6 +467,67 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             Ok(Payload::ToolRequest(ToolRequest::GetToolHelp(request::GetToolHelpRequest { topic: p.topic })))
         }
 
+        // === RAVE Tools ===
+        "rave_encode" => {
+            let p: RaveEncodeArgs = serde_json::from_value(args).context("Invalid rave_encode arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::RaveEncode(request::RaveEncodeRequest {
+                audio_hash: p.audio_hash,
+                model: p.model,
+                tags: p.tags.unwrap_or_default(),
+                creator: p.creator,
+            })))
+        }
+        "rave_decode" => {
+            let p: RaveDecodeArgs = serde_json::from_value(args).context("Invalid rave_decode arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::RaveDecode(request::RaveDecodeRequest {
+                latent_hash: p.latent_hash,
+                latent_shape: p.latent_shape,
+                model: p.model,
+                tags: p.tags.unwrap_or_default(),
+                creator: p.creator,
+            })))
+        }
+        "rave_reconstruct" => {
+            let p: RaveReconstructArgs = serde_json::from_value(args).context("Invalid rave_reconstruct arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::RaveReconstruct(request::RaveReconstructRequest {
+                audio_hash: p.audio_hash,
+                model: p.model,
+                tags: p.tags.unwrap_or_default(),
+                creator: p.creator,
+            })))
+        }
+        "rave_generate" => {
+            let p: RaveGenerateArgs = serde_json::from_value(args).context("Invalid rave_generate arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::RaveGenerate(request::RaveGenerateRequest {
+                model: p.model,
+                duration_seconds: p.duration_seconds,
+                temperature: p.temperature,
+                tags: p.tags.unwrap_or_default(),
+                creator: p.creator,
+            })))
+        }
+        "rave_stream_start" => {
+            let p: RaveStreamStartArgs = serde_json::from_value(args).context("Invalid rave_stream_start arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::RaveStreamStart(request::RaveStreamStartRequest {
+                model: p.model,
+                input_identity: p.input_identity,
+                output_identity: p.output_identity,
+                buffer_size: p.buffer_size,
+            })))
+        }
+        "rave_stream_stop" => {
+            let p: RaveStreamStopArgs = serde_json::from_value(args).context("Invalid rave_stream_stop arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::RaveStreamStop(request::RaveStreamStopRequest {
+                stream_id: p.stream_id,
+            })))
+        }
+        "rave_stream_status" => {
+            let p: RaveStreamStatusArgs = serde_json::from_value(args).context("Invalid rave_stream_status arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::RaveStreamStatus(request::RaveStreamStatusRequest {
+                stream_id: p.stream_id,
+            })))
+        }
+
         // === Fallback: Unknown tool ===
         _ => anyhow::bail!("Unknown tool: {}. All tools must have typed dispatch.", name),
     }
@@ -835,4 +896,58 @@ struct WeaveEvalArgs {
 struct WeaveResetArgs {
     #[serde(default)]
     clear_session: bool,
+}
+
+// === RAVE Args ===
+
+#[derive(Debug, Deserialize)]
+struct RaveEncodeArgs {
+    audio_hash: String,
+    model: Option<String>,
+    tags: Option<Vec<String>>,
+    creator: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RaveDecodeArgs {
+    latent_hash: String,
+    latent_shape: Vec<u32>,
+    model: Option<String>,
+    tags: Option<Vec<String>>,
+    creator: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RaveReconstructArgs {
+    audio_hash: String,
+    model: Option<String>,
+    tags: Option<Vec<String>>,
+    creator: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RaveGenerateArgs {
+    model: Option<String>,
+    duration_seconds: Option<f32>,
+    temperature: Option<f32>,
+    tags: Option<Vec<String>>,
+    creator: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RaveStreamStartArgs {
+    model: Option<String>,
+    input_identity: String,
+    output_identity: String,
+    buffer_size: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RaveStreamStopArgs {
+    stream_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RaveStreamStatusArgs {
+    stream_id: String,
 }

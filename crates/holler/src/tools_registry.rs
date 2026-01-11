@@ -410,6 +410,103 @@ pub fn list_tools() -> Vec<ToolInfo> {
         },
 
         // ==========================================================================
+        // RAVE Tools (Realtime Audio Variational autoEncoder)
+        // ==========================================================================
+        ToolInfo {
+            name: "rave_encode".to_string(),
+            description: "Encode audio to RAVE latent space".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["audio_hash"],
+                "properties": {
+                    "audio_hash": { "type": "string", "description": "CAS hash of input audio (WAV)" },
+                    "model": { "type": "string", "description": "Model name (e.g., 'vintage', 'percussion')" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "creator": { "type": "string" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "rave_decode".to_string(),
+            description: "Decode RAVE latent codes to audio".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["latent_hash", "latent_shape"],
+                "properties": {
+                    "latent_hash": { "type": "string", "description": "CAS hash of latent codes" },
+                    "latent_shape": { "type": "array", "items": { "type": "integer" }, "description": "Shape of latent tensor" },
+                    "model": { "type": "string", "description": "Model name" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "creator": { "type": "string" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "rave_reconstruct".to_string(),
+            description: "Encode then decode audio (round-trip reconstruction)".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["audio_hash"],
+                "properties": {
+                    "audio_hash": { "type": "string", "description": "CAS hash of input audio" },
+                    "model": { "type": "string", "description": "Model name" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "creator": { "type": "string" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "rave_generate".to_string(),
+            description: "Generate audio by sampling from RAVE prior".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "model": { "type": "string", "description": "Model name" },
+                    "duration_seconds": { "type": "number", "description": "Duration in seconds" },
+                    "temperature": { "type": "number", "description": "Sampling temperature (default 1.0)" },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "creator": { "type": "string" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "rave_stream_start".to_string(),
+            description: "Start realtime RAVE audio streaming".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["input_identity", "output_identity"],
+                "properties": {
+                    "model": { "type": "string", "description": "Model name" },
+                    "input_identity": { "type": "string", "description": "Graph identity for audio input source" },
+                    "output_identity": { "type": "string", "description": "Graph identity for audio output sink" },
+                    "buffer_size": { "type": "integer", "description": "Samples per buffer (default 2048)" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "rave_stream_stop".to_string(),
+            description: "Stop a RAVE streaming session".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["stream_id"],
+                "properties": {
+                    "stream_id": { "type": "string", "description": "Streaming session ID" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "rave_stream_status".to_string(),
+            description: "Get status of a RAVE streaming session".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["stream_id"],
+                "properties": {
+                    "stream_id": { "type": "string", "description": "Streaming session ID" }
+                }
+            }),
+        },
+
+        // ==========================================================================
         // Kernel Tools (Python)
         // ==========================================================================
         ToolInfo {

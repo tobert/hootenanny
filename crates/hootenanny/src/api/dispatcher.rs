@@ -671,6 +671,27 @@ impl TypedDispatcher {
                 )
             }
 
+            // === RAVE Tools (not yet connected) ===
+            // RAVE service is implemented in Python via hootpy, connected over ZMQ.
+            // These will be wired up when the RAVE ZMQ client is added.
+            ToolRequest::RaveEncode(_)
+            | ToolRequest::RaveDecode(_)
+            | ToolRequest::RaveReconstruct(_)
+            | ToolRequest::RaveGenerate(_) => {
+                ResponseEnvelope::error(ToolError::internal(
+                    "RAVE service not yet connected. \
+                     Start the RAVE Python service and add ZMQ client.",
+                ))
+            }
+            ToolRequest::RaveStreamStart(_)
+            | ToolRequest::RaveStreamStop(_)
+            | ToolRequest::RaveStreamStatus(_) => {
+                ResponseEnvelope::error(ToolError::internal(
+                    "RAVE streaming not yet implemented. \
+                     Requires chaosgarden audio buffer integration.",
+                ))
+            }
+
             // === AsyncLong tools (routed via dispatch_async_return_job_id) ===
             ToolRequest::MusicgenGenerate(_)
             | ToolRequest::YueGenerate(_)
