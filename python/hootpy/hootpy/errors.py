@@ -26,8 +26,8 @@ class ErrorCategory(Enum):
 class ToolError(Exception):
     """Base error for all tool errors"""
 
-    category: ErrorCategory
-    message: str
+    category: ErrorCategory = ErrorCategory.INTERNAL
+    message: str = ""
     details: dict[str, Any] = field(default_factory=dict)
 
     def __str__(self) -> str:
