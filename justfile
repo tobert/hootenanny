@@ -99,7 +99,7 @@ rebuild: build restart-all
 
 # === RAVE Model Management ===
 
-# Download RAVE models from IRCAM (vintage, percussion, darbouka)
+# Download RAVE models from IRCAM (vintage, percussion)
 download-rave-models:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -107,34 +107,28 @@ download-rave-models:
     MODELS_DIR="${HOME}/.hootenanny/models/rave"
     mkdir -p "$MODELS_DIR"
 
-    # Models to download (both batch and streaming variants)
-    MODELS=("vintage" "percussion" "darbouka")
+    # Available models from IRCAM (some models have been removed)
+    MODELS=("vintage" "percussion")
     BASE_URL="https://play.forum.ircam.fr/rave-vst-api/get_model"
 
     echo "Downloading RAVE models to $MODELS_DIR..."
 
     for model in "${MODELS[@]}"; do
-        echo "  Downloading ${model}..."
+        echo "  ${model}..."
         if [[ ! -f "$MODELS_DIR/${model}.ts" ]]; then
-            curl -fsSL "${BASE_URL}/${model}" -o "$MODELS_DIR/${model}.ts"
-            echo "    ✓ ${model}.ts"
+            if curl -fL --progress-bar "${BASE_URL}/${model}" -o "$MODELS_DIR/${model}.ts.tmp"; then
+                mv "$MODELS_DIR/${model}.ts.tmp" "$MODELS_DIR/${model}.ts"
+                echo "    ✓ ${model}.ts ($(du -h "$MODELS_DIR/${model}.ts" | cut -f1))"
+            else
+                echo "    ✗ ${model}.ts (download failed)"
+                rm -f "$MODELS_DIR/${model}.ts.tmp"
+            fi
         else
             echo "    ⏭ ${model}.ts (exists)"
         fi
-
-        # Streaming variant (if available)
-        if [[ ! -f "$MODELS_DIR/${model}_streaming.ts" ]]; then
-            if curl -fsSL "${BASE_URL}/${model}_streaming" -o "$MODELS_DIR/${model}_streaming.ts" 2>/dev/null; then
-                echo "    ✓ ${model}_streaming.ts"
-            else
-                echo "    ⏭ ${model}_streaming.ts (not available)"
-                rm -f "$MODELS_DIR/${model}_streaming.ts"
-            fi
-        else
-            echo "    ⏭ ${model}_streaming.ts (exists)"
-        fi
     done
 
+    echo ""
     echo "Done! Models saved to $MODELS_DIR"
     ls -lh "$MODELS_DIR"
 
