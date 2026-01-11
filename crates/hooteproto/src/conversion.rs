@@ -433,6 +433,49 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             y.set_seed(req.seed.unwrap_or(42));
             set_artifact_metadata(&mut y.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
         }
+        // RAVE tools
+        ToolRequest::RaveEncode(req) => {
+            let mut r = builder.reborrow().init_rave_encode();
+            r.set_audio_hash(&req.audio_hash);
+            r.set_model(req.model.as_deref().unwrap_or(""));
+            set_artifact_metadata(&mut r.init_metadata(), &None, &None, &req.tags, &req.creator);
+        }
+        ToolRequest::RaveDecode(req) => {
+            let mut r = builder.reborrow().init_rave_decode();
+            r.set_latent_hash(&req.latent_hash);
+            {
+                let mut shape = r.reborrow().init_latent_shape(req.latent_shape.len() as u32);
+                for (i, &v) in req.latent_shape.iter().enumerate() { shape.set(i as u32, v); }
+            }
+            r.set_model(req.model.as_deref().unwrap_or(""));
+            set_artifact_metadata(&mut r.init_metadata(), &None, &None, &req.tags, &req.creator);
+        }
+        ToolRequest::RaveReconstruct(req) => {
+            let mut r = builder.reborrow().init_rave_reconstruct();
+            r.set_audio_hash(&req.audio_hash);
+            r.set_model(req.model.as_deref().unwrap_or(""));
+            set_artifact_metadata(&mut r.init_metadata(), &None, &None, &req.tags, &req.creator);
+        }
+        ToolRequest::RaveGenerate(req) => {
+            let mut r = builder.reborrow().init_rave_generate();
+            r.set_model(req.model.as_deref().unwrap_or(""));
+            r.set_duration_seconds(req.duration_seconds.unwrap_or(4.0));
+            r.set_temperature(req.temperature.unwrap_or(1.0));
+            set_artifact_metadata(&mut r.init_metadata(), &None, &None, &req.tags, &req.creator);
+        }
+        ToolRequest::RaveStreamStart(req) => {
+            let mut r = builder.reborrow().init_rave_stream_start();
+            r.set_model(req.model.as_deref().unwrap_or(""));
+            r.set_input_identity(&req.input_identity);
+            r.set_output_identity(&req.output_identity);
+            r.set_buffer_size(req.buffer_size.unwrap_or(2048));
+        }
+        ToolRequest::RaveStreamStop(req) => {
+            builder.reborrow().init_rave_stream_stop().set_stream_id(&req.stream_id);
+        }
+        ToolRequest::RaveStreamStatus(req) => {
+            builder.reborrow().init_rave_stream_status().set_stream_id(&req.stream_id);
+        }
         ToolRequest::ArtifactUpload(req) => {
             let mut a = builder.reborrow().init_artifact_upload();
             a.set_file_path(&req.file_path);

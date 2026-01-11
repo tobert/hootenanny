@@ -116,6 +116,15 @@ pub enum ToolResponse {
     AnalyzeResult(AnalyzeResultResponse),
     /// Response from project tool (format conversion)
     ProjectResult(ProjectResultResponse),
+
+    // === RAVE Audio Codec ===
+    RaveEncoded(RaveEncodedResponse),
+    RaveDecoded(RaveDecodedResponse),
+    RaveReconstructed(RaveReconstructedResponse),
+    RaveGenerated(RaveGeneratedResponse),
+    RaveStreamStarted(RaveStreamStartedResponse),
+    RaveStreamStopped(RaveStreamStoppedResponse),
+    RaveStreamStatus(RaveStreamStatusResponse),
 }
 
 // =============================================================================
@@ -910,6 +919,81 @@ pub struct ProjectResultResponse {
 }
 
 // =============================================================================
+// RAVE Responses
+// =============================================================================
+
+/// Response from RAVE encode (audio → latent codes)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RaveEncodedResponse {
+    pub artifact_id: String,
+    pub content_hash: String,
+    pub latent_shape: Vec<u32>,
+    pub latent_dim: u32,
+    pub model: String,
+    pub sample_rate: u32,
+}
+
+/// Response from RAVE decode (latent codes → audio)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RaveDecodedResponse {
+    pub artifact_id: String,
+    pub content_hash: String,
+    pub duration_seconds: f64,
+    pub sample_rate: u32,
+    pub model: String,
+}
+
+/// Response from RAVE reconstruct (encode then decode)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RaveReconstructedResponse {
+    pub artifact_id: String,
+    pub content_hash: String,
+    pub duration_seconds: f64,
+    pub sample_rate: u32,
+    pub model: String,
+}
+
+/// Response from RAVE generate (sample from prior)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RaveGeneratedResponse {
+    pub artifact_id: String,
+    pub content_hash: String,
+    pub duration_seconds: f64,
+    pub sample_rate: u32,
+    pub model: String,
+    pub temperature: f32,
+}
+
+/// Response from RAVE stream start
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RaveStreamStartedResponse {
+    pub stream_id: String,
+    pub model: String,
+    pub input_identity: String,
+    pub output_identity: String,
+    pub latency_ms: u32,
+}
+
+/// Response from RAVE stream stop
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RaveStreamStoppedResponse {
+    pub stream_id: String,
+    pub duration_seconds: f64,
+}
+
+/// Response from RAVE stream status
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RaveStreamStatusResponse {
+    pub stream_id: String,
+    pub running: bool,
+    pub model: String,
+    pub input_identity: String,
+    pub output_identity: String,
+    pub frames_processed: u64,
+    pub latency_ms: u32,
+}
+
+// =============================================================================
 // Conversion to JSON (for gateway edge)
 // =============================================================================
 
@@ -957,6 +1041,11 @@ impl ToolResponse {
             ToolResponse::ArtifactCreated(r) => Some(&r.artifact_id),
             ToolResponse::AbcToMidi(r) => Some(&r.artifact_id),
             ToolResponse::MidiToWav(r) => Some(&r.artifact_id),
+            // RAVE responses
+            ToolResponse::RaveEncoded(r) => Some(&r.artifact_id),
+            ToolResponse::RaveDecoded(r) => Some(&r.artifact_id),
+            ToolResponse::RaveReconstructed(r) => Some(&r.artifact_id),
+            ToolResponse::RaveGenerated(r) => Some(&r.artifact_id),
             _ => None,
         }
     }

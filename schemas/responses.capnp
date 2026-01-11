@@ -107,6 +107,15 @@ struct ToolResponse {
     # Audio Conversion
     abcToMidi @52 :AbcToMidiResponse;
     midiToWav @53 :MidiToWavResponse;
+
+    # RAVE Audio Codec
+    raveEncoded @55 :RaveEncodedResponse;
+    raveDecoded @56 :RaveDecodedResponse;
+    raveReconstructed @57 :RaveReconstructedResponse;
+    raveGenerated @58 :RaveGeneratedResponse;
+    raveStreamStarted @59 :RaveStreamStartedResponse;
+    raveStreamStopped @60 :RaveStreamStoppedResponse;
+    raveStreamStatus @61 :RaveStreamStatusResponse;
   }
 }
 
@@ -665,4 +674,65 @@ struct GraphConnectResponse {
   fromPort @1 :Text;
   toIdentity @2 :Text;
   toPort @3 :Text;
+}
+
+# =============================================================================
+# RAVE Responses
+# =============================================================================
+
+struct RaveEncodedResponse {
+  artifactId @0 :Text;        # Artifact ID for latent codes
+  contentHash @1 :Text;       # CAS hash of latent data
+  latentShape @2 :List(UInt32);  # Shape of latent tensor (batch, dim, frames)
+  latentDim @3 :UInt32;       # Latent dimension (typically 128)
+  model @4 :Text;             # Model used for encoding
+  sampleRate @5 :UInt32;      # Original audio sample rate
+}
+
+struct RaveDecodedResponse {
+  artifactId @0 :Text;        # Artifact ID for decoded audio
+  contentHash @1 :Text;       # CAS hash of WAV data
+  durationSeconds @2 :Float64;
+  sampleRate @3 :UInt32;      # Always 48000 for RAVE
+  model @4 :Text;
+}
+
+struct RaveReconstructedResponse {
+  artifactId @0 :Text;        # Artifact ID for reconstructed audio
+  contentHash @1 :Text;       # CAS hash of WAV data
+  durationSeconds @2 :Float64;
+  sampleRate @3 :UInt32;
+  model @4 :Text;
+}
+
+struct RaveGeneratedResponse {
+  artifactId @0 :Text;        # Artifact ID for generated audio
+  contentHash @1 :Text;       # CAS hash of WAV data
+  durationSeconds @2 :Float64;
+  sampleRate @3 :UInt32;
+  model @4 :Text;
+  temperature @5 :Float32;    # Temperature used for generation
+}
+
+struct RaveStreamStartedResponse {
+  streamId @0 :Text;          # Unique ID for this streaming session
+  model @1 :Text;             # Model being used
+  inputIdentity @2 :Text;     # Audio input source identity
+  outputIdentity @3 :Text;    # Audio output sink identity
+  latencyMs @4 :UInt32;       # Estimated latency in milliseconds
+}
+
+struct RaveStreamStoppedResponse {
+  streamId @0 :Text;
+  durationSeconds @1 :Float64;  # How long the stream ran
+}
+
+struct RaveStreamStatusResponse {
+  streamId @0 :Text;
+  running @1 :Bool;
+  model @2 :Text;
+  inputIdentity @3 :Text;
+  outputIdentity @4 :Text;
+  framesProcessed @5 :UInt64;   # Number of audio frames processed
+  latencyMs @6 :UInt32;
 }

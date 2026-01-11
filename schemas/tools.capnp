@@ -113,6 +113,15 @@ struct ToolRequest {
 
     # === Help ===
     getToolHelp @70 :GetToolHelp;
+
+    # === RAVE Tools ===
+    raveEncode @73 :RaveEncode;
+    raveDecode @74 :RaveDecode;
+    raveReconstruct @75 :RaveReconstruct;
+    raveGenerate @76 :RaveGenerate;
+    raveStreamStart @77 :RaveStreamStart;
+    raveStreamStop @78 :RaveStreamStop;
+    raveStreamStatus @79 :RaveStreamStatus;
   }
 }
 
@@ -408,4 +417,48 @@ struct WeaveHelp {
 # === Help Types ===
 struct GetToolHelp {
   topic @0 :Text;
+}
+
+# === RAVE Types ===
+# RAVE (Realtime Audio Variational autoEncoder) audio codec tools
+
+struct RaveEncode {
+  audioHash @0 :Text;        # CAS hash of input audio (WAV)
+  model @1 :Text;            # Model name (e.g., "vintage", "percussion")
+  metadata @2 :Common.ArtifactMetadata;
+}
+
+struct RaveDecode {
+  latentHash @0 :Text;       # CAS hash of latent codes
+  latentShape @1 :List(UInt32);  # Shape of latent tensor
+  model @2 :Text;
+  metadata @3 :Common.ArtifactMetadata;
+}
+
+struct RaveReconstruct {
+  audioHash @0 :Text;        # CAS hash of input audio
+  model @1 :Text;
+  metadata @2 :Common.ArtifactMetadata;
+}
+
+struct RaveGenerate {
+  model @0 :Text;
+  durationSeconds @1 :Float32;
+  temperature @2 :Float32;   # Sampling temperature for prior (default 1.0)
+  metadata @3 :Common.ArtifactMetadata;
+}
+
+struct RaveStreamStart {
+  model @0 :Text;
+  inputIdentity @1 :Text;    # Graph identity for audio input source
+  outputIdentity @2 :Text;   # Graph identity for audio output sink
+  bufferSize @3 :UInt32;     # Samples per buffer (default 2048)
+}
+
+struct RaveStreamStop {
+  streamId @0 :Text;
+}
+
+struct RaveStreamStatus {
+  streamId @0 :Text;
 }

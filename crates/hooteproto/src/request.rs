@@ -209,6 +209,24 @@ pub enum ToolRequest {
     // ==========================================================================
     /// Ping for liveness
     Ping,
+
+    // ==========================================================================
+    // RAVE Audio Codec
+    // ==========================================================================
+    /// Encode audio to latent codes
+    RaveEncode(RaveEncodeRequest),
+    /// Decode latent codes to audio
+    RaveDecode(RaveDecodeRequest),
+    /// Reconstruct audio (encode then decode)
+    RaveReconstruct(RaveReconstructRequest),
+    /// Generate audio by sampling from prior
+    RaveGenerate(RaveGenerateRequest),
+    /// Start a streaming session
+    RaveStreamStart(RaveStreamStartRequest),
+    /// Stop a streaming session
+    RaveStreamStop(RaveStreamStopRequest),
+    /// Get streaming session status
+    RaveStreamStatus(RaveStreamStatusRequest),
 }
 
 impl ToolRequest {
@@ -268,6 +286,14 @@ impl ToolRequest {
             | Self::GardenDeleteRegion(_)
             | Self::GardenMoveRegion(_)
             | Self::GardenClearRegions => ToolTiming::FireAndForget,
+
+            // RAVE - AsyncMedium for batch, FireAndForget for stream control
+            Self::RaveEncode(_)
+            | Self::RaveDecode(_)
+            | Self::RaveReconstruct(_)
+            | Self::RaveGenerate(_) => ToolTiming::AsyncMedium,
+            Self::RaveStreamStart(_) => ToolTiming::AsyncShort,
+            Self::RaveStreamStop(_) | Self::RaveStreamStatus(_) => ToolTiming::AsyncShort,
         }
     }
 
@@ -344,6 +370,13 @@ impl ToolRequest {
             Self::Complete(_) => "complete",
             Self::SampleLlm(_) => "sample_llm",
             Self::Ping => "ping",
+            Self::RaveEncode(_) => "rave_encode",
+            Self::RaveDecode(_) => "rave_decode",
+            Self::RaveReconstruct(_) => "rave_reconstruct",
+            Self::RaveGenerate(_) => "rave_generate",
+            Self::RaveStreamStart(_) => "rave_stream_start",
+            Self::RaveStreamStop(_) => "rave_stream_stop",
+            Self::RaveStreamStatus(_) => "rave_stream_status",
         }
     }
 }
@@ -883,4 +916,96 @@ pub struct GardenSetMonitorRequest {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct GetToolHelpRequest {
     pub topic: Option<String>,
+}
+
+// =============================================================================
+// RAVE Request Types
+// =============================================================================
+
+/// Encode audio waveform to RAVE latent codes
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct RaveEncodeRequest {
+    /// CAS hash of input audio (WAV format)
+    pub audio_hash: String,
+    /// Model name (e.g., "vintage", "percussion", "darbouka")
+    pub model: Option<String>,
+    /// Tags for the resulting artifact
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Creator identifier
+    pub creator: Option<String>,
+}
+
+/// Decode RAVE latent codes to audio waveform
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct RaveDecodeRequest {
+    /// CAS hash of latent codes
+    pub latent_hash: String,
+    /// Shape of latent tensor (for unpacking)
+    #[serde(default)]
+    pub latent_shape: Vec<u32>,
+    /// Model name
+    pub model: Option<String>,
+    /// Tags for the resulting artifact
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Creator identifier
+    pub creator: Option<String>,
+}
+
+/// Reconstruct audio through RAVE (encode then decode)
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct RaveReconstructRequest {
+    /// CAS hash of input audio
+    pub audio_hash: String,
+    /// Model name
+    pub model: Option<String>,
+    /// Tags for the resulting artifact
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Creator identifier
+    pub creator: Option<String>,
+}
+
+/// Generate audio by sampling from RAVE prior
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct RaveGenerateRequest {
+    /// Model name
+    pub model: Option<String>,
+    /// Duration in seconds
+    pub duration_seconds: Option<f32>,
+    /// Sampling temperature (default 1.0)
+    pub temperature: Option<f32>,
+    /// Tags for the resulting artifact
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Creator identifier
+    pub creator: Option<String>,
+}
+
+/// Start a RAVE streaming session
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct RaveStreamStartRequest {
+    /// Model name
+    pub model: Option<String>,
+    /// Graph identity for audio input source
+    pub input_identity: String,
+    /// Graph identity for audio output sink
+    pub output_identity: String,
+    /// Buffer size in samples (default 2048)
+    pub buffer_size: Option<u32>,
+}
+
+/// Stop a RAVE streaming session
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct RaveStreamStopRequest {
+    /// ID of the streaming session to stop
+    pub stream_id: String,
+}
+
+/// Get status of a RAVE streaming session
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct RaveStreamStatusRequest {
+    /// ID of the streaming session
+    pub stream_id: String,
 }
