@@ -95,3 +95,58 @@ test-python:
 rebuild: build restart-all
     @sleep 2
     just gen-python
+
+# === RAVE Model Management ===
+
+# Download RAVE models from IRCAM (vintage, percussion, darbouka)
+download-rave-models:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    MODELS_DIR="${HOME}/.hootenanny/models/rave"
+    mkdir -p "$MODELS_DIR"
+
+    # Models to download (both batch and streaming variants)
+    MODELS=("vintage" "percussion" "darbouka")
+    BASE_URL="https://play.forum.ircam.fr/rave-vst-api/get_model"
+
+    echo "Downloading RAVE models to $MODELS_DIR..."
+
+    for model in "${MODELS[@]}"; do
+        echo "  Downloading ${model}..."
+        if [[ ! -f "$MODELS_DIR/${model}.ts" ]]; then
+            curl -fsSL "${BASE_URL}/${model}" -o "$MODELS_DIR/${model}.ts"
+            echo "    ✓ ${model}.ts"
+        else
+            echo "    ⏭ ${model}.ts (exists)"
+        fi
+
+        # Streaming variant (if available)
+        if [[ ! -f "$MODELS_DIR/${model}_streaming.ts" ]]; then
+            if curl -fsSL "${BASE_URL}/${model}_streaming" -o "$MODELS_DIR/${model}_streaming.ts" 2>/dev/null; then
+                echo "    ✓ ${model}_streaming.ts"
+            else
+                echo "    ⏭ ${model}_streaming.ts (not available)"
+                rm -f "$MODELS_DIR/${model}_streaming.ts"
+            fi
+        else
+            echo "    ⏭ ${model}_streaming.ts (exists)"
+        fi
+    done
+
+    echo "Done! Models saved to $MODELS_DIR"
+    ls -lh "$MODELS_DIR"
+
+# List installed RAVE models
+list-rave-models:
+    @ls -lh ~/.hootenanny/models/rave/*.ts 2>/dev/null || echo "No RAVE models installed. Run: just download-rave-models"
+
+# Run RAVE service (foreground)
+run-rave:
+    cd python/services/rave && uv run python -m rave.service
+
+# === Python Services ===
+
+# Sync all Python packages
+sync-python:
+    cd python && uv sync --all-packages
