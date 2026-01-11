@@ -245,6 +245,16 @@ async fn main() -> Result<()> {
         None
     };
 
+    // --- RAVE Connection (lazy - ZMQ connects when peer available) ---
+    let rave_endpoint = &config.bootstrap.connections.rave;
+    let rave_client: Option<Arc<zmq::RaveClient>> = if !rave_endpoint.is_empty() {
+        info!("🎛️  Connecting to RAVE at {}...", rave_endpoint);
+        let rave_config = zmq::rave_config(rave_endpoint, zmq::DEFAULT_RAVE_TIMEOUT_MS);
+        Some(zmq::RaveClient::new(rave_config).await)
+    } else {
+        None
+    };
+
     let http_addr = config.infra.bind.http_bind_addr();
     let zmq_router = &config.infra.bind.zmq_router;
     let zmq_pub = &config.infra.bind.zmq_pub;
@@ -312,6 +322,7 @@ async fn main() -> Result<()> {
         )
         .with_garden(garden_manager.clone())
         .with_vibeweaver(vibeweaver_client.clone())
+        .with_rave(rave_client.clone())
         .with_broadcaster(Some(broadcast_publisher))
         .with_stream_manager(Some(stream_manager.clone()))
         .with_session_manager(Some(session_manager.clone()))

@@ -35,6 +35,10 @@ pub struct ConnectionsConfig {
     /// Vibeweaver ZMQ endpoint (Python kernel for AI music agents)
     #[serde(default = "ConnectionsConfig::default_vibeweaver")]
     pub vibeweaver: String,
+
+    /// RAVE ZMQ endpoint (RAVE audio codec service via hootpy)
+    #[serde(default = "ConnectionsConfig::default_rave")]
+    pub rave: String,
 }
 
 impl ConnectionsConfig {
@@ -45,6 +49,11 @@ impl ConnectionsConfig {
     fn default_vibeweaver() -> String {
         "tcp://localhost:5575".to_string()
     }
+
+    fn default_rave() -> String {
+        // Empty string means disabled (RAVE is optional)
+        String::new()
+    }
 }
 
 impl Default for ConnectionsConfig {
@@ -52,6 +61,7 @@ impl Default for ConnectionsConfig {
         Self {
             chaosgarden: Self::default_chaosgarden(),
             vibeweaver: Self::default_vibeweaver(),
+            rave: Self::default_rave(),
         }
     }
 }

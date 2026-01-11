@@ -97,6 +97,9 @@ fn parse_toml(contents: &str, path: &Path) -> Result<HootConfig, ConfigError> {
         }
 
         if let Some(bind) = table.get("bind").and_then(|v| v.as_table()) {
+            if let Some(v) = bind.get("http_address").and_then(|v| v.as_str()) {
+                infra.bind.http_address = v.to_string();
+            }
             if let Some(v) = bind.get("http_port").and_then(|v| v.as_integer()) {
                 infra.bind.http_port = v as u16;
             }
@@ -105,6 +108,18 @@ fn parse_toml(contents: &str, path: &Path) -> Result<HootConfig, ConfigError> {
             }
             if let Some(v) = bind.get("zmq_pub").and_then(|v| v.as_str()) {
                 infra.bind.zmq_pub = v.to_string();
+            }
+        }
+
+        if let Some(http) = table.get("http").and_then(|v| v.as_table()) {
+            if let Some(v) = http.get("hostname").and_then(|v| v.as_str()) {
+                infra.http.hostname = Some(v.to_string());
+            }
+            if let Some(v) = http.get("port").and_then(|v| v.as_integer()) {
+                infra.http.port = Some(v as u16);
+            }
+            if let Some(v) = http.get("scheme").and_then(|v| v.as_str()) {
+                infra.http.scheme = v.to_string();
             }
         }
 
@@ -151,6 +166,9 @@ fn parse_toml(contents: &str, path: &Path) -> Result<HootConfig, ConfigError> {
             }
             if let Some(v) = conn.get("vibeweaver").and_then(|v| v.as_str()) {
                 bootstrap.connections.vibeweaver = v.to_string();
+            }
+            if let Some(v) = conn.get("rave").and_then(|v| v.as_str()) {
+                bootstrap.connections.rave = v.to_string();
             }
         }
 

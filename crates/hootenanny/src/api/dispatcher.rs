@@ -671,25 +671,18 @@ impl TypedDispatcher {
                 )
             }
 
-            // === RAVE Tools (not yet connected) ===
-            // RAVE service is implemented in Python via hootpy, connected over ZMQ.
-            // These will be wired up when the RAVE ZMQ client is added.
+            // === RAVE Tools (proxy to Python RAVE service via ZMQ) ===
             ToolRequest::RaveEncode(_)
             | ToolRequest::RaveDecode(_)
             | ToolRequest::RaveReconstruct(_)
             | ToolRequest::RaveGenerate(_) => {
-                ResponseEnvelope::error(ToolError::internal(
-                    "RAVE service not yet connected. \
-                     Start the RAVE Python service and add ZMQ client.",
-                ))
+                self.dispatch_rave(request).await
             }
             ToolRequest::RaveStreamStart(_)
             | ToolRequest::RaveStreamStop(_)
             | ToolRequest::RaveStreamStatus(_) => {
-                ResponseEnvelope::error(ToolError::internal(
-                    "RAVE streaming not yet implemented. \
-                     Requires chaosgarden audio buffer integration.",
-                ))
+                // Streaming tools also go through RAVE service
+                self.dispatch_rave(request).await
             }
 
             // === AsyncLong tools (routed via dispatch_async_return_job_id) ===
@@ -738,6 +731,50 @@ impl TypedDispatcher {
                 tracing::warn!(tool = tool_name, error = %e, "Vibeweaver proxy error");
                 ResponseEnvelope::error(ToolError::internal(format!(
                     "Vibeweaver proxy error: {}",
+                    e
+                )))
+            }
+        }
+    }
+
+    /// Dispatch RAVE tools - proxy to Python RAVE service via ZMQ
+    ///
+    /// RAVE (Realtime Audio Variational autoEncoder) operations are handled
+    /// by a Python service running via hootpy. This method proxies requests
+    /// to that service over ZMQ.
+    async fn dispatch_rave(&self, request: ToolRequest) -> ResponseEnvelope {
+        let rave = match &self.server.rave {
+            Some(r) => r,
+            None => {
+                return ResponseEnvelope::error(ToolError::internal(
+                    "RAVE service not connected. \
+                     Configure bootstrap.connections.rave in config and start the RAVE Python service.",
+                ));
+            }
+        };
+
+        let tool_name = request.name();
+        tracing::debug!(tool = tool_name, "Proxying to RAVE service");
+
+        // Convert to Payload for ZMQ transport
+        let payload = Payload::ToolRequest(request);
+
+        match rave.request(payload).await {
+            Ok(Payload::TypedResponse(envelope)) => {
+                // Pass through the envelope from RAVE service
+                envelope
+            }
+            Ok(Payload::Error { code, message, .. }) => {
+                ResponseEnvelope::error(ToolError::internal(format!("{}: {}", code, message)))
+            }
+            Ok(other) => ResponseEnvelope::error(ToolError::internal(format!(
+                "Unexpected response from RAVE service: {:?}",
+                std::mem::discriminant(&other)
+            ))),
+            Err(e) => {
+                tracing::warn!(tool = tool_name, error = %e, "RAVE proxy error");
+                ResponseEnvelope::error(ToolError::internal(format!(
+                    "RAVE proxy error: {}",
                     e
                 )))
             }

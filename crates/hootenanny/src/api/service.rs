@@ -5,7 +5,7 @@ use crate::job_system::JobStore;
 use crate::mcp_tools::local_models::LocalModels;
 use crate::sessions::SessionManager;
 use crate::streams::{SlicingEngine, StreamManager};
-use crate::zmq::{BroadcastPublisher, GardenManager, VibeweaverClient};
+use crate::zmq::{BroadcastPublisher, GardenManager, RaveClient, VibeweaverClient};
 use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use std::sync::{Arc, RwLock};
 
@@ -20,6 +20,8 @@ pub struct EventDualityServer {
     pub garden_manager: Option<Arc<GardenManager>>,
     /// Optional vibeweaver client for Python kernel proxy
     pub vibeweaver: Option<Arc<VibeweaverClient>>,
+    /// Optional RAVE client for audio codec service
+    pub rave: Option<Arc<RaveClient>>,
     /// Optional broadcast publisher for SSE events via holler
     pub broadcaster: Option<BroadcastPublisher>,
     /// Stream manager for capture sessions
@@ -58,6 +60,7 @@ impl EventDualityServer {
             gpu_monitor,
             garden_manager: None,
             vibeweaver: None,
+            rave: None,
             broadcaster: None,
             stream_manager: None,
             session_manager: None,
@@ -75,6 +78,12 @@ impl EventDualityServer {
     /// Create with vibeweaver client for Python kernel proxy
     pub fn with_vibeweaver(mut self, vibeweaver: Option<Arc<VibeweaverClient>>) -> Self {
         self.vibeweaver = vibeweaver;
+        self
+    }
+
+    /// Create with RAVE client for audio codec service
+    pub fn with_rave(mut self, rave: Option<Arc<RaveClient>>) -> Self {
+        self.rave = rave;
         self
     }
 

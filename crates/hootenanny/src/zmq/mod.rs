@@ -12,6 +12,7 @@ mod garden_state_cache;
 mod hooteproto_server;
 mod manager;
 mod publisher;
+mod rave_client;
 mod vibeweaver_client;
 
 pub use garden_state_cache::{CacheStats, GardenStateCache};
@@ -19,4 +20,5 @@ pub use hooteproto::{GardenEndpoints, GardenPeer};
 pub use hooteproto_server::HooteprotoServer;
 pub use manager::GardenManager;
 pub use publisher::{BroadcastPublisher, PublisherServer};
+pub use rave_client::{rave_config, RaveClient, DEFAULT_RAVE_TIMEOUT_MS};
 pub use vibeweaver_client::{vibeweaver_config, VibeweaverClient};
