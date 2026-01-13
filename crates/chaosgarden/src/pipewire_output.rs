@@ -392,8 +392,7 @@ fn run_pipewire_loop(
             let count = stats.callbacks.fetch_add(1, Ordering::Relaxed);
             // Debug: log first callback
             if count == 0 {
-                eprintln!("🎵 First PipeWire process callback! Arc ptr: {:p}, count now = {}",
-                    Arc::as_ptr(stats), count + 1);
+                eprintln!("🎵 First PipeWire process callback!");
             }
 
             let Some(mut buffer) = stream.dequeue_buffer() else {

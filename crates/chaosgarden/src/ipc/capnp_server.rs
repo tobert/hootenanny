@@ -410,6 +410,7 @@ impl CapnpGardenServer {
             ToolRequest::GardenDetachInput => ShellRequest::DetachInput,
             ToolRequest::GardenInputStatus => ShellRequest::GetInputStatus,
             ToolRequest::GardenSetMonitor(r) => ShellRequest::SetMonitor { enabled: r.enabled, gain: r.gain },
+            ToolRequest::GardenGetAudioSnapshot(r) => ShellRequest::GetAudioSnapshot { frames: r.frames },
 
             // GardenQuery is handled by hootenanny, not chaosgarden
             ToolRequest::GardenQuery(_) => {
@@ -475,7 +476,7 @@ fn shell_reply_to_payload(reply: hooteproto::garden::ShellReply) -> Payload {
                 GardenRegionsResponse { regions: converted, count }
             )))
         }
-        ShellReply::AudioStatus { attached, device_name, sample_rate, latency_frames, callbacks, samples_written, underruns, .. } => {
+        ShellReply::AudioStatus { attached, device_name, sample_rate, latency_frames, callbacks, samples_written, underruns, monitor_reads, monitor_samples } => {
             Payload::TypedResponse(ResponseEnvelope::success(
                 ToolResponse::GardenAudioStatus(hooteproto::responses::GardenAudioStatusResponse {
                     attached,
@@ -485,6 +486,8 @@ fn shell_reply_to_payload(reply: hooteproto::garden::ShellReply) -> Payload {
                     callbacks,
                     samples_written,
                     underruns,
+                    monitor_reads,
+                    monitor_samples,
                 })
             ))
         }
@@ -508,6 +511,16 @@ fn shell_reply_to_payload(reply: hooteproto::garden::ShellReply) -> Payload {
                 ToolResponse::GardenMonitorStatus(hooteproto::responses::GardenMonitorStatusResponse {
                     enabled,
                     gain: gain as f64,
+                })
+            ))
+        }
+        ShellReply::AudioSnapshot { sample_rate, channels, format, samples } => {
+            Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::GardenAudioSnapshot(hooteproto::responses::GardenAudioSnapshotResponse {
+                    sample_rate,
+                    channels: channels as u16,
+                    format,
+                    samples,
                 })
             ))
         }

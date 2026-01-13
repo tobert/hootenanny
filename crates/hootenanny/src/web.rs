@@ -115,22 +115,30 @@ async fn handle_live_stream(
         interval.tick().await;
 
         // Try to get audio from chaosgarden
+        use hooteproto::request::{ToolRequest, GardenGetAudioSnapshotRequest};
+        use hooteproto::responses::ToolResponse;
+
         let (sample_rate, channels, format, samples) = if let Some(ref manager) = garden_manager {
-            match manager.request(ShellRequest::GetAudioSnapshot { frames: frames_per_request }).await {
-                Ok(ShellReply::AudioSnapshot { sample_rate, channels, format, samples }) => {
-                    (sample_rate, channels, format, samples)
+            let request = ToolRequest::GardenGetAudioSnapshot(GardenGetAudioSnapshotRequest {
+                frames: frames_per_request,
+            });
+            match manager.tool_request(request).await {
+                Ok(ToolResponse::GardenAudioSnapshot(response)) => {
+                    (response.sample_rate, response.channels, response.format, response.samples)
                 }
-                Ok(_) => {
+                Ok(other) => {
                     // Unexpected reply - send silence
+                    tracing::warn!("Unexpected snapshot reply: {:?}", other);
                     (default_sample_rate, default_channels, default_format, vec![0.0f32; frames_per_request as usize * 2])
                 }
                 Err(e) => {
-                    tracing::debug!("Audio snapshot error: {}", e);
+                    tracing::warn!("Audio snapshot error: {}", e);
                     (default_sample_rate, default_channels, default_format, vec![0.0f32; frames_per_request as usize * 2])
                 }
             }
         } else {
             // No garden manager - send silence
+            tracing::warn!("No garden manager - sending silence");
             (default_sample_rate, default_channels, default_format, vec![0.0f32; frames_per_request as usize * 2])
         };
 

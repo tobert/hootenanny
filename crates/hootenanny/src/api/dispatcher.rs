@@ -607,6 +607,12 @@ impl TypedDispatcher {
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
+            ToolRequest::GardenGetAudioSnapshot(req) => {
+                match self.server.garden_get_audio_snapshot_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenAudioSnapshot(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
 
             // === Tool Help ===
             ToolRequest::GetToolHelp(req) => {

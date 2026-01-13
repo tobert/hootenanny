@@ -79,6 +79,7 @@ struct ToolResponse {
     gardenAudioStatus @39 :GardenAudioStatusResponse;
     gardenInputStatus @40 :GardenInputStatusResponse;
     gardenMonitorStatus @41 :GardenMonitorStatusResponse;
+    gardenAudioSnapshot @62 :GardenAudioSnapshotResponse;
 
     # Tool Help
     toolHelp @42 :ToolHelpResponse;
@@ -470,6 +471,8 @@ struct GardenAudioStatusResponse {
   bufferUnderruns @4 :UInt64;
   callbacks @5 :UInt64;
   samplesWritten @6 :UInt64;
+  monitorReads @7 :UInt64;
+  monitorSamples @8 :UInt64;
 }
 
 struct GardenInputStatusResponse {
@@ -487,6 +490,13 @@ struct GardenInputStatusResponse {
 struct GardenMonitorStatusResponse {
   enabled @0 :Bool;
   gain @1 :Float64;
+}
+
+struct GardenAudioSnapshotResponse {
+  sampleRate @0 :UInt32;
+  channels @1 :UInt16;
+  format @2 :UInt16;
+  samples @3 :List(Float32);
 }
 
 # =============================================================================

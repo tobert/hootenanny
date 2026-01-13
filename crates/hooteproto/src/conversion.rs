@@ -643,6 +643,10 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             s.set_gain(req.gain.unwrap_or(1.0));
             s.set_gain_set(req.gain.is_some());
         }
+        ToolRequest::GardenGetAudioSnapshot(req) => {
+            let mut s = builder.reborrow().init_garden_get_audio_snapshot();
+            s.set_frames(req.frames);
+        }
         ToolRequest::GardenClearRegions => builder.reborrow().set_garden_clear_regions(()),
         ToolRequest::GetToolHelp(req) => builder.reborrow().init_get_tool_help().set_topic(req.topic.as_deref().unwrap_or("")),
 
@@ -1060,6 +1064,12 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
             Ok(ToolRequest::GardenSetMonitor(GardenSetMonitorRequest {
                 enabled: if s.get_enabled_set() { Some(s.get_enabled()) } else { None },
                 gain: if s.get_gain_set() { Some(s.get_gain()) } else { None },
+            }))
+        }
+        tools_capnp::tool_request::GardenGetAudioSnapshot(s) => {
+            let s = s?;
+            Ok(ToolRequest::GardenGetAudioSnapshot(GardenGetAudioSnapshotRequest {
+                frames: s.get_frames(),
             }))
         }
         tools_capnp::tool_request::GardenClearRegions(()) => Ok(ToolRequest::GardenClearRegions),
@@ -1719,6 +1729,8 @@ fn response_to_capnp_tool_response(
             b.set_buffer_underruns(r.underruns);
             b.set_callbacks(r.callbacks);
             b.set_samples_written(r.samples_written);
+            b.set_monitor_reads(r.monitor_reads);
+            b.set_monitor_samples(r.monitor_samples);
         }
         ToolResponse::GardenInputStatus(r) => {
             let mut b = builder.reborrow().init_garden_input_status();
@@ -1736,6 +1748,16 @@ fn response_to_capnp_tool_response(
             let mut b = builder.reborrow().init_garden_monitor_status();
             b.set_enabled(r.enabled);
             b.set_gain(r.gain);
+        }
+        ToolResponse::GardenAudioSnapshot(r) => {
+            let mut b = builder.reborrow().init_garden_audio_snapshot();
+            b.set_sample_rate(r.sample_rate);
+            b.set_channels(r.channels);
+            b.set_format(r.format);
+            let mut samples = b.reborrow().init_samples(r.samples.len() as u32);
+            for (i, &sample) in r.samples.iter().enumerate() {
+                samples.set(i as u32, sample);
+            }
         }
 
         // Graph
@@ -2475,6 +2497,8 @@ fn capnp_tool_response_to_response(
                 callbacks: r.get_callbacks(),
                 samples_written: r.get_samples_written(),
                 underruns: r.get_buffer_underruns(),
+                monitor_reads: r.get_monitor_reads(),
+                monitor_samples: r.get_monitor_samples(),
             }))
         }
         Which::GardenInputStatus(r) => {
@@ -2498,6 +2522,20 @@ fn capnp_tool_response_to_response(
             Ok(ToolResponse::GardenMonitorStatus(GardenMonitorStatusResponse {
                 enabled: r.get_enabled(),
                 gain: r.get_gain(),
+            }))
+        }
+        Which::GardenAudioSnapshot(r) => {
+            let r = r?;
+            let samples_reader = r.get_samples()?;
+            let mut samples = Vec::with_capacity(samples_reader.len() as usize);
+            for i in 0..samples_reader.len() {
+                samples.push(samples_reader.get(i));
+            }
+            Ok(ToolResponse::GardenAudioSnapshot(GardenAudioSnapshotResponse {
+                sample_rate: r.get_sample_rate(),
+                channels: r.get_channels(),
+                format: r.get_format(),
+                samples,
             }))
         }
 

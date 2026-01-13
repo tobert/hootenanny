@@ -3240,6 +3240,31 @@ impl EventDualityServer {
         }
     }
 
+    /// Get audio snapshot from the streaming tap.
+    pub async fn garden_get_audio_snapshot_typed(
+        &self,
+        request: hooteproto::request::GardenGetAudioSnapshotRequest,
+    ) -> Result<hooteproto::responses::GardenAudioSnapshotResponse, ToolError> {
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Not connected to chaosgarden",
+            )
+        })?;
+
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
+
+        match manager
+            .tool_request(ToolRequest::GardenGetAudioSnapshot(request))
+            .await
+        {
+            Ok(ToolResponse::GardenAudioSnapshot(response)) => Ok(response),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Get audio snapshot failed: {}", e))),
+        }
+    }
+
     // =========================================================================
     // Utility Tools
     // =========================================================================

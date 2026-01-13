@@ -109,6 +109,7 @@ struct ToolRequest {
     gardenDetachInput @66 :Void;
     gardenInputStatus @67 :Void;
     gardenSetMonitor @68 :Garden.SetMonitor;
+    gardenGetAudioSnapshot @80 :Garden.GetAudioSnapshot;
     gardenClearRegions @69 :Void;
 
     # === Help ===

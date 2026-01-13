@@ -129,6 +129,8 @@ pub enum ToolRequest {
     GardenInputStatus,
     /// Set monitor
     GardenSetMonitor(GardenSetMonitorRequest),
+    /// Get audio snapshot from streaming tap
+    GardenGetAudioSnapshot(GardenGetAudioSnapshotRequest),
     /// Clear all regions
     GardenClearRegions,
 
@@ -258,7 +260,7 @@ impl ToolRequest {
             Self::Complete(_) | Self::SampleLlm(_) => ToolTiming::AsyncShort,
             Self::GardenAttachAudio(_) | Self::GardenDetachAudio | Self::GardenAudioStatus => ToolTiming::AsyncShort,
             Self::GardenAttachInput(_) | Self::GardenDetachInput | Self::GardenInputStatus => ToolTiming::AsyncShort,
-            Self::GardenSetMonitor(_) => ToolTiming::AsyncShort,
+            Self::GardenSetMonitor(_) | Self::GardenGetAudioSnapshot(_) => ToolTiming::AsyncShort,
             Self::GetToolHelp(_) => ToolTiming::AsyncShort,
 
             // AsyncMedium - GPU inference, ~120s
@@ -347,6 +349,7 @@ impl ToolRequest {
             Self::GardenDetachInput => "garden_detach_input",
             Self::GardenInputStatus => "garden_input_status",
             Self::GardenSetMonitor(_) => "garden_set_monitor",
+            Self::GardenGetAudioSnapshot(_) => "garden_get_audio_snapshot",
             Self::GetToolHelp(_) => "get_tool_help",
             Self::JobStatus(_) => "job_status",
             Self::JobList(_) => "job_list",
@@ -907,6 +910,11 @@ pub struct GardenAttachInputRequest {
 pub struct GardenSetMonitorRequest {
     pub enabled: Option<bool>,
     pub gain: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct GardenGetAudioSnapshotRequest {
+    pub frames: u32,
 }
 
 // =============================================================================

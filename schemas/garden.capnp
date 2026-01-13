@@ -148,6 +148,10 @@ struct SetMonitor {
   gainSet @3 :Bool;     # true if gain was explicitly set
 }
 
+struct GetAudioSnapshot {
+  frames @0 :UInt32;
+}
+
 # === State Snapshot Types ===
 # These enable hootenanny to fetch chaosgarden state for local query evaluation,
 # keeping allocation-heavy Trustfall/GraphQL processing out of the RT process.

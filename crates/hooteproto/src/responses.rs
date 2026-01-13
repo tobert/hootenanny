@@ -75,6 +75,7 @@ pub enum ToolResponse {
     GardenAudioStatus(GardenAudioStatusResponse),
     GardenInputStatus(GardenInputStatusResponse),
     GardenMonitorStatus(GardenMonitorStatusResponse),
+    GardenAudioSnapshot(GardenAudioSnapshotResponse),
 
     // === Graph ===
     GraphIdentity(GraphIdentityResponse),
@@ -648,6 +649,8 @@ pub struct GardenAudioStatusResponse {
     pub callbacks: u64,
     pub samples_written: u64,
     pub underruns: u64,
+    pub monitor_reads: u64,
+    pub monitor_samples: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -667,6 +670,14 @@ pub struct GardenInputStatusResponse {
 pub struct GardenMonitorStatusResponse {
     pub enabled: bool,
     pub gain: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GardenAudioSnapshotResponse {
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub format: u16,
+    pub samples: Vec<f32>,
 }
 
 // =============================================================================
