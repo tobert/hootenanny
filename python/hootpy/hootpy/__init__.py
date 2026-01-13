@@ -19,6 +19,7 @@ from .errors import (
 from .service import ModelService, ServiceConfig, SingleJobGuard
 from .client import HootClient, ClientConfig, request
 from .protocol import encode_tool_request, decode_envelope
+from . import cas
 
 __version__ = "0.1.0"
 
@@ -48,4 +49,6 @@ __all__ = [
     # Protocol
     "encode_tool_request",
     "decode_envelope",
+    # CAS
+    "cas",
 ]

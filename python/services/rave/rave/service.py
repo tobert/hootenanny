@@ -16,7 +16,7 @@ import numpy as np
 import torch
 import torchaudio
 
-from hootpy import ModelService, ServiceConfig, NotFoundError, ValidationError
+from hootpy import ModelService, ServiceConfig, NotFoundError, ValidationError, cas
 
 log = logging.getLogger(__name__)
 
@@ -141,7 +141,7 @@ class RaveService(ModelService):
         Encode audio waveform to latent codes.
 
         Input: audio_hash (CAS hash of WAV file)
-        Output: latent codes as artifact
+        Output: latent codes stored in CAS
         """
         audio_hash = params.get("audio_hash")
         if not audio_hash:
@@ -150,14 +150,16 @@ class RaveService(ModelService):
         model_name = params.get("model")
         model = self._get_model(model_name)
 
-        # Load audio from CAS (placeholder - would call hootenanny CAS)
-        # For now, expect audio_data to be passed directly for testing
-        audio_data = params.get("audio_data")
+        # Load audio from CAS
+        audio_data = cas.fetch(audio_hash)
         if audio_data is None:
-            raise ValidationError(
-                message="audio_data required (CAS integration pending)",
-                field_name="audio_data",
+            raise NotFoundError(
+                message=f"Audio not found in CAS: {audio_hash}",
+                resource_type="audio",
+                resource_id=audio_hash,
             )
+
+        log.info(f"Fetched {len(audio_data)} bytes from CAS: {audio_hash}")
 
         # Decode audio
         audio, sample_rate = await asyncio.to_thread(
@@ -187,11 +189,16 @@ class RaveService(ModelService):
         z_np = z.cpu().numpy()
         latent_bytes = self._pack_latent(z_np)
 
+        # Store to CAS
+        content_hash = cas.store(latent_bytes)
+        log.info(f"Stored {len(latent_bytes)} bytes latent to CAS: {content_hash}")
+
         return {
-            "latent_data": latent_bytes,
+            "artifact_id": "",  # TODO: artifact creation
+            "content_hash": content_hash,
             "latent_shape": list(z_np.shape),
             "latent_dim": z_np.shape[-1] if z_np.ndim > 0 else 0,
-            "model": model_name or "default",
+            "model": model_name or "vintage",
             "sample_rate": RAVE_SAMPLE_RATE,
         }
 
@@ -199,24 +206,32 @@ class RaveService(ModelService):
         """
         Decode latent codes to audio waveform.
 
-        Input: latent_hash (CAS hash of latent file) or latent_data
-        Output: audio as artifact
+        Input: latent_hash (CAS hash of latent file)
+        Output: audio stored in CAS
         """
         model_name = params.get("model")
         model = self._get_model(model_name)
 
-        # Get latent data
-        latent_data = params.get("latent_data")
-        latent_shape = params.get("latent_shape")
-
-        if latent_data is None:
+        # Get latent from CAS
+        latent_hash = params.get("latent_hash")
+        if not latent_hash:
             raise ValidationError(
-                message="latent_data required",
-                field_name="latent_data",
+                message="latent_hash is required",
+                field_name="latent_hash",
             )
 
-        # Unpack latent
-        z_np = self._unpack_latent(latent_data, latent_shape)
+        latent_data = cas.fetch(latent_hash)
+        if latent_data is None:
+            raise NotFoundError(
+                message=f"Latent not found in CAS: {latent_hash}",
+                resource_type="latent",
+                resource_id=latent_hash,
+            )
+
+        log.info(f"Fetched {len(latent_data)} bytes latent from CAS: {latent_hash}")
+
+        # Unpack latent (shape is stored in the header)
+        z_np = self._unpack_latent(latent_data)
         z = torch.from_numpy(z_np).to(self.device)
 
         # Decode
@@ -227,30 +242,45 @@ class RaveService(ModelService):
         audio_np = audio.squeeze().cpu().numpy()
         wav_bytes = self._encode_wav(audio_np, RAVE_SAMPLE_RATE)
 
+        # Store to CAS
+        content_hash = cas.store(wav_bytes)
+        log.info(f"Stored {len(wav_bytes)} bytes to CAS: {content_hash}")
+
         return {
-            "audio_data": wav_bytes,
-            "sample_rate": RAVE_SAMPLE_RATE,
+            "artifact_id": "",  # TODO: artifact creation
+            "content_hash": content_hash,
             "duration_seconds": len(audio_np) / RAVE_SAMPLE_RATE,
-            "model": model_name or "default",
+            "sample_rate": RAVE_SAMPLE_RATE,
+            "model": model_name or "vintage",
         }
 
     async def _reconstruct(self, params: dict[str, Any]) -> dict[str, Any]:
         """
         Encode then decode audio (round-trip reconstruction).
 
-        Input: audio_hash or audio_data
-        Output: reconstructed audio
+        Input: audio_hash (CAS hash of input audio)
+        Output: reconstructed audio stored in CAS
         """
         model_name = params.get("model")
         model = self._get_model(model_name)
 
-        # Get audio
-        audio_data = params.get("audio_data")
-        if audio_data is None:
+        # Get audio from CAS
+        audio_hash = params.get("audio_hash")
+        if not audio_hash:
             raise ValidationError(
-                message="audio_data required",
-                field_name="audio_data",
+                message="audio_hash is required",
+                field_name="audio_hash",
             )
+
+        audio_data = cas.fetch(audio_hash)
+        if audio_data is None:
+            raise NotFoundError(
+                message=f"Audio not found in CAS: {audio_hash}",
+                resource_type="audio",
+                resource_id=audio_hash,
+            )
+
+        log.info(f"Fetched {len(audio_data)} bytes from CAS: {audio_hash}")
 
         # Decode input audio
         audio, sample_rate = await asyncio.to_thread(
@@ -280,11 +310,16 @@ class RaveService(ModelService):
         audio_np = reconstructed.squeeze().cpu().numpy()
         wav_bytes = self._encode_wav(audio_np, RAVE_SAMPLE_RATE)
 
+        # Store to CAS
+        content_hash = cas.store(wav_bytes)
+        log.info(f"Stored {len(wav_bytes)} bytes to CAS: {content_hash}")
+
         return {
-            "audio_data": wav_bytes,
-            "sample_rate": RAVE_SAMPLE_RATE,
+            "artifact_id": "",  # Artifact creation requires hootenanny callback (TODO)
+            "content_hash": content_hash,
             "duration_seconds": len(audio_np) / RAVE_SAMPLE_RATE,
-            "model": model_name or "default",
+            "sample_rate": RAVE_SAMPLE_RATE,
+            "model": model_name or "vintage",
         }
 
     async def _generate(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -326,21 +361,45 @@ class RaveService(ModelService):
 
         wav_bytes = self._encode_wav(audio_np, RAVE_SAMPLE_RATE)
 
+        # Store to CAS
+        content_hash = cas.store(wav_bytes)
+        log.info(f"Stored {len(wav_bytes)} bytes to CAS: {content_hash}")
+
         return {
-            "audio_data": wav_bytes,
-            "sample_rate": RAVE_SAMPLE_RATE,
+            "artifact_id": "",  # Artifact creation requires hootenanny callback (TODO)
+            "content_hash": content_hash,
             "duration_seconds": len(audio_np) / RAVE_SAMPLE_RATE,
-            "model": model_name or "default",
+            "sample_rate": RAVE_SAMPLE_RATE,
+            "model": model_name or "vintage",
             "temperature": temperature,
         }
 
     def _decode_audio(self, data: bytes) -> tuple[torch.Tensor, int]:
-        """Decode audio bytes (WAV format) to tensor"""
+        """Decode audio bytes (WAV format) to tensor using Python wave module"""
+        import wave
+
         buffer = io.BytesIO(data)
-        audio, sample_rate = torchaudio.load(buffer)
-        # Convert to mono if stereo
-        if audio.shape[0] > 1:
-            audio = audio.mean(dim=0, keepdim=True)
+        with wave.open(buffer, 'rb') as wav:
+            sample_rate = wav.getframerate()
+            n_channels = wav.getnchannels()
+            sample_width = wav.getsampwidth()
+            n_frames = wav.getnframes()
+            audio_bytes = wav.readframes(n_frames)
+
+        # Convert to numpy based on sample width
+        if sample_width == 2:  # 16-bit
+            audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        elif sample_width == 4:  # 32-bit
+            audio_np = np.frombuffer(audio_bytes, dtype=np.int32).astype(np.float32) / 2147483648.0
+        else:  # 8-bit or other
+            audio_np = np.frombuffer(audio_bytes, dtype=np.uint8).astype(np.float32) / 128.0 - 1.0
+
+        # Reshape for stereo and convert to mono if needed
+        if n_channels > 1:
+            audio_np = audio_np.reshape(-1, n_channels).mean(axis=1)
+
+        # Convert to torch tensor
+        audio = torch.from_numpy(audio_np)
         return audio, sample_rate
 
     def _encode_wav(self, audio: np.ndarray, sample_rate: int) -> bytes:
