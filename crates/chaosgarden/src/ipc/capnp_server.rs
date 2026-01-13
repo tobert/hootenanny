@@ -503,6 +503,14 @@ fn shell_reply_to_payload(reply: hooteproto::garden::ShellReply) -> Payload {
                 })
             ))
         }
+        ShellReply::MonitorStatus { enabled, gain } => {
+            Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::GardenMonitorStatus(hooteproto::responses::GardenMonitorStatusResponse {
+                    enabled,
+                    gain: gain as f64,
+                })
+            ))
+        }
         ShellReply::PendingApprovals { approvals: _ } => {
             Payload::TypedResponse(ResponseEnvelope::ack("pending_approvals".to_string()))
         }

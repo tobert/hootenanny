@@ -25,7 +25,7 @@ use std::thread::{self, JoinHandle};
 use portable_atomic::AtomicF32;
 use tracing::{debug, error, info};
 
-use crate::external_io::{AudioRingConsumer, RingBuffer};
+use crate::external_io::{AudioRingConsumer, AudioRingProducer, RingBuffer};
 
 /// Monitor input state for RT mixing (lock-free version)
 ///
@@ -118,16 +118,37 @@ impl PipeWireOutputStream {
         Ok(stream)
     }
 
+    /// Create and start a new PipeWire output stream with streaming tap only
+    ///
+    /// The streaming tap receives the final mixed output for WebSocket streaming.
+    pub fn new_with_streaming_tap(
+        config: PipeWireOutputConfig,
+        streaming_tap: Option<AudioRingProducer>,
+    ) -> Result<Self, PipeWireOutputError> {
+        Self::new_internal(config, None, streaming_tap)
+    }
+
     /// Create and start a new PipeWire output stream with monitor mixing
     ///
     /// The monitor input is mixed directly in the RT callback, bypassing tick().
     /// This eliminates underruns/overruns caused by timing mismatches.
+    /// The streaming tap receives the final mixed output for WebSocket streaming.
     ///
     /// Note: This constructor starts immediately. Monitor state is moved directly
     /// to the RT thread (never stored in the struct) to avoid Send/Sync issues.
     pub fn new_with_monitor(
         config: PipeWireOutputConfig,
         monitor: MonitorMixState,
+        streaming_tap: Option<AudioRingProducer>,
+    ) -> Result<Self, PipeWireOutputError> {
+        Self::new_internal(config, Some(monitor), streaming_tap)
+    }
+
+    /// Internal constructor that handles all variants
+    fn new_internal(
+        config: PipeWireOutputConfig,
+        monitor: Option<MonitorMixState>,
+        streaming_tap: Option<AudioRingProducer>,
     ) -> Result<Self, PipeWireOutputError> {
         use pipewire as pw;
 
@@ -140,10 +161,11 @@ impl PipeWireOutputStream {
 
         let running = Arc::new(AtomicBool::new(true));
         let stats = Arc::new(StreamStats::default());
+        let has_monitor = monitor.is_some();
 
         debug!(
-            "Creating monitor output stream: {} @ {}Hz, {} channels",
-            config.name, config.sample_rate, config.channels
+            "Creating output stream: {} @ {}Hz, {} channels (monitor: {}, streaming_tap: {})",
+            config.name, config.sample_rate, config.channels, has_monitor, streaming_tap.is_some()
         );
 
         // Spawn thread immediately with monitor state (moved, not stored)
@@ -160,7 +182,8 @@ impl PipeWireOutputStream {
                     ring_for_thread,
                     running_for_thread,
                     stats_for_thread,
-                    Some(monitor), // Monitor state moved here
+                    monitor,
+                    streaming_tap,
                 ) {
                     error!("PipeWire output thread failed: {}", e);
                 }
@@ -168,7 +191,7 @@ impl PipeWireOutputStream {
             .map_err(|e| PipeWireOutputError::ThreadSpawn(e.to_string()))?;
 
         info!(
-            "PipeWire output stream started: {} @ {}Hz, {} channels (with lock-free monitor mixing)",
+            "PipeWire output stream started: {} @ {}Hz, {} channels",
             config.name, config.sample_rate, config.channels
         );
 
@@ -179,7 +202,7 @@ impl PipeWireOutputStream {
             config,
             started: true,
             stats,
-            has_monitor: true,
+            has_monitor,
         })
     }
 
@@ -248,6 +271,7 @@ impl PipeWireOutputStream {
                     running_for_thread,
                     stats_for_thread,
                     None, // No monitor mixing - use new_with_monitor for that
+                    None, // No streaming tap - use new_with_streaming_tap for that
                 ) {
                     error!("PipeWire output thread failed: {}", e);
                 }
@@ -314,6 +338,7 @@ fn run_pipewire_loop(
     running: Arc<AtomicBool>,
     stats: Arc<StreamStats>,
     monitor: Option<MonitorMixState>,
+    streaming_tap: Option<AudioRingProducer>,
 ) -> Result<(), PipeWireOutputError> {
     use pipewire as pw;
     use pw::spa::pod::Pod;
@@ -360,9 +385,10 @@ fn run_pipewire_loop(
 
     // Register process callback - runs in PipeWire's RT thread
     // This is the RT mixer: reads from monitor input (if enabled) and timeline ring
+    // Final mixed output is also written to streaming_tap for WebSocket streaming
     let _listener = stream
-        .add_local_listener_with_user_data((ring_buffer, stats.clone(), monitor))
-        .process(move |stream, (timeline_ring, stats, monitor)| {
+        .add_local_listener_with_user_data((ring_buffer, stats.clone(), monitor, streaming_tap))
+        .process(move |stream, (timeline_ring, stats, monitor, streaming_tap)| {
             let count = stats.callbacks.fetch_add(1, Ordering::Relaxed);
             // Debug: log first callback
             if count == 0 {
@@ -439,6 +465,12 @@ fn run_pipewire_loop(
             stats
                 .samples_written
                 .fetch_add(samples_needed as u64, Ordering::Relaxed);
+
+            // Write final mixed output to streaming tap for WebSocket consumers
+            // This is lock-free (SPSC) so it won't block the RT thread
+            if let Some(ref mut tap) = streaming_tap {
+                tap.write(&output_buffer[..samples_needed]);
+            }
 
             // Fill output buffer
             for i in 0..n_frames {

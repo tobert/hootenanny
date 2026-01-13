@@ -527,6 +527,11 @@ pub enum ShellReply {
         samples_captured: u64,
         overruns: u64,
     },
+    /// Monitor passthrough status
+    MonitorStatus {
+        enabled: bool,
+        gain: f32,
+    },
     /// Full state snapshot for Trustfall query evaluation in hootenanny
     Snapshot {
         snapshot: crate::garden_snapshot::GardenSnapshot,

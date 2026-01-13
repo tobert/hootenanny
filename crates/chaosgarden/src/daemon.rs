@@ -17,7 +17,7 @@ use crate::ipc::{
     RegionSummary, SampleFormat as IpcSampleFormat, ShellReply, ShellRequest,
     StreamDefinition as IpcStreamDefinition, StreamFormat as IpcStreamFormat,
 };
-use crate::external_io::{audio_ring_pair, AudioRingConsumer, RingBuffer};
+use crate::external_io::{audio_ring_pair, AudioRingConsumer, AudioRingProducer, RingBuffer};
 use crate::mixer::{MixerChannel, MixerState};
 use crate::monitor_input::{MonitorInputConfig, MonitorInputStream};
 use crate::nodes::ContentResolver;
@@ -118,10 +118,11 @@ pub struct GardenDaemon {
     // This is obtained from the PipeWire output stream when attached
     timeline_ring: RwLock<Option<Arc<Mutex<RingBuffer>>>>,
 
-    // Streaming tap buffer for WebSocket/HTTP audio streaming
-    // This captures a copy of mixed audio for external consumers without
-    // interfering with the RT playback path. Written during process_playback().
-    streaming_tap: Arc<Mutex<RingBuffer>>,
+    // Streaming tap for WebSocket/HTTP audio streaming (lock-free SPSC)
+    // Consumer is read by get_audio_snapshot(), producer is moved to RT callback
+    streaming_tap_consumer: Mutex<AudioRingConsumer>,
+    // Producer is taken when audio output is attached and moved to RT thread
+    streaming_tap_producer: Mutex<Option<AudioRingProducer>>,
     streaming_tap_sample_rate: u32,
 
     // Monotonic version counter for snapshot invalidation
@@ -164,12 +165,11 @@ impl GardenDaemon {
         monitor_channel.enabled.store(false, Ordering::Relaxed);
         monitor_channel.set_gain(0.8); // Default 80% gain
 
-        // Create streaming tap buffer - ~500ms of stereo audio at 48kHz
-        // This allows external consumers to fetch audio snapshots without
-        // interfering with the RT playback path.
+        // Create streaming tap (lock-free SPSC) - ~500ms of stereo audio at 48kHz
+        // Producer moves to RT callback when output is attached, consumer stays for snapshots
         let streaming_tap_sample_rate = 48000u32;
         let streaming_tap_capacity = streaming_tap_sample_rate as usize * 2; // ~500ms stereo
-        let streaming_tap = Arc::new(Mutex::new(RingBuffer::new(streaming_tap_capacity)));
+        let (streaming_tap_producer, streaming_tap_consumer) = audio_ring_pair(streaming_tap_capacity);
 
         Self {
             transport: RwLock::new(TransportState::default()),
@@ -191,7 +191,8 @@ impl GardenDaemon {
             playback_engine: RwLock::new(None),
             compiled_graph: RwLock::new(None),
             timeline_ring: RwLock::new(None),
-            streaming_tap,
+            streaming_tap_consumer: Mutex::new(streaming_tap_consumer),
+            streaming_tap_producer: Mutex::new(Some(streaming_tap_producer)),
             streaming_tap_sample_rate,
             snapshot_version: std::sync::atomic::AtomicU64::new(0),
         }
@@ -599,15 +600,11 @@ impl GardenDaemon {
         match engine.process(graph, &regions) {
             Ok(output_buffer) => {
                 // Write output to timeline ring (for RT playback)
+                // The RT callback mixes this with monitor input and writes
+                // the final mix to both PipeWire output and streaming tap
                 if let Ok(mut ring) = timeline_ring.lock() {
                     // AudioBuffer.samples is interleaved [L, R, L, R, ...]
                     ring.write(&output_buffer.samples);
-                }
-
-                // Also write to streaming tap for WebSocket/HTTP consumers
-                // This is a separate copy that doesn't interfere with RT playback
-                if let Ok(mut tap) = self.streaming_tap.lock() {
-                    tap.write(&output_buffer.samples);
                 }
             }
             Err(e) => {
@@ -643,6 +640,23 @@ impl GardenDaemon {
             config.name, config.sample_rate, config.latency_frames
         );
 
+        // Take the streaming tap producer for the RT callback to write the final mix
+        // If it was already consumed (re-attach scenario), create a new pair
+        let streaming_tap = {
+            let mut producer_guard = self.streaming_tap_producer.lock().unwrap();
+            match producer_guard.take() {
+                Some(producer) => Some(producer),
+                None => {
+                    // Recreate the pair for re-attach
+                    let capacity = self.streaming_tap_sample_rate as usize * 2; // ~500ms stereo
+                    let (new_producer, new_consumer) = audio_ring_pair(capacity);
+                    // Update the consumer
+                    *self.streaming_tap_consumer.lock().unwrap() = new_consumer;
+                    Some(new_producer)
+                }
+            }
+        };
+
         // Check if we have a monitor consumer available - if so, use RT mixing
         let consumer = self.monitor_consumer.lock().unwrap().take();
         let stream = if let Some(consumer) = consumer {
@@ -655,10 +669,10 @@ impl GardenDaemon {
             };
 
             info!("Creating output stream with RT monitor mixing (lock-free)");
-            PipeWireOutputStream::new_with_monitor(config, monitor_state)
+            PipeWireOutputStream::new_with_monitor(config, monitor_state, streaming_tap)
                 .map_err(|e| format!("Failed to create PipeWire output with monitor: {}", e))?
         } else {
-            PipeWireOutputStream::new(config)
+            PipeWireOutputStream::new_with_streaming_tap(config, streaming_tap)
                 .map_err(|e| format!("Failed to create PipeWire output: {}", e))?
         };
 
@@ -842,25 +856,16 @@ impl GardenDaemon {
     /// Get an audio snapshot from the streaming tap buffer.
     ///
     /// Returns interleaved stereo f32 samples from the most recent output.
-    /// This reads from the streaming tap (which is a copy of output audio)
-    /// without interfering with RT playback.
+    /// This reads from the streaming tap consumer (lock-free SPSC from RT callback).
     fn get_audio_snapshot(&self, frames: u32) -> ShellReply {
         let samples_needed = frames as usize * 2; // stereo
         let mut samples = vec![0.0f32; samples_needed];
 
-        if let Ok(mut tap) = self.streaming_tap.lock() {
-            let available = tap.available();
-            let to_read = samples_needed.min(available);
-
-            if to_read > 0 {
-                tap.read(&mut samples[..to_read]);
-                // If we got fewer samples than requested, trim the vec
-                if to_read < samples_needed {
-                    samples.truncate(to_read);
-                }
-            } else {
-                // No samples available - return empty
-                samples.clear();
+        if let Ok(mut consumer) = self.streaming_tap_consumer.lock() {
+            // Read available samples from the lock-free ring buffer
+            let read = consumer.read(&mut samples);
+            if read < samples_needed {
+                samples.truncate(read);
             }
         }
 
@@ -1346,11 +1351,9 @@ impl GardenDaemon {
             ShellRequest::GetInputStatus => self.get_input_status(),
             ShellRequest::SetMonitor { enabled, gain } => {
                 self.set_monitor(enabled, gain);
-                ShellReply::Ok {
-                    result: serde_json::json!({
-                        "monitor_enabled": self.monitor_channel.enabled.load(Ordering::Relaxed),
-                        "monitor_gain": self.monitor_channel.get_gain(),
-                    }),
+                ShellReply::MonitorStatus {
+                    enabled: self.monitor_channel.enabled.load(Ordering::Relaxed),
+                    gain: self.monitor_channel.get_gain(),
                 }
             }
 
