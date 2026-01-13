@@ -476,6 +476,12 @@ struct GardenInputStatusResponse {
   attached @0 :Bool;
   deviceName @1 :Text;
   sampleRate @2 :UInt32;
+  channels @3 :UInt32;
+  monitorEnabled @4 :Bool;
+  monitorGain @5 :Float32;
+  callbacks @6 :UInt64;
+  samplesCaptured @7 :UInt64;
+  overruns @8 :UInt64;
 }
 
 struct GardenMonitorStatusResponse {

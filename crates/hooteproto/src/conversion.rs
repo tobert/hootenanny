@@ -1725,6 +1725,12 @@ fn response_to_capnp_tool_response(
             b.set_attached(r.attached);
             b.set_device_name(r.device_name.as_deref().unwrap_or(""));
             b.set_sample_rate(r.sample_rate.unwrap_or(0));
+            b.set_channels(r.channels.unwrap_or(0));
+            b.set_monitor_enabled(r.monitor_enabled);
+            b.set_monitor_gain(r.monitor_gain);
+            b.set_callbacks(r.callbacks);
+            b.set_samples_captured(r.samples_captured);
+            b.set_overruns(r.overruns);
         }
         ToolResponse::GardenMonitorStatus(r) => {
             let mut b = builder.reborrow().init_garden_monitor_status();
@@ -2474,16 +2480,17 @@ fn capnp_tool_response_to_response(
         Which::GardenInputStatus(r) => {
             let r = r?;
             let device_name = r.get_device_name()?.to_string()?;
+            let channels = r.get_channels();
             Ok(ToolResponse::GardenInputStatus(GardenInputStatusResponse {
                 attached: r.get_attached(),
                 device_name: if device_name.is_empty() { None } else { Some(device_name) },
                 sample_rate: Some(r.get_sample_rate()),
-                channels: None, // Not in capnp schema yet
-                monitor_enabled: false, // Not in capnp schema yet
-                monitor_gain: 1.0, // Not in capnp schema yet
-                callbacks: 0, // Not in capnp schema yet
-                samples_captured: 0, // Not in capnp schema yet
-                overruns: 0, // Not in capnp schema yet
+                channels: if channels == 0 { None } else { Some(channels) },
+                monitor_enabled: r.get_monitor_enabled(),
+                monitor_gain: r.get_monitor_gain(),
+                callbacks: r.get_callbacks(),
+                samples_captured: r.get_samples_captured(),
+                overruns: r.get_overruns(),
             }))
         }
         Which::GardenMonitorStatus(r) => {

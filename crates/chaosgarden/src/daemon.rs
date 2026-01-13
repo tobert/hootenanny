@@ -809,6 +809,8 @@ impl GardenDaemon {
     /// Get monitor input status
     fn get_input_status(&self) -> ShellReply {
         let input = self.monitor_input.read().unwrap();
+        let monitor_enabled = self.monitor_channel.enabled.load(Ordering::Relaxed);
+        let monitor_gain = self.monitor_channel.get_gain();
         match input.as_ref() {
             Some(stream) => {
                 let config = stream.config();
@@ -818,8 +820,8 @@ impl GardenDaemon {
                     device_name: config.device_name.clone(),
                     sample_rate: Some(config.sample_rate),
                     channels: Some(config.channels),
-                    monitor_enabled: self.monitor_channel.enabled.load(Ordering::Relaxed),
-                    monitor_gain: self.monitor_channel.get_gain(),
+                    monitor_enabled,
+                    monitor_gain,
                     callbacks: stats.callbacks.load(Ordering::Relaxed),
                     samples_captured: stats.samples_captured.load(Ordering::Relaxed),
                     overruns: stats.overruns.load(Ordering::Relaxed),
@@ -830,8 +832,8 @@ impl GardenDaemon {
                 device_name: None,
                 sample_rate: None,
                 channels: None,
-                monitor_enabled: self.monitor_channel.enabled.load(Ordering::Relaxed),
-                monitor_gain: self.monitor_channel.get_gain(),
+                monitor_enabled,
+                monitor_gain,
                 callbacks: 0,
                 samples_captured: 0,
                 overruns: 0,
