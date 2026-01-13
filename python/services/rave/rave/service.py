@@ -43,6 +43,14 @@ class RaveService(ModelService):
 
     TOOLS = ["rave_encode", "rave_decode", "rave_reconstruct", "rave_generate"]
 
+    # Map tool names to response type names (schema uses past-tense)
+    RESPONSE_TYPES = {
+        "rave_encode": "rave_encoded",
+        "rave_decode": "rave_decoded",
+        "rave_reconstruct": "rave_reconstructed",
+        "rave_generate": "rave_generated",
+    }
+
     def __init__(self, endpoint: str = "tcp://127.0.0.1:5591"):
         super().__init__(ServiceConfig(
             name="rave",
@@ -91,6 +99,13 @@ class RaveService(ModelService):
         model = model.to(self.device)
         model.eval()
 
+        # Disable gradient tracking on all parameters and buffers to avoid
+        # in-place operation errors in cached_conv layers
+        for param in model.parameters():
+            param.requires_grad_(False)
+        for buf in model.buffers():
+            buf.requires_grad_(False)
+
         self.models[cache_key] = model
         return model
 
@@ -102,6 +117,10 @@ class RaveService(ModelService):
                 return next(iter(self.models.values()))
             name = "vintage"  # Default model
         return self._load_model(name, streaming)
+
+    def get_response_type(self, tool_name: str) -> str:
+        """Get the response type name for a tool (overrides base class)"""
+        return self.RESPONSE_TYPES.get(tool_name, tool_name + "_response")
 
     async def handle_request(self, tool_name: str, params: dict[str, Any]) -> dict[str, Any]:
         """Route request to appropriate handler"""
@@ -161,7 +180,7 @@ class RaveService(ModelService):
         audio = audio.to(self.device)
 
         # Encode
-        with torch.no_grad():
+        with torch.inference_mode():
             z = await asyncio.to_thread(model.encode, audio)
 
         # Convert to bytes for storage
@@ -201,7 +220,7 @@ class RaveService(ModelService):
         z = torch.from_numpy(z_np).to(self.device)
 
         # Decode
-        with torch.no_grad():
+        with torch.inference_mode():
             audio = await asyncio.to_thread(model.decode, z)
 
         # Convert to WAV bytes
@@ -254,7 +273,7 @@ class RaveService(ModelService):
         audio = audio.to(self.device)
 
         # Reconstruct (encode then decode)
-        with torch.no_grad():
+        with torch.inference_mode():
             reconstructed = await asyncio.to_thread(model.forward, audio)
 
         # Convert to WAV bytes
@@ -293,10 +312,12 @@ class RaveService(ModelService):
         latent_length = num_samples // 2048 + 1  # Approximate compression ratio
 
         # Sample from standard normal, scale by temperature
+        # Use detach() to ensure no gradient tracking
         z = torch.randn(1, latent_dim, latent_length, device=self.device) * temperature
+        z = z.detach()
 
-        # Decode
-        with torch.no_grad():
+        # Decode - use inference_mode to avoid gradient tracking issues with cached_conv
+        with torch.inference_mode():
             audio = await asyncio.to_thread(model.decode, z)
 
         # Trim to exact duration
@@ -323,14 +344,23 @@ class RaveService(ModelService):
         return audio, sample_rate
 
     def _encode_wav(self, audio: np.ndarray, sample_rate: int) -> bytes:
-        """Encode numpy array to WAV bytes"""
+        """Encode numpy array to WAV bytes using Python's wave module"""
+        import wave
+
         buffer = io.BytesIO()
-        # Ensure audio is in correct shape for torchaudio
-        if audio.ndim == 1:
-            audio_tensor = torch.from_numpy(audio).unsqueeze(0)
-        else:
-            audio_tensor = torch.from_numpy(audio)
-        torchaudio.save(buffer, audio_tensor, sample_rate, format="wav")
+        # Ensure audio is 1D
+        if audio.ndim > 1:
+            audio = audio.flatten()
+
+        # Convert float32 [-1, 1] to int16
+        audio_int16 = (audio * 32767).astype(np.int16)
+
+        with wave.open(buffer, 'wb') as wav:
+            wav.setnchannels(1)  # mono
+            wav.setsampwidth(2)  # 16-bit
+            wav.setframerate(sample_rate)
+            wav.writeframes(audio_int16.tobytes())
+
         return buffer.getvalue()
 
     def _pack_latent(self, z: np.ndarray) -> bytes:

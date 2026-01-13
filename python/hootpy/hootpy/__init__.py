@@ -17,7 +17,8 @@ from .errors import (
     ErrorCategory,
 )
 from .service import ModelService, ServiceConfig, SingleJobGuard
-from .client import HootClient, ClientConfig
+from .client import HootClient, ClientConfig, request
+from .protocol import encode_tool_request, decode_envelope
 
 __version__ = "0.1.0"
 
@@ -43,4 +44,8 @@ __all__ = [
     # Client
     "HootClient",
     "ClientConfig",
+    "request",
+    # Protocol
+    "encode_tool_request",
+    "decode_envelope",
 ]

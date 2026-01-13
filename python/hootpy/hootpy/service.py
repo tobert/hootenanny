@@ -206,10 +206,11 @@ class ModelService(ABC):
         self, frame: HootFrame, identity: list[bytes] | None
     ):
         """Dispatch request based on content type"""
+        log.debug(f"Handling request: content_type={frame.content_type!r}, service={frame.service}")
         if frame.content_type != ContentType.CAPNPROTO:
             await self._send_error(
                 frame, identity, "invalid_content_type",
-                f"Expected CapnProto, got {frame.content_type.name}"
+                f"Expected CapnProto, got {frame.content_type!r}"
             )
             return
 
@@ -253,6 +254,10 @@ class ModelService(ABC):
         frames = frame.to_frames_with_identity()
         await self.socket.send_multipart(frames)
 
+    def get_response_type(self, tool_name: str) -> str:
+        """Get the response type name for a tool. Subclasses can override."""
+        return tool_name + "_response"
+
     async def _send_response(
         self,
         request: HootFrame,
@@ -261,9 +266,11 @@ class ModelService(ABC):
         response_data: dict[str, Any],
     ):
         """Send a successful response"""
+        # Get the actual response type name (may be overridden by subclass)
+        actual_type = self.get_response_type(response_type)
         body = encode_tool_response(
             request.request_id.bytes,
-            response_type + "_response",  # e.g., rave_encode -> rave_encode_response
+            actual_type,
             response_data,
         )
         reply = HootFrame.reply(request.request_id, body)

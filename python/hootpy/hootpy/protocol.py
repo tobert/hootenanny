@@ -41,9 +41,14 @@ def _capnp_struct_to_dict(struct: Any) -> dict[str, Any]:
     result = {}
 
     # Get all fields from the struct's schema
-    schema = struct.schema
-    for field in schema.fields:
-        field_name = field.name
+    try:
+        schema = struct.schema
+    except AttributeError:
+        # struct might be a primitive or not have a schema
+        return {"_value": struct}
+
+    # schema.fields is a dict mapping field names to field schemas
+    for field_name in schema.fields:
         try:
             value = getattr(struct, field_name)
 
@@ -78,7 +83,13 @@ def decode_envelope(body: bytes) -> tuple[str, dict[str, Any]]:
         Tuple of (payload_type, payload_dict)
         payload_type is the union variant name in snake_case
     """
-    msg = _envelope_capnp.Envelope.from_bytes(body)
+    # pycapnp from_bytes returns a context manager
+    with _envelope_capnp.Envelope.from_bytes(body) as msg:
+        return _decode_envelope_inner(msg)
+
+
+def _decode_envelope_inner(msg: Any) -> tuple[str, dict[str, Any]]:
+    """Inner decode that works with the message object"""
     payload = msg.payload
 
     # Get the active union variant
@@ -155,6 +166,49 @@ def encode_envelope(
     # Set payload based on type
     payload = msg.init("payload")
     _set_payload_variant(payload, payload_type, payload_data)
+
+    return msg.to_bytes()
+
+
+def encode_tool_request(
+    request_id_bytes: bytes,
+    tool_name: str,
+    params: dict[str, Any],
+    traceparent: str = "",
+) -> bytes:
+    """
+    Encode a tool request into an envelope.
+
+    Args:
+        request_id_bytes: 16-byte UUID
+        tool_name: Tool name in snake_case (e.g., "rave_encode")
+        params: Request parameters as a dict
+        traceparent: W3C trace context string (optional)
+
+    Returns:
+        Serialized Cap'n Proto message bytes
+    """
+    msg = _envelope_capnp.Envelope.new_message()
+
+    # Set ID
+    id_builder = msg.init("id")
+    id_builder.low = int.from_bytes(request_id_bytes[:8], "little")
+    id_builder.high = int.from_bytes(request_id_bytes[8:16], "little")
+
+    # Set traceparent
+    msg.traceparent = traceparent
+
+    # Set payload as tool request
+    payload = msg.init("payload")
+    tool_request = payload.init("toolRequest")
+
+    # Set the tool variant (convert snake_case to camelCase)
+    camel_tool = _to_camel_case(tool_name)
+    try:
+        request_builder = tool_request.init(camel_tool)
+        _dict_to_capnp_struct(request_builder, params)
+    except Exception as e:
+        raise ValueError(f"Failed to encode tool request '{tool_name}': {e}")
 
     return msg.to_bytes()
 

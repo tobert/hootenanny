@@ -16,7 +16,7 @@ import zmq.asyncio
 
 from .errors import ServiceError, TimeoutError, ToolError
 from .frame import Command, ContentType, HootFrame
-from .protocol import decode_envelope, encode_envelope
+from .protocol import decode_envelope, encode_tool_request
 
 log = logging.getLogger(__name__)
 
@@ -158,26 +158,19 @@ class HootClient:
         timeout_ms: int,
     ) -> dict[str, Any]:
         """Send a single request with timeout"""
-        # Build request frame
+        # Build request frame (body will be set after we have request ID)
         frame = HootFrame.request(
             service=self.config.name,
-            body=encode_envelope(
-                request_id_bytes=b"\x00" * 16,  # Will be set by frame
-                traceparent="",
-                payload_type="tool_request",
-                payload_data={"tool": tool_name, **params},
-            ),
+            body=b"",  # Placeholder
             content_type=ContentType.CAPNPROTO,
         )
 
-        # Actually encode the envelope with the real request ID
-        body = encode_envelope(
+        # Encode the tool request with the real request ID
+        frame.body = encode_tool_request(
             request_id_bytes=frame.request_id.bytes,
-            traceparent="",
-            payload_type="tool_request",
-            payload_data={"tool": tool_name, **params},
+            tool_name=tool_name,
+            params=params,
         )
-        frame.body = body
 
         # Send
         await self.socket.send_multipart(frame.to_frames())
