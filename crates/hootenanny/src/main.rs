@@ -359,13 +359,21 @@ async fn main() -> Result<()> {
         info!("   Vibeweaver proxy: enabled (via EventDualityServer)");
     }
 
-    info!("🎵 Hootenanny starting on http://{}", http_addr);
-    info!("   UI: http://{}/ui", http_addr);
-    info!("   Live Stream: ws://{}/stream/live", http_addr);
-    info!("   Artifact Content: GET http://{}/artifact/:id", http_addr);
-    info!("   Artifact Meta: GET http://{}/artifact/:id/meta", http_addr);
-    info!("   Artifacts List: GET http://{}/artifacts", http_addr);
-    info!("   Health: GET http://{}/health", http_addr);
+    let tls_enabled = config.infra.bind.tls.enabled;
+    let scheme = if tls_enabled { "https" } else { "http" };
+    let ws_scheme = if tls_enabled { "wss" } else { "ws" };
+
+    if tls_enabled {
+        info!("🔐 Hootenanny starting on {}://{}", scheme, http_addr);
+    } else {
+        info!("🎵 Hootenanny starting on {}://{}", scheme, http_addr);
+    }
+    info!("   UI: {}://{}/ui", scheme, http_addr);
+    info!("   Live Stream: {}://{}/stream/live", ws_scheme, http_addr);
+    info!("   Artifact Content: GET {}://{}/artifact/:id", scheme, http_addr);
+    info!("   Artifact Meta: GET {}://{}/artifact/:id/meta", scheme, http_addr);
+    info!("   Artifacts List: GET {}://{}/artifacts", scheme, http_addr);
+    info!("   Health: GET {}://{}/health", scheme, http_addr);
     info!("   ZMQ ROUTER: {} (for holler MCP gateway)", zmq_router);
     info!("   ZMQ PUB: {} (for SSE broadcasts)", zmq_pub);
 
@@ -444,21 +452,70 @@ async fn main() -> Result<()> {
         .merge(artifact_router);
 
     let bind_addr: std::net::SocketAddr = http_addr.parse().context("Failed to parse bind address")?;
-    let listener = tokio::net::TcpListener::bind(bind_addr).await?;
 
     info!("🌐 Router created, starting server...");
 
-    let shutdown_token_srv = shutdown_token.clone();
-    let server = axum::serve(listener, app_router).with_graceful_shutdown(async move {
-        shutdown_token_srv.cancelled().await;
-        info!("Server shutdown signal received");
-    });
+    if tls_enabled {
+        // Load TLS certificates
+        let tls_config = &config.infra.bind.tls;
+        let cert_path = tls_config
+            .resolved_cert_path()
+            .context("Could not determine certificate path")?;
+        let key_path = tls_config
+            .resolved_key_path()
+            .context("Could not determine key path")?;
 
-    tokio::spawn(async move {
-        if let Err(e) = server.await {
-            tracing::error!("Server shutdown with error: {:?}", e);
+        if !cert_path.exists() || !key_path.exists() {
+            anyhow::bail!(
+                "TLS enabled but certificates not found.\n\
+                 Expected:\n  cert: {}\n  key: {}\n\n\
+                 Generate certificates with:\n  holler generate-cert --hostname <your-hostname>",
+                cert_path.display(),
+                key_path.display()
+            );
         }
-    });
+
+        let rustls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert_path, &key_path)
+            .await
+            .with_context(|| format!(
+                "Failed to load TLS config from {} and {}",
+                cert_path.display(),
+                key_path.display()
+            ))?;
+
+        let handle = axum_server::Handle::new();
+        let shutdown_handle = handle.clone();
+        let shutdown_token_srv = shutdown_token.clone();
+        tokio::spawn(async move {
+            shutdown_token_srv.cancelled().await;
+            info!("Server shutdown signal received");
+            shutdown_handle.graceful_shutdown(None);
+        });
+
+        tokio::spawn(async move {
+            if let Err(e) = axum_server::bind_rustls(bind_addr, rustls_config)
+                .handle(handle)
+                .serve(app_router.into_make_service())
+                .await
+            {
+                tracing::error!("TLS server shutdown with error: {:?}", e);
+            }
+        });
+    } else {
+        let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+
+        let shutdown_token_srv = shutdown_token.clone();
+        let server = axum::serve(listener, app_router).with_graceful_shutdown(async move {
+            shutdown_token_srv.cancelled().await;
+            info!("Server shutdown signal received");
+        });
+
+        tokio::spawn(async move {
+            if let Err(e) = server.await {
+                tracing::error!("Server shutdown with error: {:?}", e);
+            }
+        });
+    }
 
     info!("🎵 Server ready. Let's dance!");
 

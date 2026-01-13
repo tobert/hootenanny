@@ -40,6 +40,8 @@ pub struct ServeConfig {
     /// Base URL for artifact access (e.g., "http://localhost:8082")
     /// Used to construct artifact_url fields in tool responses.
     pub artifact_base_url: Option<String>,
+    /// TLS configuration (None or disabled = HTTP only)
+    pub tls: Option<hooteconf::infra::TlsConfig>,
 }
 
 /// Server state for health endpoint
@@ -200,18 +202,55 @@ pub async fn run(config: ServeConfig) -> Result<()> {
 
     // Bind and serve
     let addr = format!("0.0.0.0:{}", config.port);
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .with_context(|| format!("Failed to bind to {}", addr))?;
 
-    info!("🎺 Holler ready!");
-    info!("   MCP (Streamable): POST http://{}/mcp", addr);
-    info!("   Health: GET http://{}/health", addr);
+    // Check if TLS is enabled
+    let tls_enabled = config
+        .tls
+        .as_ref()
+        .map(|t| t.enabled)
+        .unwrap_or(false);
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(cancel_token))
-        .await
-        .context("Server error")?;
+    if tls_enabled {
+        let tls_config = config.tls.as_ref().unwrap();
+        let rustls_config = crate::tls::load_rustls_config(tls_config)
+            .await
+            .context("Failed to load TLS configuration")?;
+
+        let socket_addr: std::net::SocketAddr = addr
+            .parse()
+            .with_context(|| format!("Invalid bind address: {}", addr))?;
+
+        info!("🔐 Holler ready with TLS!");
+        info!("   MCP (Streamable): POST https://{}/mcp", addr);
+        info!("   Health: GET https://{}/health", addr);
+
+        // Use Handle for graceful shutdown with axum_server
+        let handle = axum_server::Handle::new();
+        let shutdown_handle = handle.clone();
+        tokio::spawn(async move {
+            shutdown_signal(cancel_token).await;
+            shutdown_handle.graceful_shutdown(None);
+        });
+
+        axum_server::bind_rustls(socket_addr, rustls_config)
+            .handle(handle)
+            .serve(app.into_make_service())
+            .await
+            .context("TLS server error")?;
+    } else {
+        let listener = tokio::net::TcpListener::bind(&addr)
+            .await
+            .with_context(|| format!("Failed to bind to {}", addr))?;
+
+        info!("🎺 Holler ready!");
+        info!("   MCP (Streamable): POST http://{}/mcp", addr);
+        info!("   Health: GET http://{}/health", addr);
+
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal(cancel_token))
+            .await
+            .context("Server error")?;
+    }
 
     info!("Shutdown complete");
     Ok(())

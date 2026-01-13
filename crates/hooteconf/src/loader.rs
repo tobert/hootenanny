@@ -109,6 +109,18 @@ fn parse_toml(contents: &str, path: &Path) -> Result<HootConfig, ConfigError> {
             if let Some(v) = bind.get("zmq_pub").and_then(|v| v.as_str()) {
                 infra.bind.zmq_pub = v.to_string();
             }
+            // TLS config
+            if let Some(tls) = bind.get("tls").and_then(|v| v.as_table()) {
+                if let Some(v) = tls.get("enabled").and_then(|v| v.as_bool()) {
+                    infra.bind.tls.enabled = v;
+                }
+                if let Some(v) = tls.get("cert_path").and_then(|v| v.as_str()) {
+                    infra.bind.tls.cert_path = Some(expand_path(v));
+                }
+                if let Some(v) = tls.get("key_path").and_then(|v| v.as_str()) {
+                    infra.bind.tls.key_path = Some(expand_path(v));
+                }
+            }
         }
 
         if let Some(http) = table.get("http").and_then(|v| v.as_table()) {
@@ -141,6 +153,18 @@ fn parse_toml(contents: &str, path: &Path) -> Result<HootConfig, ConfigError> {
             }
             if let Some(v) = gateway.get("hootenanny_pub").and_then(|v| v.as_str()) {
                 infra.gateway.hootenanny_pub = v.to_string();
+            }
+            // TLS config
+            if let Some(tls) = gateway.get("tls").and_then(|v| v.as_table()) {
+                if let Some(v) = tls.get("enabled").and_then(|v| v.as_bool()) {
+                    infra.gateway.tls.enabled = v;
+                }
+                if let Some(v) = tls.get("cert_path").and_then(|v| v.as_str()) {
+                    infra.gateway.tls.cert_path = Some(expand_path(v));
+                }
+                if let Some(v) = tls.get("key_path").and_then(|v| v.as_str()) {
+                    infra.gateway.tls.key_path = Some(expand_path(v));
+                }
             }
         }
 
@@ -253,6 +277,21 @@ pub fn merge_configs(base: HootConfig, overlay: HootConfig) -> HootConfig {
                 } else {
                     base.infra.bind.zmq_pub
                 },
+                tls: crate::infra::TlsConfig {
+                    enabled: overlay.infra.bind.tls.enabled || base.infra.bind.tls.enabled,
+                    cert_path: overlay
+                        .infra
+                        .bind
+                        .tls
+                        .cert_path
+                        .or(base.infra.bind.tls.cert_path),
+                    key_path: overlay
+                        .infra
+                        .bind
+                        .tls
+                        .key_path
+                        .or(base.infra.bind.tls.key_path),
+                },
             },
             http: crate::infra::HttpConfig {
                 hostname: if overlay.infra.http.hostname.is_some() {
@@ -303,6 +342,21 @@ pub fn merge_configs(base: HootConfig, overlay: HootConfig) -> HootConfig {
                     overlay.infra.gateway.timeout_ms
                 } else {
                     base.infra.gateway.timeout_ms
+                },
+                tls: crate::infra::TlsConfig {
+                    enabled: overlay.infra.gateway.tls.enabled || base.infra.gateway.tls.enabled,
+                    cert_path: overlay
+                        .infra
+                        .gateway
+                        .tls
+                        .cert_path
+                        .or(base.infra.gateway.tls.cert_path),
+                    key_path: overlay
+                        .infra
+                        .gateway
+                        .tls
+                        .key_path
+                        .or(base.infra.gateway.tls.key_path),
                 },
             },
             services: crate::infra::ServicesConfig {
@@ -387,6 +441,20 @@ pub fn apply_env_overrides(config: &mut HootConfig, sources: &mut ConfigSources)
         sources.env_overrides.push("HOOTENANNY_ZMQ_PUB".to_string());
     }
 
+    // Bind TLS settings (for hootenanny)
+    if let Ok(v) = env::var("HOOTENANNY_TLS_ENABLED") {
+        config.infra.bind.tls.enabled = v.parse().unwrap_or(false);
+        sources.env_overrides.push("HOOTENANNY_TLS_ENABLED".to_string());
+    }
+    if let Ok(v) = env::var("HOOTENANNY_TLS_CERT") {
+        config.infra.bind.tls.cert_path = Some(expand_path(&v));
+        sources.env_overrides.push("HOOTENANNY_TLS_CERT".to_string());
+    }
+    if let Ok(v) = env::var("HOOTENANNY_TLS_KEY") {
+        config.infra.bind.tls.key_path = Some(expand_path(&v));
+        sources.env_overrides.push("HOOTENANNY_TLS_KEY".to_string());
+    }
+
     // External HTTP access config (for URL construction)
     if let Ok(v) = env::var("HOOTENANNY_HTTP_HOSTNAME") {
         config.infra.http.hostname = Some(v);
@@ -437,6 +505,20 @@ pub fn apply_env_overrides(config: &mut HootConfig, sources: &mut ConfigSources)
     if let Ok(v) = env::var("HOLLER_HOOTENANNY_PUB") {
         config.infra.gateway.hootenanny_pub = v;
         sources.env_overrides.push("HOLLER_HOOTENANNY_PUB".to_string());
+    }
+
+    // TLS settings
+    if let Ok(v) = env::var("HOLLER_TLS_ENABLED") {
+        config.infra.gateway.tls.enabled = v.parse().unwrap_or(false);
+        sources.env_overrides.push("HOLLER_TLS_ENABLED".to_string());
+    }
+    if let Ok(v) = env::var("HOLLER_TLS_CERT") {
+        config.infra.gateway.tls.cert_path = Some(expand_path(&v));
+        sources.env_overrides.push("HOLLER_TLS_CERT".to_string());
+    }
+    if let Ok(v) = env::var("HOLLER_TLS_KEY") {
+        config.infra.gateway.tls.key_path = Some(expand_path(&v));
+        sources.env_overrides.push("HOLLER_TLS_KEY".to_string());
     }
 
     // Model endpoints (HOOTENANNY_MODEL_<NAME>)

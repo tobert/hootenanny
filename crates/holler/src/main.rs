@@ -106,6 +106,20 @@ enum Commands {
         #[arg(long)]
         daw_only: bool,
     },
+
+    /// Generate a self-signed TLS certificate
+    ///
+    /// Creates a certificate and private key for HTTPS serving.
+    /// Files are written to ~/.config/hootenanny/certs/ by default.
+    GenerateCert {
+        /// Hostname for certificate CN/SAN
+        #[arg(long, default_value = "localhost")]
+        hostname: String,
+
+        /// Output directory for cert files (default: ~/.config/hootenanny/certs/)
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -240,6 +254,14 @@ async fn main() -> Result<()> {
             let artifact_base_url = Some(config.infra.http.base_url(&config.infra.bind));
             tracing::info!("   Artifact URLs: {}/artifact/{{id}}", artifact_base_url.as_ref().unwrap());
 
+            // Determine TLS config
+            let tls = if config.infra.gateway.tls.enabled {
+                tracing::info!("🔐 TLS enabled");
+                Some(config.infra.gateway.tls.clone())
+            } else {
+                None
+            };
+
             serve::run(serve::ServeConfig {
                 port: config.infra.gateway.http_port,
                 hootenanny: config.infra.gateway.hootenanny,
@@ -247,6 +269,7 @@ async fn main() -> Result<()> {
                 timeout_ms: config.infra.gateway.timeout_ms,
                 daw_only,
                 artifact_base_url,
+                tls,
             })
             .await?;
         }
@@ -265,6 +288,34 @@ async fn main() -> Result<()> {
                 daw_only,
             })
             .await?;
+        }
+        Commands::GenerateCert { hostname, output_dir } => {
+            use holler::tls::{generate_self_signed, TlsCertPaths};
+
+            // Determine output paths
+            let cert_dir = output_dir.unwrap_or_else(|| {
+                hooteconf::infra::TlsConfig::default_cert_dir()
+                    .expect("Could not determine config directory (HOME not set?)")
+            });
+
+            let paths = TlsCertPaths {
+                cert: cert_dir.join("holler.crt"),
+                key: cert_dir.join("holler.key"),
+            };
+
+            println!("🔐 Generating self-signed certificate for: {}", hostname);
+            println!("   SANs: {}, localhost, 127.0.0.1", hostname);
+
+            generate_self_signed(&hostname, &paths)
+                .context("Failed to generate certificate")?;
+
+            println!("✅ Certificate written to: {}", paths.cert.display());
+            println!("✅ Private key written to: {}", paths.key.display());
+            println!();
+            println!("To enable TLS, add to your config:");
+            println!();
+            println!("[gateway.tls]");
+            println!("enabled = true");
         }
     }
 

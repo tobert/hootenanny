@@ -84,6 +84,10 @@ pub struct BindConfig {
     /// Default: tcp://0.0.0.0:5581
     #[serde(default = "BindConfig::default_zmq_pub")]
     pub zmq_pub: String,
+
+    /// TLS configuration for HTTPS.
+    #[serde(default)]
+    pub tls: TlsConfig,
 }
 
 impl BindConfig {
@@ -116,6 +120,7 @@ impl Default for BindConfig {
             http_port: Self::default_http_port(),
             zmq_router: Self::default_zmq_router(),
             zmq_pub: Self::default_zmq_pub(),
+            tls: TlsConfig::default(),
         }
     }
 }
@@ -209,6 +214,53 @@ impl Default for TelemetryConfig {
     }
 }
 
+/// TLS configuration for HTTPS support.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsConfig {
+    /// Enable TLS. Default: false (opt-in)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Path to PEM certificate file.
+    /// Default: ~/.config/hootenanny/certs/holler.crt
+    pub cert_path: Option<PathBuf>,
+
+    /// Path to PEM private key file.
+    /// Default: ~/.config/hootenanny/certs/holler.key
+    pub key_path: Option<PathBuf>,
+}
+
+impl TlsConfig {
+    /// Get default certificate directory (~/.config/hootenanny/certs/)
+    pub fn default_cert_dir() -> Option<PathBuf> {
+        directories::BaseDirs::new().map(|dirs| dirs.config_dir().join("hootenanny/certs"))
+    }
+
+    /// Resolve cert path, using default if not specified.
+    pub fn resolved_cert_path(&self) -> Option<PathBuf> {
+        self.cert_path
+            .clone()
+            .or_else(|| Self::default_cert_dir().map(|d| d.join("holler.crt")))
+    }
+
+    /// Resolve key path, using default if not specified.
+    pub fn resolved_key_path(&self) -> Option<PathBuf> {
+        self.key_path
+            .clone()
+            .or_else(|| Self::default_cert_dir().map(|d| d.join("holler.key")))
+    }
+}
+
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cert_path: None,
+            key_path: None,
+        }
+    }
+}
+
 /// Gateway (holler) configuration.
 ///
 /// Settings for the MCP gateway that connects to hootenanny.
@@ -234,6 +286,10 @@ pub struct GatewayConfig {
     /// Default: 35000 (35s)
     #[serde(default = "GatewayConfig::default_timeout_ms")]
     pub timeout_ms: u64,
+
+    /// TLS configuration for HTTPS.
+    #[serde(default)]
+    pub tls: TlsConfig,
 }
 
 impl GatewayConfig {
@@ -261,6 +317,7 @@ impl Default for GatewayConfig {
             hootenanny: Self::default_hootenanny(),
             hootenanny_pub: Self::default_hootenanny_pub(),
             timeout_ms: Self::default_timeout_ms(),
+            tls: TlsConfig::default(),
         }
     }
 }

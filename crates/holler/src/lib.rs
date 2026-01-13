@@ -20,4 +20,5 @@ pub mod serve;
 pub mod stdio;
 pub mod subscriber;
 pub mod telemetry;
+pub mod tls;
 pub mod tools_registry;
