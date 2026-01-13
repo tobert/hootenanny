@@ -349,7 +349,7 @@ const UI_HTML: &str = r##"<!DOCTYPE html>
         workletNode.connect(audioCtx.destination);
       }
 
-      const wsUrl = `ws://${location.host}/stream/live`;
+      const wsUrl = `wss://${location.host}/stream/live`;
       ws = new WebSocket(wsUrl);
       ws.binaryType = 'arraybuffer';
       document.getElementById('streamStatus').textContent = 'Connecting...';
