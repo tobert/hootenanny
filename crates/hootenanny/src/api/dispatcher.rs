@@ -691,11 +691,24 @@ impl TypedDispatcher {
             | ToolRequest::RaveGenerate(_) => {
                 self.dispatch_rave(request).await
             }
-            ToolRequest::RaveStreamStart(_)
-            | ToolRequest::RaveStreamStop(_)
-            | ToolRequest::RaveStreamStatus(_) => {
-                // Streaming tools also go through RAVE service
-                self.dispatch_rave(request).await
+            // RAVE streaming - coordinated between Python RAVE and chaosgarden
+            ToolRequest::RaveStreamStart(req) => {
+                match self.server.rave_stream_start_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::RaveStreamStarted(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::RaveStreamStop(req) => {
+                match self.server.rave_stream_stop_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::RaveStreamStopped(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::RaveStreamStatus(req) => {
+                match self.server.rave_stream_status_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::RaveStreamStatus(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
             }
 
             // === AsyncLong tools (routed via dispatch_async_return_job_id) ===

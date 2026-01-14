@@ -3457,5 +3457,212 @@ impl EventDualityServer {
             creator,
         })
     }
+
+    // =========================================================================
+    // RAVE Streaming (coordinated between Python RAVE and chaosgarden)
+    // =========================================================================
+
+    /// Start RAVE streaming session.
+    ///
+    /// This coordinates between Python RAVE service (model loading) and
+    /// chaosgarden (audio I/O). The flow is:
+    /// 1. Python RAVE: load model, bind ZMQ PAIR socket
+    /// 2. chaosgarden: connect to socket, start audio routing
+    pub async fn rave_stream_start_typed(
+        &self,
+        request: hooteproto::request::RaveStreamStartRequest,
+    ) -> Result<hooteproto::responses::RaveStreamStartedResponse, ToolError> {
+        use hooteproto::garden::ShellRequest;
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
+        use hooteproto::Payload;
+
+        // Step 1: Tell Python RAVE to prepare (via ZMQ proxy)
+        let rave = self.rave.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "RAVE service not configured. Check rave_endpoint in config.",
+            )
+        })?;
+
+        let payload = Payload::ToolRequest(ToolRequest::RaveStreamStart(request.clone()));
+
+        let rave_response = rave
+            .request(payload)
+            .await
+            .map_err(|e| ToolError::internal(format!("RAVE service error: {}", e)))?;
+
+        // Extract response from Payload
+        let (stream_id, model, latency_ms) = match rave_response {
+            Payload::TypedResponse(envelope) => {
+                match envelope {
+                    hooteproto::ResponseEnvelope::Success { response } => {
+                        match response {
+                            ToolResponse::RaveStreamStarted(resp) => {
+                                (resp.stream_id, resp.model, resp.latency_ms)
+                            }
+                            _ => return Err(ToolError::internal("Unexpected response type from RAVE")),
+                        }
+                    }
+                    hooteproto::ResponseEnvelope::Error(tool_error) => {
+                        return Err(ToolError::internal(format!("RAVE error: {:?}", tool_error)));
+                    }
+                    _ => return Err(ToolError::internal("Unexpected envelope type from RAVE")),
+                }
+            }
+            Payload::Error { message, .. } => {
+                return Err(ToolError::internal(format!("RAVE error: {}", message)));
+            }
+            _ => return Err(ToolError::internal("Unexpected payload type from RAVE")),
+        };
+
+        // Step 2: Tell chaosgarden to connect and start audio routing
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Not connected to chaosgarden",
+            )
+        })?;
+
+        // Send shell request to chaosgarden
+        let shell_result = manager
+            .request(ShellRequest::RaveStreamStart {
+                model: request.model.clone(),
+                input_identity: request.input_identity.clone(),
+                output_identity: request.output_identity.clone(),
+                buffer_size: request.buffer_size,
+            })
+            .await;
+
+        match shell_result {
+            Ok(hooteproto::garden::ShellReply::RaveStreamStarted { .. }) => {
+                tracing::info!("RAVE streaming started: stream_id={}", stream_id);
+            }
+            Ok(hooteproto::garden::ShellReply::Error { error, .. }) => {
+                tracing::warn!("chaosgarden RAVE start warning: {}", error);
+                // Continue anyway - Python RAVE is ready
+            }
+            Err(e) => {
+                tracing::warn!("chaosgarden RAVE start failed: {}", e);
+                // Continue anyway - Python RAVE is ready
+            }
+            _ => {}
+        }
+
+        Ok(hooteproto::responses::RaveStreamStartedResponse {
+            stream_id,
+            model,
+            input_identity: request.input_identity,
+            output_identity: request.output_identity,
+            latency_ms,
+        })
+    }
+
+    /// Stop RAVE streaming session.
+    pub async fn rave_stream_stop_typed(
+        &self,
+        request: hooteproto::request::RaveStreamStopRequest,
+    ) -> Result<hooteproto::responses::RaveStreamStoppedResponse, ToolError> {
+        use hooteproto::garden::ShellRequest;
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
+        use hooteproto::Payload;
+
+        // Step 1: Stop chaosgarden audio routing
+        if let Some(manager) = self.garden_manager.as_ref() {
+            let _ = manager
+                .request(ShellRequest::RaveStreamStop {
+                    stream_id: request.stream_id.clone(),
+                })
+                .await;
+        }
+
+        // Step 2: Stop Python RAVE
+        let rave = self.rave.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "RAVE service not configured",
+            )
+        })?;
+
+        let payload = Payload::ToolRequest(ToolRequest::RaveStreamStop(request.clone()));
+
+        let rave_response = rave
+            .request(payload)
+            .await
+            .map_err(|e| ToolError::internal(format!("RAVE service error: {}", e)))?;
+
+        let duration_seconds = match rave_response {
+            Payload::TypedResponse(envelope) => {
+                match envelope {
+                    hooteproto::ResponseEnvelope::Success { response } => {
+                        match response {
+                            ToolResponse::RaveStreamStopped(resp) => resp.duration_seconds,
+                            _ => 0.0,
+                        }
+                    }
+                    _ => 0.0,
+                }
+            }
+            _ => 0.0,
+        };
+
+        tracing::info!(
+            "RAVE streaming stopped: stream_id={}, duration={:.1}s",
+            request.stream_id,
+            duration_seconds
+        );
+
+        Ok(hooteproto::responses::RaveStreamStoppedResponse {
+            stream_id: request.stream_id,
+            duration_seconds,
+        })
+    }
+
+    /// Get RAVE streaming session status.
+    pub async fn rave_stream_status_typed(
+        &self,
+        request: hooteproto::request::RaveStreamStatusRequest,
+    ) -> Result<hooteproto::responses::RaveStreamStatusResponse, ToolError> {
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
+        use hooteproto::Payload;
+
+        // Query Python RAVE for status (it's the source of truth)
+        let rave = self.rave.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "RAVE service not configured",
+            )
+        })?;
+
+        let payload = Payload::ToolRequest(ToolRequest::RaveStreamStatus(request.clone()));
+
+        let rave_response = rave
+            .request(payload)
+            .await
+            .map_err(|e| ToolError::internal(format!("RAVE service error: {}", e)))?;
+
+        match rave_response {
+            Payload::TypedResponse(envelope) => {
+                match envelope {
+                    hooteproto::ResponseEnvelope::Success { response } => {
+                        match response {
+                            ToolResponse::RaveStreamStatus(resp) => Ok(resp),
+                            _ => Err(ToolError::internal("Unexpected response type")),
+                        }
+                    }
+                    hooteproto::ResponseEnvelope::Error(tool_error) => {
+                        Err(ToolError::internal(format!("RAVE error: {:?}", tool_error)))
+                    }
+                    _ => Err(ToolError::internal("Unexpected envelope type")),
+                }
+            }
+            Payload::Error { message, .. } => {
+                Err(ToolError::internal(format!("RAVE error: {}", message)))
+            }
+            _ => Err(ToolError::internal("Unexpected payload type")),
+        }
+    }
 }
 

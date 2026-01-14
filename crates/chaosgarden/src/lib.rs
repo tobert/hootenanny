@@ -26,6 +26,7 @@ pub mod monitor_input;
 pub mod pipewire_output;
 pub mod pipewire_input;
 pub mod playback;
+pub mod rave_streaming;
 pub mod primitives;
 pub mod stream_io;
 pub mod tick_clock;
@@ -61,3 +62,7 @@ pub use pipewire_output::{MonitorMixState, PipeWireOutputConfig, PipeWireOutputE
 pub use pipewire_input::{PipeWireInputConfig, PipeWireInputError, PipeWireInputStream};
 pub use tick_clock::TickClock;
 pub use mixer::{MixerChannel, MixerConfig, MixerState};
+pub use rave_streaming::{
+    RaveStreamingClient, RaveStreamingConfig, RaveStreamingError, RaveStreamingSession,
+    RaveStreamingStats, DEFAULT_RAVE_STREAMING_ENDPOINT,
+};

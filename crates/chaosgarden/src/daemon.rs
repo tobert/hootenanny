@@ -22,6 +22,7 @@ use crate::mixer::{MixerChannel, MixerState};
 use crate::monitor_input::{MonitorInputConfig, MonitorInputStream};
 use crate::nodes::ContentResolver;
 use crate::pipewire_output::{MonitorMixState, PipeWireOutputConfig, PipeWireOutputStream};
+use crate::rave_streaming::RaveStreamingClient;
 use crate::playback::{CompiledGraph, PlaybackEngine};
 use crate::primitives::{Behavior, ContentType};
 use crate::stream_io::{
@@ -127,6 +128,15 @@ pub struct GardenDaemon {
 
     // Monotonic version counter for snapshot invalidation
     snapshot_version: std::sync::atomic::AtomicU64,
+
+    // RAVE streaming client for realtime neural audio processing
+    rave_streaming: Mutex<RaveStreamingClient>,
+    // RAVE audio ring buffers (created when streaming starts, consumed by RT callback)
+    // Arc-wrapped so they can be passed to the PipeWire thread
+    // Producer: write monitor audio to RAVE input
+    rave_input_producer: Arc<Mutex<Option<AudioRingProducer>>>,
+    // Consumer: read RAVE-processed audio for mixing
+    rave_output_consumer: Arc<Mutex<Option<AudioRingConsumer>>>,
 }
 
 impl GardenDaemon {
@@ -195,6 +205,9 @@ impl GardenDaemon {
             streaming_tap_producer: Mutex::new(Some(streaming_tap_producer)),
             streaming_tap_sample_rate,
             snapshot_version: std::sync::atomic::AtomicU64::new(0),
+            rave_streaming: Mutex::new(RaveStreamingClient::new()),
+            rave_input_producer: Arc::new(Mutex::new(None::<AudioRingProducer>)),
+            rave_output_consumer: Arc::new(Mutex::new(None::<AudioRingConsumer>)),
         }
     }
 
@@ -668,7 +681,14 @@ impl GardenDaemon {
             };
 
             info!("Creating output stream with RT monitor mixing (lock-free)");
-            PipeWireOutputStream::new_with_monitor(config, monitor_state, streaming_tap, Some(timeline_consumer))
+            PipeWireOutputStream::new_with_monitor(
+                config,
+                monitor_state,
+                streaming_tap,
+                Some(timeline_consumer),
+                Some(Arc::clone(&self.rave_input_producer)),
+                Some(Arc::clone(&self.rave_output_consumer)),
+            )
                 .map_err(|e| format!("Failed to create PipeWire output with monitor: {}", e))?
         } else {
             PipeWireOutputStream::new_with_streaming_tap(config, streaming_tap, Some(timeline_consumer))
@@ -874,6 +894,153 @@ impl GardenDaemon {
             channels: 2,
             format: 0, // 0 = f32le
             samples,
+        }
+    }
+
+    // === RAVE Streaming Methods ===
+
+    /// Start a RAVE streaming session
+    ///
+    /// This creates a pipeline: monitor input -> RAVE -> output mixer
+    fn start_rave_streaming(
+        &self,
+        model: Option<String>,
+        input_identity: String,
+        output_identity: String,
+        buffer_size: Option<u32>,
+    ) -> ShellReply {
+        let mut rave = self.rave_streaming.lock().unwrap();
+
+        if rave.is_running() {
+            return ShellReply::Error {
+                error: "RAVE streaming already running".to_string(),
+                traceback: None,
+            };
+        }
+
+        // Generate stream ID
+        let stream_id = format!("rave_{}", uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("unknown"));
+        let model_name = model.clone().unwrap_or_else(|| "vintage".to_string());
+        let buffer_frames = buffer_size.unwrap_or(2048) as usize;
+
+        // Start the streaming session
+        match rave.start(
+            stream_id.clone(),
+            model_name.clone(),
+            input_identity.clone(),
+            output_identity.clone(),
+        ) {
+            Ok((input_producer, output_consumer)) => {
+                // Store the ring buffers for the RT callback to use
+                *self.rave_input_producer.lock().unwrap() = Some(input_producer);
+                *self.rave_output_consumer.lock().unwrap() = Some(output_consumer);
+
+                let latency_ms = (buffer_frames as u32 * 1000) / self.streaming_tap_sample_rate;
+
+                info!(
+                    "RAVE streaming started: stream_id={}, model={}, latency={}ms",
+                    stream_id, model_name, latency_ms
+                );
+
+                ShellReply::RaveStreamStarted {
+                    stream_id,
+                    model: model_name,
+                    input_identity,
+                    output_identity,
+                    latency_ms,
+                }
+            }
+            Err(e) => ShellReply::Error {
+                error: format!("Failed to start RAVE streaming: {}", e),
+                traceback: None,
+            },
+        }
+    }
+
+    /// Stop a RAVE streaming session
+    fn stop_rave_streaming(&self, stream_id: String) -> ShellReply {
+        let mut rave = self.rave_streaming.lock().unwrap();
+
+        if !rave.is_running() {
+            return ShellReply::Error {
+                error: "RAVE streaming not running".to_string(),
+                traceback: None,
+            };
+        }
+
+        // Verify stream ID matches
+        if let Some(session) = rave.session() {
+            if session.stream_id != stream_id {
+                return ShellReply::Error {
+                    error: format!("Stream ID mismatch: expected {}", session.stream_id),
+                    traceback: None,
+                };
+            }
+        }
+
+        match rave.stop() {
+            Ok(session) => {
+                // Clear the ring buffers (RT callback will stop using them)
+                *self.rave_input_producer.lock().unwrap() = None;
+                *self.rave_output_consumer.lock().unwrap() = None;
+
+                let duration = session
+                    .started_at
+                    .elapsed()
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0);
+
+                info!(
+                    "RAVE streaming stopped: stream_id={}, duration={:.1}s",
+                    stream_id, duration
+                );
+
+                ShellReply::RaveStreamStopped {
+                    stream_id,
+                    duration_seconds: duration,
+                }
+            }
+            Err(e) => ShellReply::Error {
+                error: format!("Failed to stop RAVE streaming: {}", e),
+                traceback: None,
+            },
+        }
+    }
+
+    /// Get RAVE streaming session status
+    fn get_rave_streaming_status(&self, stream_id: String) -> ShellReply {
+        let rave = self.rave_streaming.lock().unwrap();
+
+        match rave.session() {
+            Some(session) if session.stream_id == stream_id => {
+                let stats = rave.stats();
+                let frames_processed = stats.samples_processed.load(Ordering::Relaxed);
+                let buffer_frames = 2048u32; // Default, should track actual
+                let latency_ms = (buffer_frames * 1000) / self.streaming_tap_sample_rate;
+
+                ShellReply::RaveStreamStatus {
+                    stream_id,
+                    running: session.running,
+                    model: session.model_name.clone(),
+                    input_identity: session.input_identity.clone(),
+                    output_identity: session.output_identity.clone(),
+                    frames_processed,
+                    latency_ms,
+                }
+            }
+            Some(session) => ShellReply::Error {
+                error: format!("Stream ID mismatch: expected {}", session.stream_id),
+                traceback: None,
+            },
+            None => ShellReply::RaveStreamStatus {
+                stream_id,
+                running: false,
+                model: String::new(),
+                input_identity: String::new(),
+                output_identity: String::new(),
+                frames_processed: 0,
+                latency_ms: 0,
+            },
         }
     }
 
@@ -1410,6 +1577,17 @@ impl GardenDaemon {
 
             // Audio streaming snapshot
             ShellRequest::GetAudioSnapshot { frames } => self.get_audio_snapshot(frames),
+
+            // RAVE streaming
+            ShellRequest::RaveStreamStart { model, input_identity, output_identity, buffer_size } => {
+                self.start_rave_streaming(model, input_identity, output_identity, buffer_size)
+            }
+            ShellRequest::RaveStreamStop { stream_id } => {
+                self.stop_rave_streaming(stream_id)
+            }
+            ShellRequest::RaveStreamStatus { stream_id } => {
+                self.get_rave_streaming_status(stream_id)
+            }
 
             // Unhandled requests
             _ => ShellReply::Error {

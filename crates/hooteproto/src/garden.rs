@@ -440,6 +440,27 @@ pub enum ShellRequest {
         /// Number of stereo frames to capture (e.g., 512 = ~10.7ms at 48kHz)
         frames: u32,
     },
+
+    // RAVE streaming (realtime neural audio processing)
+    /// Start RAVE streaming session (monitor input -> RAVE -> output)
+    RaveStreamStart {
+        /// Model name (e.g., "vintage", "percussion")
+        model: Option<String>,
+        /// Input identity (graph node reference)
+        input_identity: String,
+        /// Output identity (graph node reference)
+        output_identity: String,
+        /// Buffer size in frames (default 2048)
+        buffer_size: Option<u32>,
+    },
+    /// Stop RAVE streaming session
+    RaveStreamStop {
+        stream_id: String,
+    },
+    /// Get RAVE streaming session status
+    RaveStreamStatus {
+        stream_id: String,
+    },
 }
 
 /// Stream format definition for audio/MIDI capture
@@ -557,6 +578,33 @@ pub enum ShellReply {
         format: u16,
         /// Interleaved PCM samples [L, R, L, R, ...]
         samples: Vec<f32>,
+    },
+    /// RAVE streaming session started
+    RaveStreamStarted {
+        stream_id: String,
+        model: String,
+        input_identity: String,
+        output_identity: String,
+        /// Expected latency in milliseconds
+        latency_ms: u32,
+    },
+    /// RAVE streaming session stopped
+    RaveStreamStopped {
+        stream_id: String,
+        /// Duration of the session in seconds
+        duration_seconds: f64,
+    },
+    /// RAVE streaming session status
+    RaveStreamStatus {
+        stream_id: String,
+        running: bool,
+        model: String,
+        input_identity: String,
+        output_identity: String,
+        /// Frames processed since session start
+        frames_processed: u64,
+        /// Expected latency in milliseconds
+        latency_ms: u32,
     },
 }
 

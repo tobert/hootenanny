@@ -126,7 +126,7 @@ impl PipeWireOutputStream {
         streaming_tap: Option<AudioRingProducer>,
         timeline_consumer: Option<AudioRingConsumer>,
     ) -> Result<Self, PipeWireOutputError> {
-        Self::new_internal(config, None, streaming_tap, timeline_consumer)
+        Self::new_internal(config, None, streaming_tap, timeline_consumer, None, None)
     }
 
     /// Create and start a new PipeWire output stream with monitor mixing
@@ -142,8 +142,10 @@ impl PipeWireOutputStream {
         monitor: MonitorMixState,
         streaming_tap: Option<AudioRingProducer>,
         timeline_consumer: Option<AudioRingConsumer>,
+        rave_input: Option<Arc<Mutex<Option<AudioRingProducer>>>>,
+        rave_output: Option<Arc<Mutex<Option<AudioRingConsumer>>>>,
     ) -> Result<Self, PipeWireOutputError> {
-        Self::new_internal(config, Some(monitor), streaming_tap, timeline_consumer)
+        Self::new_internal(config, Some(monitor), streaming_tap, timeline_consumer, rave_input, rave_output)
     }
 
     /// Internal constructor that handles all variants
@@ -152,6 +154,8 @@ impl PipeWireOutputStream {
         monitor: Option<MonitorMixState>,
         streaming_tap: Option<AudioRingProducer>,
         timeline_consumer: Option<AudioRingConsumer>,
+        rave_input: Option<Arc<Mutex<Option<AudioRingProducer>>>>,
+        rave_output: Option<Arc<Mutex<Option<AudioRingConsumer>>>>,
     ) -> Result<Self, PipeWireOutputError> {
         use pipewire as pw;
 
@@ -188,6 +192,8 @@ impl PipeWireOutputStream {
                     monitor,
                     streaming_tap,
                     timeline_consumer,
+                    rave_input,
+                    rave_output,
                 ) {
                     error!("PipeWire output thread failed: {}", e);
                 }
@@ -277,6 +283,8 @@ impl PipeWireOutputStream {
                     None, // No monitor mixing - use new_with_monitor for that
                     None, // No streaming tap - use new_with_streaming_tap for that
                     None, // No timeline consumer - use new_with_streaming_tap for that
+                    None, // No RAVE input
+                    None, // No RAVE output
                 ) {
                     error!("PipeWire output thread failed: {}", e);
                 }
@@ -345,6 +353,8 @@ fn run_pipewire_loop(
     monitor: Option<MonitorMixState>,
     streaming_tap: Option<AudioRingProducer>,
     timeline_consumer: Option<AudioRingConsumer>,
+    rave_input: Option<Arc<Mutex<Option<AudioRingProducer>>>>,
+    rave_output: Option<Arc<Mutex<Option<AudioRingConsumer>>>>,
 ) -> Result<(), PipeWireOutputError> {
     use pipewire as pw;
     use pw::spa::pod::Pod;
@@ -398,6 +408,7 @@ fn run_pipewire_loop(
     // Register process callback - runs in PipeWire's RT thread
     // This is the RT mixer: reads from monitor input (if enabled) and timeline (lock-free!)
     // Final mixed output is also written to streaming_tap for WebSocket streaming
+    // RAVE rings are optional Arc<Mutex<Option<...>>> - RT thread try_locks them
     let _listener = stream
         .add_local_listener_with_user_data((
             stats.clone(),
@@ -406,8 +417,10 @@ fn run_pipewire_loop(
             timeline_consumer,
             output_buffer,
             temp_buffer,
+            rave_input,
+            rave_output,
         ))
-        .process(move |stream, (stats, monitor, streaming_tap, timeline_consumer, ref mut output_buffer, ref mut temp_buffer)| {
+        .process(move |stream, (stats, monitor, streaming_tap, timeline_consumer, ref mut output_buffer, ref mut temp_buffer, rave_input, rave_output)| {
             let count = stats.callbacks.fetch_add(1, Ordering::Relaxed);
             // Debug: log first callback
             if count == 0 {
@@ -458,6 +471,17 @@ fn run_pipewire_loop(
                             output_slice[i] += temp_slice[i] * gain;
                         }
                         has_audio = true;
+
+                        // === RAVE Input: Fork monitor audio to RAVE ===
+                        // Try to get the RAVE input producer (non-blocking)
+                        if let Some(ref rave_in) = rave_input {
+                            if let Ok(mut guard) = rave_in.try_lock() {
+                                if let Some(ref mut producer) = *guard {
+                                    // Write the same monitor audio to RAVE
+                                    producer.write(&temp_slice[..read]);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -474,6 +498,24 @@ fn run_pipewire_loop(
                     output_slice[i] += temp_slice[i];
                 }
                 has_audio = true;
+            }
+
+            // === RAVE Output: Mix RAVE-processed audio ===
+            // Try to get the RAVE output consumer (non-blocking)
+            if let Some(ref rave_out) = rave_output {
+                if let Ok(mut guard) = rave_out.try_lock() {
+                    if let Some(ref mut consumer) = *guard {
+                        // Read RAVE-processed audio
+                        let rave_read = consumer.read(temp_slice);
+                        if rave_read > 0 {
+                            // Mix RAVE output with existing audio
+                            for i in 0..rave_read {
+                                output_slice[i] += temp_slice[i];
+                            }
+                            has_audio = true;
+                        }
+                    }
+                }
             }
 
             // Count underrun only if no audio from any source AND we've warmed up
