@@ -76,6 +76,7 @@ pub enum ToolResponse {
     GardenInputStatus(GardenInputStatusResponse),
     GardenMonitorStatus(GardenMonitorStatusResponse),
     GardenAudioSnapshot(GardenAudioSnapshotResponse),
+    AudioCaptured(AudioCapturedResponse),
 
     // === Graph ===
     GraphIdentity(GraphIdentityResponse),
@@ -678,6 +679,15 @@ pub struct GardenAudioSnapshotResponse {
     pub channels: u16,
     pub format: u16,
     pub samples: Vec<f32>,
+}
+
+/// Response from audio_capture tool
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioCapturedResponse {
+    pub artifact_id: String,
+    pub content_hash: String,
+    pub sample_rate: u32,
+    pub duration_seconds: f32,
 }
 
 // =============================================================================

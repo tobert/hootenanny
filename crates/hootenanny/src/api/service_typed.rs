@@ -701,9 +701,33 @@ impl EventDualityServer {
         let config = HootConfig::load()
             .map_err(|e| ToolError::internal(format!("Failed to load config: {}", e)))?;
 
+        // Discover RAVE models for "models" section
+        // Models live in ~/.hootenanny/models/rave/ (sibling to cas_dir)
+        let hootenanny_dir = config.infra.paths.cas_dir.parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| config.infra.paths.cas_dir.clone());
+
+        let discover_rave_models = || -> Vec<String> {
+            let rave_dir = hootenanny_dir.join("models").join("rave");
+            if rave_dir.exists() {
+                std::fs::read_dir(&rave_dir)
+                    .map(|entries| {
+                        entries
+                            .filter_map(|e| e.ok())
+                            .filter(|e| e.path().extension().map(|ext| ext == "ts").unwrap_or(false))
+                            .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            }
+        };
+
         let value = match (section, key) {
             (None, None) => {
                 // Return full config as nested object
+                let rave_models = discover_rave_models();
                 ConfigValue::Object(std::collections::HashMap::from([
                     (
                         "paths".to_string(),
@@ -727,6 +751,13 @@ impl EventDualityServer {
                         ConfigValue::Object(std::collections::HashMap::from([(
                             "http_port".to_string(),
                             ConfigValue::Integer(config.infra.bind.http_port as i64),
+                        )])),
+                    ),
+                    (
+                        "models".to_string(),
+                        ConfigValue::Object(std::collections::HashMap::from([(
+                            "rave".to_string(),
+                            ConfigValue::Array(rave_models.into_iter().map(ConfigValue::String).collect()),
                         )])),
                     ),
                 ]))
@@ -758,6 +789,17 @@ impl EventDualityServer {
             }
             (Some("bind"), Some("http_port")) => {
                 ConfigValue::Integer(config.infra.bind.http_port as i64)
+            }
+            (Some("models"), None) => {
+                let rave_models = discover_rave_models();
+                ConfigValue::Object(std::collections::HashMap::from([(
+                    "rave".to_string(),
+                    ConfigValue::Array(rave_models.into_iter().map(ConfigValue::String).collect()),
+                )]))
+            }
+            (Some("models"), Some("rave")) => {
+                let rave_models = discover_rave_models();
+                ConfigValue::Array(rave_models.into_iter().map(ConfigValue::String).collect())
             }
             _ => {
                 return Err(ToolError::validation(
@@ -3263,6 +3305,102 @@ impl EventDualityServer {
             Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
             Err(e) => Err(ToolError::internal(format!("Get audio snapshot failed: {}", e))),
         }
+    }
+
+    /// Capture audio from monitor input and store to CAS.
+    pub async fn audio_capture_typed(
+        &self,
+        request: hooteproto::request::AudioCaptureRequest,
+    ) -> Result<hooteproto::responses::AudioCapturedResponse, ToolError> {
+        use std::io::Cursor;
+
+        let sample_rate = 48000u32;
+        let channels = 2u16;
+        let total_samples_needed = (request.duration_seconds * sample_rate as f32) as usize * channels as usize;
+        let chunk_frames = 4096u32; // Fetch ~85ms chunks
+
+        let mut accumulated_samples: Vec<f32> = Vec::with_capacity(total_samples_needed);
+
+        // Accumulate samples from streaming tap
+        while accumulated_samples.len() < total_samples_needed {
+            let snapshot_request = hooteproto::request::GardenGetAudioSnapshotRequest {
+                frames: chunk_frames,
+            };
+
+            let snapshot = self.garden_get_audio_snapshot_typed(snapshot_request).await?;
+            accumulated_samples.extend(&snapshot.samples);
+
+            // Small delay to let buffer refill
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+
+        // Truncate to exact duration
+        accumulated_samples.truncate(total_samples_needed);
+        let actual_duration = accumulated_samples.len() as f32 / (sample_rate as f32 * channels as f32);
+
+        // Encode to WAV
+        let spec = hound::WavSpec {
+            channels,
+            sample_rate,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let mut writer = hound::WavWriter::new(&mut cursor, spec)
+                .map_err(|e| ToolError::internal(format!("Failed to create WAV writer: {}", e)))?;
+            for sample in &accumulated_samples {
+                writer.write_sample(*sample)
+                    .map_err(|e| ToolError::internal(format!("Failed to write sample: {}", e)))?;
+            }
+            writer.finalize()
+                .map_err(|e| ToolError::internal(format!("Failed to finalize WAV: {}", e)))?;
+        }
+        let wav_bytes = cursor.into_inner();
+
+        // Store to CAS
+        let cas_result = self.cas_store_typed(&wav_bytes, "audio/wav").await?;
+
+        // Create artifact
+        use crate::artifact_store::{Artifact, ArtifactStore};
+        use crate::types::{ArtifactId, ContentHash};
+
+        let content_hash = ContentHash::new(&cas_result.hash);
+        let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+
+        let mut tags = request.tags.clone();
+        tags.push("type:audio".to_string());
+        tags.push("source:capture".to_string());
+
+        let artifact = Artifact::new(
+            artifact_id.clone(),
+            content_hash,
+            request.creator.clone().unwrap_or_else(|| "unknown".to_string()),
+            serde_json::json!({
+                "duration_seconds": actual_duration,
+                "sample_rate": sample_rate,
+                "channels": channels,
+                "mime_type": "audio/wav"
+            }),
+        )
+        .with_tags(tags);
+
+        {
+            let store = self.artifact_store.write().map_err(|e| {
+                ToolError::internal(format!("Failed to lock artifact store: {}", e))
+            })?;
+            store.put(artifact).map_err(|e| {
+                ToolError::internal(format!("Failed to store artifact: {}", e))
+            })?;
+        }
+
+        Ok(hooteproto::responses::AudioCapturedResponse {
+            artifact_id: artifact_id.as_str().to_string(),
+            content_hash: cas_result.hash,
+            duration_seconds: actual_duration,
+            sample_rate,
+        })
     }
 
     // =========================================================================

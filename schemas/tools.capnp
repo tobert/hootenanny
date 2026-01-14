@@ -110,6 +110,7 @@ struct ToolRequest {
     gardenInputStatus @67 :Void;
     gardenSetMonitor @68 :Garden.SetMonitor;
     gardenGetAudioSnapshot @80 :Garden.GetAudioSnapshot;
+    audioCapture @81 :AudioCapture;
     gardenClearRegions @69 :Void;
 
     # === Help ===
@@ -462,4 +463,11 @@ struct RaveStreamStop {
 
 struct RaveStreamStatus {
   streamId @0 :Text;
+}
+
+# === Audio Capture ===
+struct AudioCapture {
+  durationSeconds @0 :Float32;
+  source @1 :Text;  # "monitor", "timeline", "mix"
+  metadata @2 :Common.ArtifactMetadata;
 }

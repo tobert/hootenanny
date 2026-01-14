@@ -80,6 +80,7 @@ struct ToolResponse {
     gardenInputStatus @40 :GardenInputStatusResponse;
     gardenMonitorStatus @41 :GardenMonitorStatusResponse;
     gardenAudioSnapshot @62 :GardenAudioSnapshotResponse;
+    audioCaptured @63 :AudioCapturedResponse;
 
     # Tool Help
     toolHelp @42 :ToolHelpResponse;
@@ -497,6 +498,13 @@ struct GardenAudioSnapshotResponse {
   channels @1 :UInt16;
   format @2 :UInt16;
   samples @3 :List(Float32);
+}
+
+struct AudioCapturedResponse {
+  artifactId @0 :Text;
+  contentHash @1 :Text;
+  sampleRate @2 :UInt32;
+  durationSeconds @3 :Float32;
 }
 
 # =============================================================================

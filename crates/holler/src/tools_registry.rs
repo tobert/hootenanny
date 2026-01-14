@@ -278,6 +278,32 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Input status".to_string(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
         },
+        ToolInfo {
+            name: "audio_capture".to_string(),
+            description: "Capture audio from monitor input to CAS".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "duration_seconds": {
+                        "type": "number",
+                        "description": "Duration to capture in seconds (default: 5.0)"
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Source to capture from: 'monitor' (default), 'timeline', 'mix'"
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Tags for the resulting artifact"
+                    },
+                    "creator": {
+                        "type": "string",
+                        "description": "Creator identifier"
+                    }
+                }
+            }),
+        },
 
         // ==========================================================================
         // Timeline Tools

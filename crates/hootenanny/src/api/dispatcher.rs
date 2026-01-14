@@ -614,6 +614,13 @@ impl TypedDispatcher {
                 }
             }
 
+            ToolRequest::AudioCapture(req) => {
+                match self.server.audio_capture_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::AudioCaptured(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+
             // === Tool Help ===
             ToolRequest::GetToolHelp(req) => {
                 match self.server.get_tool_help_typed(req.topic.as_deref()).await {

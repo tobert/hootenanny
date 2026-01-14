@@ -131,6 +131,8 @@ pub enum ToolRequest {
     GardenSetMonitor(GardenSetMonitorRequest),
     /// Get audio snapshot from streaming tap
     GardenGetAudioSnapshot(GardenGetAudioSnapshotRequest),
+    /// Capture audio from monitor input to CAS
+    AudioCapture(AudioCaptureRequest),
     /// Clear all regions
     GardenClearRegions,
 
@@ -261,6 +263,7 @@ impl ToolRequest {
             Self::GardenAttachAudio(_) | Self::GardenDetachAudio | Self::GardenAudioStatus => ToolTiming::AsyncShort,
             Self::GardenAttachInput(_) | Self::GardenDetachInput | Self::GardenInputStatus => ToolTiming::AsyncShort,
             Self::GardenSetMonitor(_) | Self::GardenGetAudioSnapshot(_) => ToolTiming::AsyncShort,
+            Self::AudioCapture(_) => ToolTiming::AsyncShort,
             Self::GetToolHelp(_) => ToolTiming::AsyncShort,
 
             // AsyncMedium - GPU inference, ~120s
@@ -380,6 +383,7 @@ impl ToolRequest {
             Self::RaveStreamStart(_) => "rave_stream_start",
             Self::RaveStreamStop(_) => "rave_stream_stop",
             Self::RaveStreamStatus(_) => "rave_stream_status",
+            Self::AudioCapture(_) => "audio_capture",
         }
     }
 }
@@ -915,6 +919,20 @@ pub struct GardenSetMonitorRequest {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct GardenGetAudioSnapshotRequest {
     pub frames: u32,
+}
+
+/// Capture audio from monitor input and save to CAS
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct AudioCaptureRequest {
+    /// Duration to capture in seconds
+    pub duration_seconds: f32,
+    /// Source to capture from: "monitor" (default), "timeline", "mix"
+    pub source: Option<String>,
+    /// Tags for the resulting artifact
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Creator identifier
+    pub creator: Option<String>,
 }
 
 // =============================================================================

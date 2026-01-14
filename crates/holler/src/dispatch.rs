@@ -169,6 +169,15 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 gain: p.gain,
             })))
         }
+        "audio_capture" => {
+            let p: AudioCaptureArgs = serde_json::from_value(args).context("Invalid audio_capture arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::AudioCapture(request::AudioCaptureRequest {
+                duration_seconds: p.duration_seconds.unwrap_or(5.0),
+                source: p.source,
+                tags: p.tags.unwrap_or_default(),
+                creator: p.creator,
+            })))
+        }
 
         // === Job Tools ===
         "job_list" => {
@@ -620,6 +629,14 @@ struct GardenAttachAudioArgs {
 struct GardenAttachInputArgs {
     device_name: Option<String>,
     sample_rate: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AudioCaptureArgs {
+    duration_seconds: Option<f32>,
+    source: Option<String>,
+    tags: Option<Vec<String>>,
+    creator: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

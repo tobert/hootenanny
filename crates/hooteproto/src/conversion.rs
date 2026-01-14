@@ -647,6 +647,12 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             let mut s = builder.reborrow().init_garden_get_audio_snapshot();
             s.set_frames(req.frames);
         }
+        ToolRequest::AudioCapture(req) => {
+            let mut c = builder.reborrow().init_audio_capture();
+            c.set_duration_seconds(req.duration_seconds);
+            c.set_source(req.source.as_deref().unwrap_or("monitor"));
+            set_artifact_metadata(&mut c.init_metadata(), &None, &None, &req.tags, &req.creator);
+        }
         ToolRequest::GardenClearRegions => builder.reborrow().set_garden_clear_regions(()),
         ToolRequest::GetToolHelp(req) => builder.reborrow().init_get_tool_help().set_topic(req.topic.as_deref().unwrap_or("")),
 
@@ -1070,6 +1076,16 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
             let s = s?;
             Ok(ToolRequest::GardenGetAudioSnapshot(GardenGetAudioSnapshotRequest {
                 frames: s.get_frames(),
+            }))
+        }
+        tools_capnp::tool_request::AudioCapture(s) => {
+            let s = s?;
+            let metadata = s.get_metadata()?;
+            Ok(ToolRequest::AudioCapture(AudioCaptureRequest {
+                duration_seconds: s.get_duration_seconds(),
+                source: capnp_optional_string(s.get_source()?),
+                tags: capnp_string_list(metadata.get_tags()?),
+                creator: capnp_optional_string(metadata.get_creator()?),
             }))
         }
         tools_capnp::tool_request::GardenClearRegions(()) => Ok(ToolRequest::GardenClearRegions),
@@ -1823,6 +1839,13 @@ fn response_to_capnp_tool_response(
             for (i, &sample) in r.samples.iter().enumerate() {
                 samples.set(i as u32, sample);
             }
+        }
+        ToolResponse::AudioCaptured(r) => {
+            let mut b = builder.reborrow().init_audio_captured();
+            b.set_artifact_id(&r.artifact_id);
+            b.set_content_hash(&r.content_hash);
+            b.set_sample_rate(r.sample_rate);
+            b.set_duration_seconds(r.duration_seconds);
         }
 
         // Graph
@@ -2601,6 +2624,15 @@ fn capnp_tool_response_to_response(
                 channels: r.get_channels(),
                 format: r.get_format(),
                 samples,
+            }))
+        }
+        Which::AudioCaptured(r) => {
+            let r = r?;
+            Ok(ToolResponse::AudioCaptured(AudioCapturedResponse {
+                artifact_id: r.get_artifact_id()?.to_str()?.to_string(),
+                content_hash: r.get_content_hash()?.to_str()?.to_string(),
+                sample_rate: r.get_sample_rate(),
+                duration_seconds: r.get_duration_seconds(),
             }))
         }
 
