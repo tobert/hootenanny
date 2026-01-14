@@ -1,0 +1,6 @@
+# Cargo configuration for hootenanny workspace
+
+[env]
+# Python 3.14 is newer than PyO3's max supported version (3.13)
+# This enables forward compatibility via stable ABI
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY = "1"
