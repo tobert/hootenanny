@@ -2,22 +2,7 @@
 
 ## Actionable
 
-### 1. Fix Artifact URL Augmentation
-**File:** `crates/holler/src/handler.rs:261-289`
-**Effort:** Small
-
-The `augment_artifact_urls()` function only looks for `artifact_id` field, but `artifact_get`
-returns `id`. Fix the augmentation to also check `id` field.
-
-```rust
-// Current (line 265):
-if let Some(serde_json::Value::String(id)) = map.get("artifact_id") {
-
-// Should also check:
-} else if let Some(serde_json::Value::String(id)) = map.get("id") {
-```
-
-### 2. Audio Capture Tool
+### 1. Audio Capture Tool
 **Files:** `crates/hootenanny/src/api/typed_dispatcher.rs`, `crates/hooteproto/`
 **Effort:** Medium
 
@@ -40,29 +25,22 @@ Add `audio_capture` tool to record from monitor input to CAS for offline process
 - Encode to WAV, store in CAS
 - Create artifact
 
-### 3. Pre-allocate RT Buffers
-**File:** `crates/chaosgarden/src/pipewire_output.rs:421-422`
-**Effort:** Small
+---
 
-Move buffer allocation outside the RT callback. Currently allocates on every callback:
-```rust
-let mut output_buffer = vec![0.0f32; samples_needed];
-let mut temp_buffer = vec![0.0f32; samples_needed];
-```
+## Completed Work
 
-**Fix:** Store pre-allocated buffers in the listener user data, sized for max expected frames.
+### Artifact URL Augmentation
+**Completed**: 2026-01-14
+`augment_artifact_urls()` now checks both `artifact_id` and `id` fields.
 
-### 4. Lock-free Timeline Ring
-**File:** `crates/chaosgarden/src/pipewire_output.rs:445-448`, `daemon.rs`
-**Effort:** Medium
+### Pre-allocated RT Buffers
+**Completed**: 2026-01-14
+Moved buffer allocation outside RT callback. Buffers sized for 8192 frames max.
 
-Replace `Arc<Mutex<RingBuffer>>` for timeline with `AudioRingProducer`/`AudioRingConsumer`
-(same pattern monitor input already uses successfully).
-
-**Changes needed:**
-- `daemon.rs`: Create SPSC pair, keep producer for `process_playback()` writes
-- `pipewire_output.rs`: Take consumer, use lock-free `consumer.read()` instead of `try_lock()`
-- Remove `timeline_ring: RwLock<Option<Arc<Mutex<RingBuffer>>>>` field
+### Lock-free Timeline Ring
+**Completed**: 2026-01-14
+Replaced `Arc<Mutex<RingBuffer>>` with `AudioRingProducer`/`AudioRingConsumer` SPSC pair.
+Timeline audio now uses the same lock-free pattern as monitor input.
 
 ---
 
@@ -87,16 +65,3 @@ broadcasts `BeatTick` events. No local clock in vibeweaver.
 - Transport events (play/stop/seek) bypass normal sync for immediacy
 
 For now, broadcast-driven callbacks are good enough for generative scheduling.
-
-### Audio Output Underruns (chaosgarden)
-**Status**: Analyzed 2026-01-14 → See Actionable #3, #4
-
-Root causes identified: RT allocations and Mutex contention on timeline ring.
-Monitor input (lock-free SPSC) has 97% success rate; timeline (Mutex) causes underruns.
-
----
-
-### Artifact URL Accessibility
-**Status**: Observed 2026-01-14 → See Actionable #1
-
-The `augment_artifact_urls()` only checks `artifact_id`, not `id` field.
