@@ -267,6 +267,14 @@ fn augment_artifact_urls(value: &mut serde_json::Value, base_url: &str) {
                 map.insert("artifact_url".to_string(), serde_json::Value::String(url));
             }
 
+            // Check for id field (artifact_get returns "id" not "artifact_id")
+            if let Some(serde_json::Value::String(id)) = map.get("id") {
+                if id.starts_with("artifact_") {
+                    let url = format!("{}/artifact/{}", base_url, id);
+                    map.insert("url".to_string(), serde_json::Value::String(url));
+                }
+            }
+
             // Check for artifact_ids array and add artifact_urls array
             if let Some(serde_json::Value::Array(ids)) = map.get("artifact_ids") {
                 let urls: Vec<serde_json::Value> = ids
