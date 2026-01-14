@@ -2,6 +2,7 @@
 RAVE service implementation
 
 Provides HOOT01-native audio encoding/decoding using RAVE models.
+Supports both batch processing (via tool calls) and realtime streaming.
 """
 
 import asyncio
@@ -9,12 +10,17 @@ import io
 import logging
 import os
 import struct
+import time
+import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 import torchaudio
+import zmq
+import zmq.asyncio
 
 from hootpy import ModelService, ServiceConfig, NotFoundError, ValidationError, cas
 
@@ -29,19 +35,43 @@ MODELS_DIR = Path(os.environ.get(
 # RAVE operates at 48kHz
 RAVE_SAMPLE_RATE = 48000
 
+# Default streaming endpoint
+DEFAULT_STREAMING_ENDPOINT = "tcp://127.0.0.1:5592"
+
+
+@dataclass
+class StreamingSession:
+    """State for an active audio streaming session."""
+    stream_id: str
+    model_name: str
+    input_identity: str
+    output_identity: str
+    buffer_size: int = 2048
+    started_at: float = field(default_factory=time.time)
+    frames_processed: int = 0
+    running: bool = True
+
 
 class RaveService(ModelService):
     """
     RAVE audio encoder/decoder service.
 
-    Tools:
+    Tools (batch):
     - rave_encode: Audio waveform → latent codes
     - rave_decode: Latent codes → audio waveform
     - rave_reconstruct: Encode then decode (round-trip)
     - rave_generate: Sample from prior → audio
+
+    Tools (streaming):
+    - rave_stream_start: Start realtime audio streaming
+    - rave_stream_stop: Stop a streaming session
+    - rave_stream_status: Get streaming session status
     """
 
-    TOOLS = ["rave_encode", "rave_decode", "rave_reconstruct", "rave_generate"]
+    TOOLS = [
+        "rave_encode", "rave_decode", "rave_reconstruct", "rave_generate",
+        "rave_stream_start", "rave_stream_stop", "rave_stream_status",
+    ]
 
     # Map tool names to response type names (schema uses past-tense)
     RESPONSE_TYPES = {
@@ -49,9 +79,16 @@ class RaveService(ModelService):
         "rave_decode": "rave_decoded",
         "rave_reconstruct": "rave_reconstructed",
         "rave_generate": "rave_generated",
+        "rave_stream_start": "rave_stream_started",
+        "rave_stream_stop": "rave_stream_stopped",
+        "rave_stream_status": "rave_stream_status",
     }
 
-    def __init__(self, endpoint: str = "tcp://127.0.0.1:5591"):
+    def __init__(
+        self,
+        endpoint: str = "tcp://127.0.0.1:5591",
+        streaming_endpoint: str = DEFAULT_STREAMING_ENDPOINT,
+    ):
         super().__init__(ServiceConfig(
             name="rave",
             endpoint=endpoint,
@@ -59,6 +96,12 @@ class RaveService(ModelService):
         self.models: dict[str, torch.jit.ScriptModule] = {}
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.models_dir = MODELS_DIR
+
+        # Streaming state
+        self.streaming_endpoint = streaming_endpoint
+        self.streaming_socket: zmq.asyncio.Socket | None = None
+        self.streaming_session: StreamingSession | None = None
+        self._streaming_task: asyncio.Task | None = None
 
     async def load_model(self):
         """Load default RAVE model at startup"""
@@ -133,6 +176,12 @@ class RaveService(ModelService):
                 return await self._reconstruct(params)
             case "rave_generate":
                 return await self._generate(params)
+            case "rave_stream_start":
+                return await self._stream_start(params)
+            case "rave_stream_stop":
+                return await self._stream_stop(params)
+            case "rave_stream_status":
+                return await self._stream_status(params)
             case _:
                 raise ValidationError(message=f"Unknown tool: {tool_name}")
 
@@ -446,6 +495,179 @@ class RaveService(ModelService):
             offset += 4
         return np.frombuffer(data[offset:], dtype=np.float32).reshape(shape)
 
+    # =========================================================================
+    # Streaming Methods
+    # =========================================================================
+
+    async def _stream_start(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Start a realtime audio streaming session."""
+        if self.streaming_session is not None:
+            raise ValidationError(
+                message="A streaming session is already active",
+                field_name="stream_id",
+            )
+
+        model_name = params.get("model")
+        input_identity = params.get("input_identity", "")
+        output_identity = params.get("output_identity", "")
+        buffer_size = params.get("buffer_size", 2048)
+
+        # Load the model
+        model = self._get_model(model_name)
+
+        # Create session
+        stream_id = f"stream_{uuid.uuid4().hex[:12]}"
+        self.streaming_session = StreamingSession(
+            stream_id=stream_id,
+            model_name=model_name or "vintage",
+            input_identity=input_identity,
+            output_identity=output_identity,
+            buffer_size=buffer_size,
+        )
+
+        # Setup streaming socket if not already done
+        if self.streaming_socket is None:
+            self.streaming_socket = self.ctx.socket(zmq.PAIR)
+            self.streaming_socket.bind(self.streaming_endpoint)
+            log.info(f"Streaming socket bound to {self.streaming_endpoint}")
+
+        # Start the streaming processing task
+        self._streaming_task = asyncio.create_task(
+            self._streaming_loop(model)
+        )
+
+        log.info(f"Started streaming session {stream_id} with model {model_name}")
+
+        return {
+            "stream_id": stream_id,
+            "model": self.streaming_session.model_name,
+            "input_identity": input_identity,
+            "output_identity": output_identity,
+            "latency_ms": buffer_size * 1000 // RAVE_SAMPLE_RATE,
+        }
+
+    async def _stream_stop(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Stop a streaming session."""
+        stream_id = params.get("stream_id", "")
+
+        if self.streaming_session is None:
+            raise ValidationError(
+                message="No active streaming session",
+                field_name="stream_id",
+            )
+
+        if self.streaming_session.stream_id != stream_id:
+            raise ValidationError(
+                message=f"Stream ID mismatch: expected {self.streaming_session.stream_id}",
+                field_name="stream_id",
+            )
+
+        # Stop the session
+        self.streaming_session.running = False
+        duration = time.time() - self.streaming_session.started_at
+
+        # Wait for streaming task to finish
+        if self._streaming_task is not None:
+            try:
+                await asyncio.wait_for(self._streaming_task, timeout=2.0)
+            except asyncio.TimeoutError:
+                self._streaming_task.cancel()
+            self._streaming_task = None
+
+        log.info(f"Stopped streaming session {stream_id}, duration={duration:.1f}s")
+
+        self.streaming_session = None
+
+        return {
+            "stream_id": stream_id,
+            "duration_seconds": duration,
+        }
+
+    async def _stream_status(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Get streaming session status."""
+        stream_id = params.get("stream_id", "")
+
+        if self.streaming_session is None:
+            return {
+                "stream_id": stream_id,
+                "running": False,
+                "model": "",
+                "input_identity": "",
+                "output_identity": "",
+                "frames_processed": 0,
+                "latency_ms": 0,
+            }
+
+        session = self.streaming_session
+        return {
+            "stream_id": session.stream_id,
+            "running": session.running,
+            "model": session.model_name,
+            "input_identity": session.input_identity,
+            "output_identity": session.output_identity,
+            "frames_processed": session.frames_processed,
+            "latency_ms": session.buffer_size * 1000 // RAVE_SAMPLE_RATE,
+        }
+
+    async def _streaming_loop(self, model: torch.jit.ScriptModule):
+        """
+        Main streaming loop: receive audio chunks, process through RAVE, send back.
+
+        Audio format (both directions):
+        - Little-endian f32 samples
+        - Interleaved stereo (L, R, L, R, ...)
+        """
+        log.info("Streaming loop started")
+        session = self.streaming_session
+
+        while session and session.running:
+            try:
+                # Poll for incoming audio with timeout
+                if await self.streaming_socket.poll(timeout=100):
+                    chunk_bytes = await self.streaming_socket.recv()
+
+                    # Decode incoming audio: f32 stereo interleaved
+                    audio_np = np.frombuffer(chunk_bytes, dtype=np.float32)
+
+                    # Convert stereo to mono for RAVE (average channels)
+                    if len(audio_np) % 2 == 0:
+                        stereo = audio_np.reshape(-1, 2)
+                        mono = stereo.mean(axis=1)
+                    else:
+                        mono = audio_np
+
+                    # Prepare tensor: (batch=1, channels=1, samples)
+                    audio_tensor = torch.from_numpy(mono).unsqueeze(0).unsqueeze(0)
+                    audio_tensor = audio_tensor.to(self.device)
+
+                    # Process through RAVE (forward = encode + decode)
+                    with torch.inference_mode():
+                        processed = model.forward(audio_tensor)
+
+                    # Convert back to numpy
+                    processed_np = processed.squeeze().cpu().numpy()
+
+                    # Convert mono back to stereo (duplicate to both channels)
+                    stereo_out = np.column_stack([processed_np, processed_np])
+                    output_bytes = stereo_out.astype(np.float32).tobytes()
+
+                    # Send processed audio back
+                    await self.streaming_socket.send(output_bytes)
+
+                    # Update stats
+                    session.frames_processed += len(mono)
+
+            except zmq.ZMQError as e:
+                if e.errno == zmq.EAGAIN:
+                    continue  # Timeout, check if still running
+                log.error(f"ZMQ error in streaming loop: {e}")
+                break
+            except Exception as e:
+                log.exception(f"Error in streaming loop: {e}")
+                # Continue on errors to maintain stream
+
+        log.info(f"Streaming loop ended, processed {session.frames_processed if session else 0} frames")
+
 
 async def main():
     """Run the RAVE service"""
@@ -456,12 +678,16 @@ async def main():
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    # Parse endpoint from args or environment
+    # Parse endpoints from args or environment
     endpoint = os.environ.get("RAVE_ENDPOINT", "tcp://127.0.0.1:5591")
+    streaming_endpoint = os.environ.get("RAVE_STREAMING_ENDPOINT", DEFAULT_STREAMING_ENDPOINT)
+
     if len(sys.argv) > 1:
         endpoint = sys.argv[1]
+    if len(sys.argv) > 2:
+        streaming_endpoint = sys.argv[2]
 
-    service = RaveService(endpoint=endpoint)
+    service = RaveService(endpoint=endpoint, streaming_endpoint=streaming_endpoint)
     await service.start()
 
 
