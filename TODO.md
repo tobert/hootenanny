@@ -2,35 +2,38 @@
 
 ## Actionable
 
-### 1. RAVE Streaming Audio Path Fix
-**Files:** `crates/chaosgarden/src/pipewire_output.rs`
-**Effort:** Small (~10 lines)
+### 1. Debug RAVE Streaming Audio Flow
+**Files:** `crates/chaosgarden/src/rave_streaming.rs`, `pipewire_output.rs`
+**Effort:** Debug session
 
-When RAVE streaming is active, raw monitor audio should NOT be mixed into output.
-Currently both raw monitor and RAVE-processed audio are mixed, causing doubled audio.
+Audio not reaching Python RAVE service. Infrastructure is in place but `frames_processed: 0`.
 
-**Fix:**
-In the RT callback, check if RAVE input is active before adding raw monitor to output:
-```rust
-// Only add raw monitor to output if RAVE is NOT active
-let rave_active = rave_input.as_ref()
-    .and_then(|r| r.try_lock().ok())
-    .map(|g| g.is_some())
-    .unwrap_or(false);
+**Symptoms:**
+- `rave_stream_start` succeeds (Python binds ZMQ PAIR, chaosgarden connects)
+- Monitor audio captured: ✅ (569k samples)
+- Monitor reads in RT callback: ✅ (1026 reads)
+- Python RAVE frames_processed: ❌ (0)
 
-if !rave_active {
-    // Add raw monitor to output
-    for i in 0..read {
-        output_slice[i] += temp_slice[i] * gain;
-    }
-}
-// Always send to RAVE if available
-if let Some(ref rave_in) = rave_input { ... }
-```
+**Debug checklist:**
+1. Check ZMQ PAIR connection: `journalctl -u rave.service` / `chaosgarden.service`
+2. Verify `rave_active` check passes in RT callback (add tracing)
+3. Confirm `producer.write()` is called and returns > 0
+4. Check if RaveStreamingClient thread is running and reading from consumer
+5. Verify ZMQ send/recv in streaming loop
+
+**Possible issues:**
+- ZMQ PAIR not connecting (bind/connect timing)
+- RT callback `try_lock` always failing
+- Ring buffer producer/consumer mismatch
+- Python streaming loop not receiving data
 
 ---
 
 ## Completed Work
+
+### RAVE Streaming Audio Path Routing
+**Completed**: 2026-01-14
+When RAVE streaming is active, raw monitor is muted - only RAVE-processed audio to output.
 
 ### Audio Capture Tool
 **Completed**: 2026-01-14
