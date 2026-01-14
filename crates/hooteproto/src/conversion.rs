@@ -1075,6 +1075,71 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
         tools_capnp::tool_request::GardenClearRegions(()) => Ok(ToolRequest::GardenClearRegions),
         tools_capnp::tool_request::GetToolHelp(h) => Ok(ToolRequest::GetToolHelp(GetToolHelpRequest { topic: capnp_optional_string(h?.get_topic()?) })),
 
+        // RAVE tools
+        tools_capnp::tool_request::RaveEncode(r) => {
+            let r = r?;
+            let m = r.get_metadata()?;
+            Ok(ToolRequest::RaveEncode(RaveEncodeRequest {
+                audio_hash: r.get_audio_hash()?.to_str()?.to_string(),
+                model: capnp_optional_string(r.get_model()?),
+                tags: capnp_string_list(m.get_tags()?),
+                creator: capnp_optional_string(m.get_creator()?),
+            }))
+        }
+        tools_capnp::tool_request::RaveDecode(r) => {
+            let r = r?;
+            let m = r.get_metadata()?;
+            Ok(ToolRequest::RaveDecode(RaveDecodeRequest {
+                latent_hash: r.get_latent_hash()?.to_str()?.to_string(),
+                latent_shape: r.get_latent_shape()?.iter().collect(),
+                model: capnp_optional_string(r.get_model()?),
+                tags: capnp_string_list(m.get_tags()?),
+                creator: capnp_optional_string(m.get_creator()?),
+            }))
+        }
+        tools_capnp::tool_request::RaveReconstruct(r) => {
+            let r = r?;
+            let m = r.get_metadata()?;
+            Ok(ToolRequest::RaveReconstruct(RaveReconstructRequest {
+                audio_hash: r.get_audio_hash()?.to_str()?.to_string(),
+                model: capnp_optional_string(r.get_model()?),
+                tags: capnp_string_list(m.get_tags()?),
+                creator: capnp_optional_string(m.get_creator()?),
+            }))
+        }
+        tools_capnp::tool_request::RaveGenerate(r) => {
+            let r = r?;
+            let m = r.get_metadata()?;
+            Ok(ToolRequest::RaveGenerate(RaveGenerateRequest {
+                model: capnp_optional_string(r.get_model()?),
+                duration_seconds: if r.get_duration_seconds() > 0.0 { Some(r.get_duration_seconds()) } else { None },
+                temperature: if r.get_temperature() > 0.0 { Some(r.get_temperature()) } else { None },
+                tags: capnp_string_list(m.get_tags()?),
+                creator: capnp_optional_string(m.get_creator()?),
+            }))
+        }
+        tools_capnp::tool_request::RaveStreamStart(r) => {
+            let r = r?;
+            Ok(ToolRequest::RaveStreamStart(RaveStreamStartRequest {
+                model: capnp_optional_string(r.get_model()?),
+                input_identity: r.get_input_identity()?.to_str()?.to_string(),
+                output_identity: r.get_output_identity()?.to_str()?.to_string(),
+                buffer_size: if r.get_buffer_size() > 0 { Some(r.get_buffer_size()) } else { None },
+            }))
+        }
+        tools_capnp::tool_request::RaveStreamStop(r) => {
+            let r = r?;
+            Ok(ToolRequest::RaveStreamStop(RaveStreamStopRequest {
+                stream_id: r.get_stream_id()?.to_str()?.to_string(),
+            }))
+        }
+        tools_capnp::tool_request::RaveStreamStatus(r) => {
+            let r = r?;
+            Ok(ToolRequest::RaveStreamStatus(RaveStreamStatusRequest {
+                stream_id: r.get_stream_id()?.to_str()?.to_string(),
+            }))
+        }
+
         _ => Err(capnp::Error::failed("Unsupported ToolRequest variant".to_string())),
     }
 }

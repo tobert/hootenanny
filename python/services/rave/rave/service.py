@@ -111,7 +111,7 @@ class RaveService(ModelService):
 
     def _get_model(self, name: str | None, streaming: bool = False) -> torch.jit.ScriptModule:
         """Get a model, loading if necessary"""
-        if name is None:
+        if not name:  # Handle None and empty string
             # Use first loaded model or load default
             if self.models:
                 return next(iter(self.models.values()))
