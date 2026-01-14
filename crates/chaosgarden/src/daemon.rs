@@ -9,7 +9,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
 
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::ipc::{
@@ -17,7 +17,7 @@ use crate::ipc::{
     RegionSummary, SampleFormat as IpcSampleFormat, ShellReply, ShellRequest,
     StreamDefinition as IpcStreamDefinition, StreamFormat as IpcStreamFormat,
 };
-use crate::external_io::{audio_ring_pair, AudioRingConsumer, AudioRingProducer, RingBuffer};
+use crate::external_io::{audio_ring_pair, AudioRingConsumer, AudioRingProducer};
 use crate::mixer::{MixerChannel, MixerState};
 use crate::monitor_input::{MonitorInputConfig, MonitorInputStream};
 use crate::nodes::ContentResolver;
@@ -114,9 +114,9 @@ pub struct GardenDaemon {
     playback_engine: RwLock<Option<PlaybackEngine>>,
     // Compiled graph for RT processing (currently empty - placeholder for future graph routing)
     compiled_graph: RwLock<Option<CompiledGraph>>,
-    // Reference to timeline ring buffer (written by tick(), read by RT callback)
-    // This is obtained from the PipeWire output stream when attached
-    timeline_ring: RwLock<Option<Arc<Mutex<RingBuffer>>>>,
+    // Timeline audio producer (written by tick(), consumer is in RT callback)
+    // Lock-free SPSC ring - producer writes rendered audio, consumer reads in RT
+    timeline_producer: Mutex<Option<AudioRingProducer>>,
 
     // Streaming tap for WebSocket/HTTP audio streaming (lock-free SPSC)
     // Consumer is read by get_audio_snapshot(), producer is moved to RT callback
@@ -190,7 +190,7 @@ impl GardenDaemon {
             content_resolver: None,
             playback_engine: RwLock::new(None),
             compiled_graph: RwLock::new(None),
-            timeline_ring: RwLock::new(None),
+            timeline_producer: Mutex::new(None),
             streaming_tap_consumer: Mutex::new(streaming_tap_consumer),
             streaming_tap_producer: Mutex::new(Some(streaming_tap_producer)),
             streaming_tap_sample_rate,
@@ -550,11 +550,15 @@ impl GardenDaemon {
         }
     }
 
-    /// Process the playback engine and write output to timeline ring
+    /// Process the playback engine and write output to timeline producer (lock-free!)
     fn process_playback(&self) {
-        // Get timeline ring (if audio output is attached)
-        let timeline_ring = match self.timeline_ring.read().unwrap().as_ref() {
-            Some(ring) => Arc::clone(ring),
+        // Get timeline producer (if audio output is attached)
+        let mut producer_guard = match self.timeline_producer.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        let producer = match producer_guard.as_mut() {
+            Some(p) => p,
             None => return, // No audio output attached
         };
 
@@ -562,18 +566,9 @@ impl GardenDaemon {
         // This prevents the engine from advancing ahead of actual playback
         // 256 frames * 2 channels = 512 samples minimum
         const MIN_RING_SPACE: usize = 512;
-        {
-            let ring = match timeline_ring.lock() {
-                Ok(r) => r,
-                Err(_) => {
-                    trace!("process_playback: ring lock failed");
-                    return;
-                }
-            };
-            if ring.space() < MIN_RING_SPACE {
-                // Ring is full, skip this tick - RT callback will drain it
-                return;
-            }
+        if producer.space() < MIN_RING_SPACE {
+            // Ring is full, skip this tick - RT callback will drain it
+            return;
         }
 
         // Get playback engine
@@ -599,18 +594,17 @@ impl GardenDaemon {
         // Process one buffer
         match engine.process(graph, &regions) {
             Ok(output_buffer) => {
-                // Write output to timeline ring (for RT playback)
+                // Write output to timeline producer (lock-free for RT playback)
                 // The RT callback mixes this with monitor input and writes
                 // the final mix to both PipeWire output and streaming tap
-                if let Ok(mut ring) = timeline_ring.lock() {
-                    // AudioBuffer.samples is interleaved [L, R, L, R, ...]
-                    ring.write(&output_buffer.samples);
-                }
+                // AudioBuffer.samples is interleaved [L, R, L, R, ...]
+                producer.write(&output_buffer.samples);
             }
             Err(e) => {
                 debug!("Playback process error: {}", e);
             }
         }
+        // Note: producer_guard dropped here, releasing the Mutex
     }
 
     // === Audio output attachment methods ===
@@ -657,9 +651,14 @@ impl GardenDaemon {
             }
         };
 
+        // Create lock-free SPSC pair for timeline audio
+        // Sized for ~1 second of stereo audio at configured sample rate
+        let ring_capacity = config.sample_rate as usize * 2 * 2; // 2 channels, 2 seconds
+        let (timeline_producer, timeline_consumer) = audio_ring_pair(ring_capacity);
+
         // Check if we have a monitor consumer available - if so, use RT mixing
-        let consumer = self.monitor_consumer.lock().unwrap().take();
-        let stream = if let Some(consumer) = consumer {
+        let monitor_consumer = self.monitor_consumer.lock().unwrap().take();
+        let stream = if let Some(consumer) = monitor_consumer {
             // Create monitor mix state for RT callback with lock-free consumer
             // Use the mixer channel's atomics for RT-safe control
             let monitor_state = MonitorMixState {
@@ -669,26 +668,25 @@ impl GardenDaemon {
             };
 
             info!("Creating output stream with RT monitor mixing (lock-free)");
-            PipeWireOutputStream::new_with_monitor(config, monitor_state, streaming_tap)
+            PipeWireOutputStream::new_with_monitor(config, monitor_state, streaming_tap, Some(timeline_consumer))
                 .map_err(|e| format!("Failed to create PipeWire output with monitor: {}", e))?
         } else {
-            PipeWireOutputStream::new_with_streaming_tap(config, streaming_tap)
+            PipeWireOutputStream::new_with_streaming_tap(config, streaming_tap, Some(timeline_consumer))
                 .map_err(|e| format!("Failed to create PipeWire output: {}", e))?
         };
 
-        // Store the timeline ring reference for tick() to write to
-        let timeline_ring = stream.ring_buffer();
-        *self.timeline_ring.write().unwrap() = Some(timeline_ring);
+        // Store the timeline producer for tick() to write to (lock-free!)
+        *self.timeline_producer.lock().unwrap() = Some(timeline_producer);
 
         *self.audio_output.write().unwrap() = Some(stream);
-        info!("Audio output attached (timeline ring available for playback)");
+        info!("Audio output attached (lock-free timeline available for playback)");
         Ok(())
     }
 
     /// Detach the current audio output (if any)
     fn detach_audio(&self) {
-        // Clear timeline ring first
-        *self.timeline_ring.write().unwrap() = None;
+        // Clear timeline producer first
+        *self.timeline_producer.lock().unwrap() = None;
 
         let mut output = self.audio_output.write().unwrap();
         if output.is_some() {

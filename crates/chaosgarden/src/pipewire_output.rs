@@ -124,8 +124,9 @@ impl PipeWireOutputStream {
     pub fn new_with_streaming_tap(
         config: PipeWireOutputConfig,
         streaming_tap: Option<AudioRingProducer>,
+        timeline_consumer: Option<AudioRingConsumer>,
     ) -> Result<Self, PipeWireOutputError> {
-        Self::new_internal(config, None, streaming_tap)
+        Self::new_internal(config, None, streaming_tap, timeline_consumer)
     }
 
     /// Create and start a new PipeWire output stream with monitor mixing
@@ -140,8 +141,9 @@ impl PipeWireOutputStream {
         config: PipeWireOutputConfig,
         monitor: MonitorMixState,
         streaming_tap: Option<AudioRingProducer>,
+        timeline_consumer: Option<AudioRingConsumer>,
     ) -> Result<Self, PipeWireOutputError> {
-        Self::new_internal(config, Some(monitor), streaming_tap)
+        Self::new_internal(config, Some(monitor), streaming_tap, timeline_consumer)
     }
 
     /// Internal constructor that handles all variants
@@ -149,6 +151,7 @@ impl PipeWireOutputStream {
         config: PipeWireOutputConfig,
         monitor: Option<MonitorMixState>,
         streaming_tap: Option<AudioRingProducer>,
+        timeline_consumer: Option<AudioRingConsumer>,
     ) -> Result<Self, PipeWireOutputError> {
         use pipewire as pw;
 
@@ -184,6 +187,7 @@ impl PipeWireOutputStream {
                     stats_for_thread,
                     monitor,
                     streaming_tap,
+                    timeline_consumer,
                 ) {
                     error!("PipeWire output thread failed: {}", e);
                 }
@@ -272,6 +276,7 @@ impl PipeWireOutputStream {
                     stats_for_thread,
                     None, // No monitor mixing - use new_with_monitor for that
                     None, // No streaming tap - use new_with_streaming_tap for that
+                    None, // No timeline consumer - use new_with_streaming_tap for that
                 ) {
                     error!("PipeWire output thread failed: {}", e);
                 }
@@ -334,11 +339,12 @@ impl Drop for PipeWireOutputStream {
 /// Run the PipeWire main loop (called from thread)
 fn run_pipewire_loop(
     config: PipeWireOutputConfig,
-    ring_buffer: Arc<Mutex<RingBuffer>>,
+    _ring_buffer: Arc<Mutex<RingBuffer>>, // Deprecated: kept for backwards compatibility
     running: Arc<AtomicBool>,
     stats: Arc<StreamStats>,
     monitor: Option<MonitorMixState>,
     streaming_tap: Option<AudioRingProducer>,
+    timeline_consumer: Option<AudioRingConsumer>,
 ) -> Result<(), PipeWireOutputError> {
     use pipewire as pw;
     use pw::spa::pod::Pod;
@@ -383,12 +389,25 @@ fn run_pipewire_loop(
     let stride = sample_size * channels;
     let target_frames = config.latency_frames as usize;
 
+    // Pre-allocate RT buffers (8192 frames * 2 channels = 16384 samples max)
+    // This avoids allocation in the RT callback path
+    let max_buffer_samples = 8192 * channels;
+    let output_buffer = vec![0.0f32; max_buffer_samples];
+    let temp_buffer = vec![0.0f32; max_buffer_samples];
+
     // Register process callback - runs in PipeWire's RT thread
-    // This is the RT mixer: reads from monitor input (if enabled) and timeline ring
+    // This is the RT mixer: reads from monitor input (if enabled) and timeline (lock-free!)
     // Final mixed output is also written to streaming_tap for WebSocket streaming
     let _listener = stream
-        .add_local_listener_with_user_data((ring_buffer, stats.clone(), monitor, streaming_tap))
-        .process(move |stream, (timeline_ring, stats, monitor, streaming_tap)| {
+        .add_local_listener_with_user_data((
+            stats.clone(),
+            monitor,
+            streaming_tap,
+            timeline_consumer,
+            output_buffer,
+            temp_buffer,
+        ))
+        .process(move |stream, (stats, monitor, streaming_tap, timeline_consumer, ref mut output_buffer, ref mut temp_buffer)| {
             let count = stats.callbacks.fetch_add(1, Ordering::Relaxed);
             // Debug: log first callback
             if count == 0 {
@@ -417,16 +436,18 @@ fn run_pipewire_loop(
 
             let samples_needed = n_frames * channels;
 
-            // Pre-allocate temp buffers for mixing
-            let mut output_buffer = vec![0.0f32; samples_needed];
-            let mut temp_buffer = vec![0.0f32; samples_needed];
+            // Use pre-allocated buffers, clear only the portion we need
+            let output_slice = &mut output_buffer[..samples_needed];
+            let temp_slice = &mut temp_buffer[..samples_needed];
+            output_slice.fill(0.0);
+            temp_slice.fill(0.0);
             let mut has_audio = false;
 
             // === RT Mixer: Mix monitor input if enabled (lock-free!) ===
             if let Some(ref mut mon) = monitor {
                 if mon.enabled.load(Ordering::Relaxed) {
                     // Lock-free read from SPSC ring buffer - never blocks!
-                    let read = mon.consumer.read(&mut temp_buffer);
+                    let read = mon.consumer.read(temp_slice);
                     if read > 0 {
                         stats.monitor_reads.fetch_add(1, Ordering::Relaxed);
                         stats.monitor_samples.fetch_add(read as u64, Ordering::Relaxed);
@@ -434,22 +455,23 @@ fn run_pipewire_loop(
                         stats.warmed_up.store(true, Ordering::Relaxed);
                         let gain = mon.gain.load(Ordering::Relaxed);
                         for i in 0..read {
-                            output_buffer[i] += temp_buffer[i] * gain;
+                            output_slice[i] += temp_slice[i] * gain;
                         }
                         has_audio = true;
                     }
                 }
             }
 
-            // === RT Mixer: Mix timeline audio ===
-            let timeline_read = timeline_ring
-                .try_lock()
-                .map(|mut r| r.read(&mut temp_buffer))
-                .unwrap_or(0);
+            // === RT Mixer: Mix timeline audio (lock-free!) ===
+            let timeline_read = if let Some(ref mut consumer) = timeline_consumer {
+                consumer.read(temp_slice)
+            } else {
+                0
+            };
 
             if timeline_read > 0 {
                 for i in 0..timeline_read {
-                    output_buffer[i] += temp_buffer[i];
+                    output_slice[i] += temp_slice[i];
                 }
                 has_audio = true;
             }
@@ -468,7 +490,7 @@ fn run_pipewire_loop(
             // Write final mixed output to streaming tap for WebSocket consumers
             // This is lock-free (SPSC) so it won't block the RT thread
             if let Some(ref mut tap) = streaming_tap {
-                tap.write(&output_buffer[..samples_needed]);
+                tap.write(output_slice);
             }
 
             // Fill output buffer
@@ -476,7 +498,7 @@ fn run_pipewire_loop(
                 for c in 0..channels {
                     let sample_idx = i * channels + c;
                     let sample = if sample_idx < samples_needed {
-                        output_buffer[sample_idx]
+                        output_slice[sample_idx]
                     } else {
                         0.0
                     };
