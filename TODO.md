@@ -2,32 +2,46 @@
 
 ## Actionable
 
-### 1. Audio Capture Tool
-**Files:** `crates/hootenanny/src/api/typed_dispatcher.rs`, `crates/hooteproto/`
-**Effort:** Medium
+### 1. RAVE Streaming Audio Path Fix
+**Files:** `crates/chaosgarden/src/pipewire_output.rs`
+**Effort:** Small (~10 lines)
 
-Add `audio_capture` tool to record from monitor input to CAS for offline processing (RAVE, etc).
+When RAVE streaming is active, raw monitor audio should NOT be mixed into output.
+Currently both raw monitor and RAVE-processed audio are mixed, causing doubled audio.
 
-**Interface:**
-```json
-{
-  "tool": "audio_capture",
-  "duration_seconds": 5.0,
-  "source": "monitor"  // or "timeline", "mix"
+**Fix:**
+In the RT callback, check if RAVE input is active before adding raw monitor to output:
+```rust
+// Only add raw monitor to output if RAVE is NOT active
+let rave_active = rave_input.as_ref()
+    .and_then(|r| r.try_lock().ok())
+    .map(|g| g.is_some())
+    .unwrap_or(false);
+
+if !rave_active {
+    // Add raw monitor to output
+    for i in 0..read {
+        output_slice[i] += temp_slice[i] * gain;
+    }
 }
+// Always send to RAVE if available
+if let Some(ref rave_in) = rave_input { ... }
 ```
-
-**Returns:** `{ "artifact_id": "...", "content_hash": "...", "duration_seconds": 5.0 }`
-
-**Implementation:**
-- Read from `streaming_tap_consumer` in chaosgarden
-- Accumulate samples for duration
-- Encode to WAV, store in CAS
-- Create artifact
 
 ---
 
 ## Completed Work
+
+### Audio Capture Tool
+**Completed**: 2026-01-14
+Added `audio_capture` MCP tool to record from streaming tap to CAS artifact.
+
+### RAVE Realtime Streaming Infrastructure
+**Completed**: 2026-01-14
+- `rave_streaming.rs` - ZMQ PAIR client with dedicated thread
+- Lock-free SPSC rings for RT ↔ non-RT audio transport
+- Coordinated startup via hootenanny (Python RAVE + chaosgarden)
+- PipeWire RT callback forks monitor to RAVE, mixes RAVE output
 
 ### Artifact URL Augmentation
 **Completed**: 2026-01-14

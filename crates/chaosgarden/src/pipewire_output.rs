@@ -466,21 +466,30 @@ fn run_pipewire_loop(
                         stats.monitor_samples.fetch_add(read as u64, Ordering::Relaxed);
                         // Mark warmed up after first successful read
                         stats.warmed_up.store(true, Ordering::Relaxed);
-                        let gain = mon.gain.load(Ordering::Relaxed);
-                        for i in 0..read {
-                            output_slice[i] += temp_slice[i] * gain;
-                        }
-                        has_audio = true;
 
-                        // === RAVE Input: Fork monitor audio to RAVE ===
-                        // Try to get the RAVE input producer (non-blocking)
-                        if let Some(ref rave_in) = rave_input {
-                            if let Ok(mut guard) = rave_in.try_lock() {
-                                if let Some(ref mut producer) = *guard {
-                                    // Write the same monitor audio to RAVE
-                                    producer.write(&temp_slice[..read]);
+                        // Check if RAVE streaming is active (non-blocking)
+                        let rave_active = rave_input.as_ref()
+                            .and_then(|r| r.try_lock().ok())
+                            .map(|g| g.is_some())
+                            .unwrap_or(false);
+
+                        if rave_active {
+                            // RAVE is active - send to RAVE, don't mix raw monitor
+                            if let Some(ref rave_in) = rave_input {
+                                if let Ok(mut guard) = rave_in.try_lock() {
+                                    if let Some(ref mut producer) = *guard {
+                                        producer.write(&temp_slice[..read]);
+                                    }
                                 }
                             }
+                            // Don't set has_audio - RAVE output will provide it
+                        } else {
+                            // No RAVE - mix raw monitor directly to output
+                            let gain = mon.gain.load(Ordering::Relaxed);
+                            for i in 0..read {
+                                output_slice[i] += temp_slice[i] * gain;
+                            }
+                            has_audio = true;
                         }
                     }
                 }
