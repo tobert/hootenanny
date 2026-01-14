@@ -21,3 +21,30 @@ broadcasts `BeatTick` events. No local clock in vibeweaver.
 - Transport events (play/stop/seek) bypass normal sync for immediacy
 
 For now, broadcast-driven callbacks are good enough for generative scheduling.
+
+### Audio Output Underruns (chaosgarden)
+**Status**: Observed 2026-01-14
+**Context**: During RAVE demo playback
+
+When playing RAVE-generated audio through timeline regions, observed 131,581 underruns
+on the audio output. The audio wasn't audible during timeline playback, though the
+artifacts play fine when downloaded directly.
+
+**Symptoms:**
+- `audio_output_status` shows high underrun count
+- Timeline shows `state: "playing"` with advancing position
+- No audible audio output
+- Direct artifact download/playback works fine
+
+**Possible causes to investigate:**
+- Timeline region audio loading from CAS may be blocking the audio thread
+- Buffer size (256 frames) may be too small for disk I/O latency
+- Region behavior `play_audio` implementation may have issues with CAS-backed content
+- Possible thread contention between region loading and audio callback
+
+**When to fix:**
+- Before live performance use cases
+- When timeline playback is critical path
+
+**Workaround:**
+- Download artifacts directly via `/artifact/{id}` and play externally
