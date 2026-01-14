@@ -249,7 +249,7 @@ class RaveService(ModelService):
         return {
             "artifact_id": "",  # TODO: artifact creation
             "content_hash": content_hash,
-            "duration_seconds": len(audio_np) / RAVE_SAMPLE_RATE,
+            "duration_seconds": audio_np.size / RAVE_SAMPLE_RATE,
             "sample_rate": RAVE_SAMPLE_RATE,
             "model": model_name or "vintage",
         }
@@ -317,7 +317,7 @@ class RaveService(ModelService):
         return {
             "artifact_id": "",  # Artifact creation requires hootenanny callback (TODO)
             "content_hash": content_hash,
-            "duration_seconds": len(audio_np) / RAVE_SAMPLE_RATE,
+            "duration_seconds": audio_np.size / RAVE_SAMPLE_RATE,
             "sample_rate": RAVE_SAMPLE_RATE,
             "model": model_name or "vintage",
         }
@@ -368,7 +368,7 @@ class RaveService(ModelService):
         return {
             "artifact_id": "",  # Artifact creation requires hootenanny callback (TODO)
             "content_hash": content_hash,
-            "duration_seconds": len(audio_np) / RAVE_SAMPLE_RATE,
+            "duration_seconds": audio_np.size / RAVE_SAMPLE_RATE,
             "sample_rate": RAVE_SAMPLE_RATE,
             "model": model_name or "vintage",
             "temperature": temperature,
