@@ -437,6 +437,38 @@ impl MidiIOManager {
         output.send(msg)
     }
 
+    /// Send raw MIDI bytes to all connected outputs
+    ///
+    /// Continues sending to all outputs even if some fail.
+    /// Returns `Ok(())` if all sends succeed, or `PartialSendFailure` if any failed.
+    pub fn send_raw_to_all(&self, data: &[u8]) -> Result<(), MidiError> {
+        let outputs = self.outputs.lock().expect("midi outputs mutex poisoned");
+        let total = outputs.len();
+        let mut failures = 0;
+
+        for output in outputs.iter() {
+            if output.send_raw(data).is_err() {
+                failures += 1;
+            }
+        }
+
+        if failures == 0 {
+            Ok(())
+        } else {
+            Err(MidiError::PartialSendFailure(failures, total))
+        }
+    }
+
+    /// Send raw MIDI bytes to a specific output by port name pattern
+    pub fn send_raw_to(&self, port_pattern: &str, data: &[u8]) -> Result<(), MidiError> {
+        let outputs = self.outputs.lock().expect("midi outputs mutex poisoned");
+        let output = outputs
+            .iter()
+            .find(|o| o.port_name.contains(port_pattern))
+            .ok_or_else(|| MidiError::PortNotFound(port_pattern.to_string()))?;
+        output.send_raw(data)
+    }
+
     /// Detach an input by port name pattern
     pub fn detach_input(&self, port_pattern: &str) -> bool {
         let mut inputs = self.inputs.lock().expect("midi inputs mutex poisoned");

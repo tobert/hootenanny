@@ -1044,11 +1044,21 @@ impl GardenDaemon {
                     value: *value,
                 }
             }
-            crate::ipc::MidiMessageSpec::Raw { bytes: _ } => {
-                // Raw MIDI send not yet implemented - need to expose send_raw on manager
-                return ShellReply::Error {
-                    error: "Raw MIDI send not yet implemented".to_string(),
-                    traceback: None,
+            crate::ipc::MidiMessageSpec::Raw { bytes } => {
+                // Send raw MIDI bytes directly
+                let result = if let Some(pattern) = port_pattern {
+                    self.midi_manager.send_raw_to(pattern, bytes)
+                } else {
+                    self.midi_manager.send_raw_to_all(bytes)
+                };
+                return match result {
+                    Ok(()) => ShellReply::Ok {
+                        result: serde_json::Value::Null,
+                    },
+                    Err(e) => ShellReply::Error {
+                        error: format!("Failed to send raw MIDI: {}", e),
+                        traceback: None,
+                    },
                 };
             }
         };
