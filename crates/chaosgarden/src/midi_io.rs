@@ -634,6 +634,143 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_note_off_explicit() {
+        // Explicit 0x80 Note Off (vs velocity-0 Note On)
+        let data = [0x80, 60, 64]; // Note Off, channel 0, middle C, velocity 64 (ignored)
+        let msg = parse_midi_bytes(&data).unwrap();
+        match msg {
+            MidiMessage::NoteOff { channel, pitch } => {
+                assert_eq!(channel, 0);
+                assert_eq!(pitch, 60);
+            }
+            _ => panic!("Expected NoteOff"),
+        }
+    }
+
+    #[test]
+    fn test_parse_program_change() {
+        let data = [0xC3, 42]; // Program Change, channel 3, program 42
+        let msg = parse_midi_bytes(&data).unwrap();
+        match msg {
+            MidiMessage::ProgramChange { channel, program } => {
+                assert_eq!(channel, 3);
+                assert_eq!(program, 42);
+            }
+            _ => panic!("Expected ProgramChange"),
+        }
+    }
+
+    #[test]
+    fn test_parse_pitch_bend_center() {
+        // Center position: value 8192 = 0x2000, LSB=0x00, MSB=0x40
+        let data = [0xE0, 0x00, 0x40];
+        let msg = parse_midi_bytes(&data).unwrap();
+        match msg {
+            MidiMessage::PitchBend { channel, value } => {
+                assert_eq!(channel, 0);
+                assert_eq!(value, 0); // Center = 0
+            }
+            _ => panic!("Expected PitchBend"),
+        }
+    }
+
+    #[test]
+    fn test_parse_pitch_bend_extremes() {
+        // Minimum: LSB=0x00, MSB=0x00 -> raw=0, value=-8192
+        let min_data = [0xE0, 0x00, 0x00];
+        let min_msg = parse_midi_bytes(&min_data).unwrap();
+        match min_msg {
+            MidiMessage::PitchBend { value, .. } => {
+                assert_eq!(value, -8192);
+            }
+            _ => panic!("Expected PitchBend"),
+        }
+
+        // Maximum: LSB=0x7F, MSB=0x7F -> raw=16383, value=8191
+        let max_data = [0xE0, 0x7F, 0x7F];
+        let max_msg = parse_midi_bytes(&max_data).unwrap();
+        match max_msg {
+            MidiMessage::PitchBend { value, .. } => {
+                assert_eq!(value, 8191);
+            }
+            _ => panic!("Expected PitchBend"),
+        }
+    }
+
+    #[test]
+    fn test_parse_invalid_empty() {
+        let data: [u8; 0] = [];
+        assert!(parse_midi_bytes(&data).is_none());
+    }
+
+    #[test]
+    fn test_parse_unhandled_status() {
+        // 0xF0 = SysEx start - not handled
+        let data = [0xF0, 0x00, 0xF7];
+        assert!(parse_midi_bytes(&data).is_none());
+
+        // 0xF8 = Timing Clock - not handled
+        let data = [0xF8];
+        assert!(parse_midi_bytes(&data).is_none());
+    }
+
+    #[test]
+    fn test_encode_control_change() {
+        let msg = MidiMessage::ControlChange {
+            channel: 5,
+            controller: 7, // Volume
+            value: 100,
+        };
+        let bytes = encode_midi_message(&msg);
+        assert_eq!(bytes, vec![0xB5, 7, 100]);
+    }
+
+    #[test]
+    fn test_encode_program_change() {
+        let msg = MidiMessage::ProgramChange {
+            channel: 9, // Drum channel
+            program: 0, // Standard kit
+        };
+        let bytes = encode_midi_message(&msg);
+        assert_eq!(bytes, vec![0xC9, 0]);
+    }
+
+    #[test]
+    fn test_roundtrip_all_message_types() {
+        // NoteOn
+        let note_on = MidiMessage::NoteOn { channel: 3, pitch: 64, velocity: 80 };
+        let parsed = parse_midi_bytes(&encode_midi_message(&note_on)).unwrap();
+        assert!(matches!(parsed, MidiMessage::NoteOn { channel: 3, pitch: 64, velocity: 80 }));
+
+        // NoteOff (via velocity 0)
+        let note_off = MidiMessage::NoteOff { channel: 7, pitch: 48 };
+        let bytes = encode_midi_message(&note_off);
+        let parsed = parse_midi_bytes(&bytes).unwrap();
+        assert!(matches!(parsed, MidiMessage::NoteOff { channel: 7, pitch: 48 }));
+
+        // ControlChange
+        let cc = MidiMessage::ControlChange { channel: 0, controller: 1, value: 64 };
+        let parsed = parse_midi_bytes(&encode_midi_message(&cc)).unwrap();
+        assert!(matches!(parsed, MidiMessage::ControlChange { channel: 0, controller: 1, value: 64 }));
+
+        // ProgramChange
+        let pc = MidiMessage::ProgramChange { channel: 15, program: 127 };
+        let parsed = parse_midi_bytes(&encode_midi_message(&pc)).unwrap();
+        assert!(matches!(parsed, MidiMessage::ProgramChange { channel: 15, program: 127 }));
+
+        // PitchBend - note: small rounding possible due to 14-bit encoding
+        let pb = MidiMessage::PitchBend { channel: 2, value: 1000 };
+        let parsed = parse_midi_bytes(&encode_midi_message(&pb)).unwrap();
+        match parsed {
+            MidiMessage::PitchBend { channel, value } => {
+                assert_eq!(channel, 2);
+                assert_eq!(value, 1000);
+            }
+            _ => panic!("Expected PitchBend"),
+        }
+    }
+
+    #[test]
     fn test_list_ports() {
         // This test just verifies the functions don't panic
         // Actual port availability depends on the system
