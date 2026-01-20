@@ -319,7 +319,7 @@ impl ActiveMidiOutput {
 
     /// Send raw MIDI bytes
     pub fn send_raw(&self, data: &[u8]) -> Result<(), MidiError> {
-        let mut guard = self.connection.lock().unwrap();
+        let mut guard = self.connection.lock().expect("midi output mutex poisoned");
         if let Some(ref mut conn) = *guard {
             conn.send(data)
                 .map_err(|e| MidiError::SendFailed(e.to_string()))?;
@@ -332,7 +332,7 @@ impl ActiveMidiOutput {
 
     /// Close the connection
     pub fn close(&self) {
-        let mut guard = self.connection.lock().unwrap();
+        let mut guard = self.connection.lock().expect("midi output mutex poisoned");
         if let Some(conn) = guard.take() {
             conn.close();
             info!("Closed MIDI output: {}", self.port_name);
@@ -370,7 +370,7 @@ impl MidiIOManager {
     ) -> Result<String, MidiError> {
         let input = ActiveMidiInput::open(port_pattern, callback)?;
         let port_name = input.port_name.clone();
-        self.inputs.lock().unwrap().push(input);
+        self.inputs.lock().expect("midi inputs mutex poisoned").push(input);
         Ok(port_name)
     }
 
@@ -378,13 +378,13 @@ impl MidiIOManager {
     pub fn attach_output(&self, port_pattern: &str) -> Result<String, MidiError> {
         let output = ActiveMidiOutput::open(port_pattern)?;
         let port_name = output.port_name.clone();
-        self.outputs.lock().unwrap().push(output);
+        self.outputs.lock().expect("midi outputs mutex poisoned").push(output);
         Ok(port_name)
     }
 
     /// Send to all connected outputs (useful for clock, transport)
     pub fn send_to_all(&self, msg: &MidiMessage) -> Result<(), MidiError> {
-        let outputs = self.outputs.lock().unwrap();
+        let outputs = self.outputs.lock().expect("midi outputs mutex poisoned");
         for output in outputs.iter() {
             output.send(msg)?;
         }
@@ -393,7 +393,7 @@ impl MidiIOManager {
 
     /// Send to a specific output by port name pattern
     pub fn send_to(&self, port_pattern: &str, msg: &MidiMessage) -> Result<(), MidiError> {
-        let outputs = self.outputs.lock().unwrap();
+        let outputs = self.outputs.lock().expect("midi outputs mutex poisoned");
         let output = outputs
             .iter()
             .find(|o| o.port_name.contains(port_pattern))
@@ -403,7 +403,7 @@ impl MidiIOManager {
 
     /// Detach an input by port name pattern
     pub fn detach_input(&self, port_pattern: &str) -> bool {
-        let mut inputs = self.inputs.lock().unwrap();
+        let mut inputs = self.inputs.lock().expect("midi inputs mutex poisoned");
         if let Some(pos) = inputs.iter().position(|i| i.port_name.contains(port_pattern)) {
             inputs.remove(pos);
             true
@@ -414,7 +414,7 @@ impl MidiIOManager {
 
     /// Detach an output by port name pattern
     pub fn detach_output(&self, port_pattern: &str) -> bool {
-        let mut outputs = self.outputs.lock().unwrap();
+        let mut outputs = self.outputs.lock().expect("midi outputs mutex poisoned");
         if let Some(pos) = outputs.iter().position(|o| o.port_name.contains(port_pattern)) {
             outputs.remove(pos);
             true
@@ -425,8 +425,8 @@ impl MidiIOManager {
 
     /// Get status of all connections
     pub fn status(&self) -> MidiIOStatus {
-        let inputs = self.inputs.lock().unwrap();
-        let outputs = self.outputs.lock().unwrap();
+        let inputs = self.inputs.lock().expect("midi inputs mutex poisoned");
+        let outputs = self.outputs.lock().expect("midi outputs mutex poisoned");
 
         MidiIOStatus {
             inputs: inputs
