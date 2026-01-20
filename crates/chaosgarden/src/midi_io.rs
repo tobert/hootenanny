@@ -777,4 +777,68 @@ mod tests {
         let _ = list_input_ports();
         let _ = list_output_ports();
     }
+
+    // =========================================================================
+    // MidiIOManager tests
+    // =========================================================================
+
+    #[test]
+    fn test_manager_new_empty() {
+        let manager = MidiIOManager::new();
+        let status = manager.status();
+        assert!(status.inputs.is_empty());
+        assert!(status.outputs.is_empty());
+    }
+
+    #[test]
+    fn test_manager_status_empty() {
+        let manager = MidiIOManager::default(); // Uses Default trait
+        let status = manager.status();
+        assert_eq!(status.inputs.len(), 0);
+        assert_eq!(status.outputs.len(), 0);
+    }
+
+    #[test]
+    fn test_detach_nonexistent_input_returns_false() {
+        let manager = MidiIOManager::new();
+        assert!(!manager.detach_input("nonexistent"));
+    }
+
+    #[test]
+    fn test_detach_nonexistent_output_returns_false() {
+        let manager = MidiIOManager::new();
+        assert!(!manager.detach_output("nonexistent"));
+    }
+
+    #[test]
+    fn test_send_to_all_with_no_outputs() {
+        let manager = MidiIOManager::new();
+        let msg = MidiMessage::NoteOn { channel: 0, pitch: 60, velocity: 100 };
+        // Sending to no outputs should succeed (nothing to fail)
+        assert!(manager.send_to_all(&msg).is_ok());
+    }
+
+    #[test]
+    fn test_send_raw_to_all_with_no_outputs() {
+        let manager = MidiIOManager::new();
+        let data = [0x90, 60, 100]; // Note On
+        // Sending to no outputs should succeed
+        assert!(manager.send_raw_to_all(&data).is_ok());
+    }
+
+    #[test]
+    fn test_send_to_nonexistent_port_returns_error() {
+        let manager = MidiIOManager::new();
+        let msg = MidiMessage::NoteOn { channel: 0, pitch: 60, velocity: 100 };
+        let result = manager.send_to("nonexistent", &msg);
+        assert!(matches!(result, Err(MidiError::PortNotFound(_))));
+    }
+
+    #[test]
+    fn test_send_raw_to_nonexistent_port_returns_error() {
+        let manager = MidiIOManager::new();
+        let data = [0x90, 60, 100];
+        let result = manager.send_raw_to("nonexistent", &data);
+        assert!(matches!(result, Err(MidiError::PortNotFound(_))));
+    }
 }
