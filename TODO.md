@@ -1,35 +1,53 @@
 # Hootenanny TODO
 
+## Incoming
+
+Dumping stuff here so we don't lose it.
+
+- let's keep a note - clap is too slow to be blocking for audio analyze, maybe it could include a job id for it, and only when asked to
+  with a param. also clap seems to be running on cpu. we'll pursue that in another session. also analyze could look at just how much of
+  file is sparse / 0's to help with this. a lot of our empty wavs are all zeroes. could maybe also do some band pass analysis in there
+  that's quick?
+
+### MIDI Validation Session (2026-01-20)
+
+**What worked:**
+- Full MIDI chain validated: `midi_send` → NiftyCASE → PCM2902 capture → CAS artifact
+- Audio capture confirmed with ffmpeg volumedetect: -18.2 dB mean (real audio) vs -91 dB (silence)
+- MIDI code improvements landed (10 commits): mutex safety, duplicate prevention, partial send failure handling, raw MIDI, publisher infrastructure
+
+**Gaps / Bugs found:**
+
+1. **Monitor UX confusion**: `audio_capture source=monitor` silently captures silence if `audio_monitor enabled=false`.
+   Could either auto-enable monitor when capturing from that source, or return a warning/error.
+
+2. **Job tracking lost job**: CLAP `audio_analyze` job timed out at 30s, then disappeared from `job_list` entirely,
+   but the Python process kept running (303 min CPU). Jobs should persist in list with failed/timeout status.
+
+3. **Missing tool: quick audio level check**: Had to shell out to `ffmpeg -af volumedetect` to verify audio wasn't silent.
+   Could add `audio_info` or `audio_stats` tool that returns peak/mean dB, duration, sample rate without needing GPU.
+
+4. **Beat detection silent failure**: `beats_detect` on silent audio just fails with no useful message.
+   Could detect silence first and return "audio appears silent" error.
+
+5. **No tool to cancel orphaned jobs**: `job_cancel` exists but if job disappears from list, no way to kill it.
+   Could add process tracking or `job_kill_all` for cleanup.
+
+
 ## Actionable
 
-### 1. Debug RAVE Streaming Audio Flow
-**Files:** `crates/chaosgarden/src/rave_streaming.rs`, `pipewire_output.rs`
-**Effort:** Debug session
-
-Audio not reaching Python RAVE service. Infrastructure is in place but `frames_processed: 0`.
-
-**Symptoms:**
-- `rave_stream_start` succeeds (Python binds ZMQ PAIR, chaosgarden connects)
-- Monitor audio captured: ✅ (569k samples)
-- Monitor reads in RT callback: ✅ (1026 reads)
-- Python RAVE frames_processed: ❌ (0)
-
-**Debug checklist:**
-1. Check ZMQ PAIR connection: `journalctl -u rave.service` / `chaosgarden.service`
-2. Verify `rave_active` check passes in RT callback (add tracing)
-3. Confirm `producer.write()` is called and returns > 0
-4. Check if RaveStreamingClient thread is running and reading from consumer
-5. Verify ZMQ send/recv in streaming loop
-
-**Possible issues:**
-- ZMQ PAIR not connecting (bind/connect timing)
-- RT callback `try_lock` always failing
-- Ring buffer producer/consumer mismatch
-- Python streaming loop not receiving data
+(none)
 
 ---
 
 ## Completed Work
+
+### RAVE Streaming RT Callback Fix
+**Completed**: 2026-01-14
+Fixed double `try_lock()` bug in RT callback that prevented audio from reaching RAVE.
+- Combined check-and-write into single lock scope
+- Added RT stats: `rave_writes`, `rave_samples_written`, `rave_reads`, `rave_samples_read`
+- Exposed stats in `rave_stream_status` response for debugging
 
 ### RAVE Streaming Audio Path Routing
 **Completed**: 2026-01-14
