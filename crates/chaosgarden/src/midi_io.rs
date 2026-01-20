@@ -48,6 +48,9 @@ pub enum MidiError {
 
     #[error("Port already connected: {0}")]
     AlreadyConnected(String),
+
+    #[error("Partial send failure: {0} of {1} outputs failed")]
+    PartialSendFailure(usize, usize),
 }
 
 /// Parse raw MIDI bytes into a MidiMessage
@@ -403,12 +406,25 @@ impl MidiIOManager {
     }
 
     /// Send to all connected outputs (useful for clock, transport)
+    ///
+    /// Continues sending to all outputs even if some fail.
+    /// Returns `Ok(())` if all sends succeed, or `PartialSendFailure` if any failed.
     pub fn send_to_all(&self, msg: &MidiMessage) -> Result<(), MidiError> {
         let outputs = self.outputs.lock().expect("midi outputs mutex poisoned");
+        let total = outputs.len();
+        let mut failures = 0;
+
         for output in outputs.iter() {
-            output.send(msg)?;
+            if output.send(msg).is_err() {
+                failures += 1;
+            }
         }
-        Ok(())
+
+        if failures == 0 {
+            Ok(())
+        } else {
+            Err(MidiError::PartialSendFailure(failures, total))
+        }
     }
 
     /// Send to a specific output by port name pattern
