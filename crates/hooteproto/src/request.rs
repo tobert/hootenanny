@@ -984,11 +984,11 @@ pub struct MidiDetachRequest {
 }
 
 /// Request to send a MIDI message
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MidiSendRequest {
     /// Target port pattern (None = all outputs)
     pub port_pattern: Option<String>,
-    /// MIDI message to send
+    /// MIDI message to send (required - no default)
     pub message: MidiMessageSpec,
 }
 
@@ -1036,11 +1036,6 @@ pub enum MidiMessageSpec {
     },
 }
 
-impl Default for MidiMessageSpec {
-    fn default() -> Self {
-        Self::NoteOff { channel: 0, pitch: 0 }
-    }
-}
 
 // =============================================================================
 // Tool Help Request Types
