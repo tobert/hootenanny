@@ -363,11 +363,21 @@ impl MidiIOManager {
     }
 
     /// Attach a MIDI input by port name pattern
+    ///
+    /// Returns an error if a port matching the pattern is already connected.
     pub fn attach_input(
         &self,
         port_pattern: &str,
         callback: MidiInputCallback,
     ) -> Result<String, MidiError> {
+        // Check for duplicate connection before opening
+        {
+            let inputs = self.inputs.lock().expect("midi inputs mutex poisoned");
+            if let Some(existing) = inputs.iter().find(|i| i.port_name.contains(port_pattern)) {
+                return Err(MidiError::AlreadyConnected(existing.port_name.clone()));
+            }
+        }
+
         let input = ActiveMidiInput::open(port_pattern, callback)?;
         let port_name = input.port_name.clone();
         self.inputs.lock().expect("midi inputs mutex poisoned").push(input);
@@ -375,7 +385,17 @@ impl MidiIOManager {
     }
 
     /// Attach a MIDI output by port name pattern
+    ///
+    /// Returns an error if a port matching the pattern is already connected.
     pub fn attach_output(&self, port_pattern: &str) -> Result<String, MidiError> {
+        // Check for duplicate connection before opening
+        {
+            let outputs = self.outputs.lock().expect("midi outputs mutex poisoned");
+            if let Some(existing) = outputs.iter().find(|o| o.port_name.contains(port_pattern)) {
+                return Err(MidiError::AlreadyConnected(existing.port_name.clone()));
+            }
+        }
+
         let output = ActiveMidiOutput::open(port_pattern)?;
         let port_name = output.port_name.clone();
         self.outputs.lock().expect("midi outputs mutex poisoned").push(output);
