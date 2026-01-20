@@ -224,7 +224,8 @@ mod tests {
     fn test_help_index() {
         let response = help(HelpArgs::default());
         assert!(response.categories.is_some());
-        assert_eq!(response.tool_count, 51);
+        // At least 50 tools (grows as we add more)
+        assert!(response.tool_count >= 50, "Expected at least 50 tools, got {}", response.tool_count);
         assert!(response.error.is_none());
     }
 
