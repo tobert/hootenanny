@@ -382,6 +382,36 @@ pub enum MidiMessage {
     },
 }
 
+/// Convert from garden MidiMessageSpec to internal MidiMessage
+///
+/// Note: Raw variant is not convertible (must be handled separately)
+impl TryFrom<&hooteproto::garden::MidiMessageSpec> for MidiMessage {
+    type Error = &'static str;
+
+    fn try_from(spec: &hooteproto::garden::MidiMessageSpec) -> Result<Self, Self::Error> {
+        match spec {
+            hooteproto::garden::MidiMessageSpec::NoteOn { channel, pitch, velocity } => {
+                Ok(MidiMessage::NoteOn { channel: *channel, pitch: *pitch, velocity: *velocity })
+            }
+            hooteproto::garden::MidiMessageSpec::NoteOff { channel, pitch } => {
+                Ok(MidiMessage::NoteOff { channel: *channel, pitch: *pitch })
+            }
+            hooteproto::garden::MidiMessageSpec::ControlChange { channel, controller, value } => {
+                Ok(MidiMessage::ControlChange { channel: *channel, controller: *controller, value: *value })
+            }
+            hooteproto::garden::MidiMessageSpec::ProgramChange { channel, program } => {
+                Ok(MidiMessage::ProgramChange { channel: *channel, program: *program })
+            }
+            hooteproto::garden::MidiMessageSpec::PitchBend { channel, value } => {
+                Ok(MidiMessage::PitchBend { channel: *channel, value: *value })
+            }
+            hooteproto::garden::MidiMessageSpec::Raw { .. } => {
+                Err("Raw MIDI messages cannot be converted to MidiMessage")
+            }
+        }
+    }
+}
+
 /// Buffer of MIDI events
 #[derive(Debug, Clone, Default)]
 pub struct MidiBuffer {

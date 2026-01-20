@@ -1012,55 +1012,31 @@ impl GardenDaemon {
     fn send_midi(&self, port_pattern: Option<&str>, message: &crate::ipc::MidiMessageSpec) -> ShellReply {
         use crate::primitives::MidiMessage;
 
-        // Convert IPC MidiMessageSpec to internal MidiMessage
-        let midi_msg = match message {
-            crate::ipc::MidiMessageSpec::NoteOn { channel, pitch, velocity } => {
-                MidiMessage::NoteOn {
-                    channel: *channel,
-                    pitch: *pitch,
-                    velocity: *velocity,
-                }
-            }
-            crate::ipc::MidiMessageSpec::NoteOff { channel, pitch } => {
-                MidiMessage::NoteOff {
-                    channel: *channel,
-                    pitch: *pitch,
-                }
-            }
-            crate::ipc::MidiMessageSpec::ControlChange { channel, controller, value } => {
-                MidiMessage::ControlChange {
-                    channel: *channel,
-                    controller: *controller,
-                    value: *value,
-                }
-            }
-            crate::ipc::MidiMessageSpec::ProgramChange { channel, program } => {
-                MidiMessage::ProgramChange {
-                    channel: *channel,
-                    program: *program,
-                }
-            }
-            crate::ipc::MidiMessageSpec::PitchBend { channel, value } => {
-                MidiMessage::PitchBend {
-                    channel: *channel,
-                    value: *value,
-                }
-            }
-            crate::ipc::MidiMessageSpec::Raw { bytes } => {
-                // Send raw MIDI bytes directly
-                let result = if let Some(pattern) = port_pattern {
-                    self.midi_manager.send_raw_to(pattern, bytes)
-                } else {
-                    self.midi_manager.send_raw_to_all(bytes)
-                };
-                return match result {
-                    Ok(()) => ShellReply::Ok {
-                        result: serde_json::Value::Null,
-                    },
-                    Err(e) => ShellReply::Error {
-                        error: format!("Failed to send raw MIDI: {}", e),
-                        traceback: None,
-                    },
+        // Handle raw MIDI separately (can't convert to MidiMessage)
+        if let crate::ipc::MidiMessageSpec::Raw { bytes } = message {
+            let result = if let Some(pattern) = port_pattern {
+                self.midi_manager.send_raw_to(pattern, bytes)
+            } else {
+                self.midi_manager.send_raw_to_all(bytes)
+            };
+            return match result {
+                Ok(()) => ShellReply::Ok {
+                    result: serde_json::Value::Null,
+                },
+                Err(e) => ShellReply::Error {
+                    error: format!("Failed to send raw MIDI: {}", e),
+                    traceback: None,
+                },
+            };
+        }
+
+        // Convert using TryFrom impl (all non-Raw variants)
+        let midi_msg: MidiMessage = match message.try_into() {
+            Ok(msg) => msg,
+            Err(e) => {
+                return ShellReply::Error {
+                    error: format!("Failed to convert MIDI message: {}", e),
+                    traceback: None,
                 };
             }
         };

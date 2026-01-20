@@ -252,6 +252,32 @@ pub enum MidiMessageSpec {
     },
 }
 
+/// Convert from MCP request MidiMessageSpec to garden MidiMessageSpec
+impl From<&crate::request::MidiMessageSpec> for MidiMessageSpec {
+    fn from(req: &crate::request::MidiMessageSpec) -> Self {
+        match req {
+            crate::request::MidiMessageSpec::NoteOn { channel, pitch, velocity } => {
+                MidiMessageSpec::NoteOn { channel: *channel, pitch: *pitch, velocity: *velocity }
+            }
+            crate::request::MidiMessageSpec::NoteOff { channel, pitch } => {
+                MidiMessageSpec::NoteOff { channel: *channel, pitch: *pitch }
+            }
+            crate::request::MidiMessageSpec::ControlChange { channel, controller, value } => {
+                MidiMessageSpec::ControlChange { channel: *channel, controller: *controller, value: *value }
+            }
+            crate::request::MidiMessageSpec::ProgramChange { channel, program } => {
+                MidiMessageSpec::ProgramChange { channel: *channel, program: *program }
+            }
+            crate::request::MidiMessageSpec::PitchBend { channel, value } => {
+                MidiMessageSpec::PitchBend { channel: *channel, value: *value }
+            }
+            crate::request::MidiMessageSpec::Raw { bytes } => {
+                MidiMessageSpec::Raw { bytes: bytes.clone() }
+            }
+        }
+    }
+}
+
 /// Information about a MIDI port
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MidiPortSpec {
