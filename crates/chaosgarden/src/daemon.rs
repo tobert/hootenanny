@@ -211,7 +211,9 @@ impl GardenDaemon {
             rave_streaming: Mutex::new(RaveStreamingClient::new()),
             rave_input_producer: Arc::new(Mutex::new(None::<AudioRingProducer>)),
             rave_output_consumer: Arc::new(Mutex::new(None::<AudioRingConsumer>)),
-            midi_manager: crate::midi_io::MidiIOManager::new(),
+            midi_manager: crate::midi_io::MidiIOManager::with_publisher(
+                Arc::new(crate::midi_io::LoggingMidiPublisher)
+            ),
         }
     }
 

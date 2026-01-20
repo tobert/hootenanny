@@ -11,6 +11,49 @@ use tracing::{debug, info};
 
 use crate::primitives::MidiMessage;
 
+/// Publisher for MIDI events (received messages, connection changes)
+///
+/// Implement this trait to receive MIDI events for broadcasting via IOPub
+/// or other notification mechanisms.
+pub trait MidiEventPublisher: Send + Sync {
+    /// Called when a MIDI message is received from hardware
+    fn publish_received(&self, port_name: &str, timestamp_us: u64, message: &MidiMessage);
+
+    /// Called when a MIDI port is connected
+    fn publish_connected(&self, port_name: &str, is_input: bool);
+
+    /// Called when a MIDI port is disconnected
+    fn publish_disconnected(&self, port_name: &str, is_input: bool);
+}
+
+/// No-op publisher that logs events (default when no publisher configured)
+pub struct LoggingMidiPublisher;
+
+impl MidiEventPublisher for LoggingMidiPublisher {
+    fn publish_received(&self, port_name: &str, timestamp_us: u64, message: &MidiMessage) {
+        debug!(
+            "MIDI received from {}: {:?} at {}µs",
+            port_name, message, timestamp_us
+        );
+    }
+
+    fn publish_connected(&self, port_name: &str, is_input: bool) {
+        info!(
+            "MIDI {} connected: {}",
+            if is_input { "input" } else { "output" },
+            port_name
+        );
+    }
+
+    fn publish_disconnected(&self, port_name: &str, is_input: bool) {
+        info!(
+            "MIDI {} disconnected: {}",
+            if is_input { "input" } else { "output" },
+            port_name
+        );
+    }
+}
+
 /// Information about a discovered MIDI port
 #[derive(Debug, Clone)]
 pub struct MidiPortInfo {
@@ -355,6 +398,8 @@ impl Drop for ActiveMidiOutput {
 pub struct MidiIOManager {
     inputs: Mutex<Vec<ActiveMidiInput>>,
     outputs: Mutex<Vec<ActiveMidiOutput>>,
+    /// Optional event publisher for IOPub broadcasting
+    publisher: Option<Arc<dyn MidiEventPublisher>>,
 }
 
 impl MidiIOManager {
@@ -362,7 +407,22 @@ impl MidiIOManager {
         Self {
             inputs: Mutex::new(Vec::new()),
             outputs: Mutex::new(Vec::new()),
+            publisher: None,
         }
+    }
+
+    /// Create a new manager with an event publisher
+    pub fn with_publisher(publisher: Arc<dyn MidiEventPublisher>) -> Self {
+        Self {
+            inputs: Mutex::new(Vec::new()),
+            outputs: Mutex::new(Vec::new()),
+            publisher: Some(publisher),
+        }
+    }
+
+    /// Set the event publisher
+    pub fn set_publisher(&mut self, publisher: Arc<dyn MidiEventPublisher>) {
+        self.publisher = Some(publisher);
     }
 
     /// Attach a MIDI input by port name pattern
@@ -384,6 +444,12 @@ impl MidiIOManager {
         let input = ActiveMidiInput::open(port_pattern, callback)?;
         let port_name = input.port_name.clone();
         self.inputs.lock().expect("midi inputs mutex poisoned").push(input);
+
+        // Publish connection event
+        if let Some(ref publisher) = self.publisher {
+            publisher.publish_connected(&port_name, true);
+        }
+
         Ok(port_name)
     }
 
@@ -402,6 +468,12 @@ impl MidiIOManager {
         let output = ActiveMidiOutput::open(port_pattern)?;
         let port_name = output.port_name.clone();
         self.outputs.lock().expect("midi outputs mutex poisoned").push(output);
+
+        // Publish connection event
+        if let Some(ref publisher) = self.publisher {
+            publisher.publish_connected(&port_name, false);
+        }
+
         Ok(port_name)
     }
 
@@ -473,7 +545,14 @@ impl MidiIOManager {
     pub fn detach_input(&self, port_pattern: &str) -> bool {
         let mut inputs = self.inputs.lock().expect("midi inputs mutex poisoned");
         if let Some(pos) = inputs.iter().position(|i| i.port_name.contains(port_pattern)) {
-            inputs.remove(pos);
+            let removed = inputs.remove(pos);
+            let port_name = removed.port_name.clone();
+            drop(inputs); // Release lock before publishing
+
+            // Publish disconnection event
+            if let Some(ref publisher) = self.publisher {
+                publisher.publish_disconnected(&port_name, true);
+            }
             true
         } else {
             false
@@ -484,7 +563,14 @@ impl MidiIOManager {
     pub fn detach_output(&self, port_pattern: &str) -> bool {
         let mut outputs = self.outputs.lock().expect("midi outputs mutex poisoned");
         if let Some(pos) = outputs.iter().position(|o| o.port_name.contains(port_pattern)) {
-            outputs.remove(pos);
+            let removed = outputs.remove(pos);
+            let port_name = removed.port_name.clone();
+            drop(outputs); // Release lock before publishing
+
+            // Publish disconnection event
+            if let Some(ref publisher) = self.publisher {
+                publisher.publish_disconnected(&port_name, false);
+            }
             true
         } else {
             false
