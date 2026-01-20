@@ -78,6 +78,11 @@ pub enum ToolResponse {
     GardenAudioSnapshot(GardenAudioSnapshotResponse),
     AudioCaptured(AudioCapturedResponse),
 
+    // === MIDI I/O ===
+    MidiPorts(MidiPortsResponse),
+    MidiAttached(MidiAttachedResponse),
+    MidiStatus(MidiStatusResponse),
+
     // === Graph ===
     GraphIdentity(GraphIdentityResponse),
     GraphIdentities(GraphIdentitiesResponse),
@@ -688,6 +693,44 @@ pub struct AudioCapturedResponse {
     pub content_hash: String,
     pub sample_rate: u32,
     pub duration_seconds: f32,
+}
+
+// =============================================================================
+// MIDI I/O Responses
+// =============================================================================
+
+/// Available MIDI ports
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiPortsResponse {
+    pub inputs: Vec<MidiPortInfo>,
+    pub outputs: Vec<MidiPortInfo>,
+}
+
+/// Information about a MIDI port
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiPortInfo {
+    pub index: usize,
+    pub name: String,
+}
+
+/// MIDI port attached response
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiAttachedResponse {
+    pub port_name: String,
+}
+
+/// MIDI I/O status
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiStatusResponse {
+    pub inputs: Vec<MidiConnectionInfo>,
+    pub outputs: Vec<MidiConnectionInfo>,
+}
+
+/// Status of a single MIDI connection
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiConnectionInfo {
+    pub port_name: String,
+    pub messages: u64,
 }
 
 // =============================================================================

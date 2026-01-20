@@ -179,6 +179,43 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             })))
         }
 
+        // === MIDI I/O Tools (direct ALSA for low latency) ===
+        "midi_list_ports" => Ok(Payload::ToolRequest(ToolRequest::MidiListPorts)),
+        "midi_input_attach" => {
+            let p: MidiAttachArgs = serde_json::from_value(args).context("Invalid midi_input_attach arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::MidiInputAttach(request::MidiAttachRequest {
+                port_pattern: p.port_pattern,
+            })))
+        }
+        "midi_input_detach" => {
+            let p: MidiDetachArgs = serde_json::from_value(args).context("Invalid midi_input_detach arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::MidiInputDetach(request::MidiDetachRequest {
+                port_pattern: p.port_pattern,
+            })))
+        }
+        "midi_output_attach" => {
+            let p: MidiAttachArgs = serde_json::from_value(args).context("Invalid midi_output_attach arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::MidiOutputAttach(request::MidiAttachRequest {
+                port_pattern: p.port_pattern,
+            })))
+        }
+        "midi_output_detach" => {
+            let p: MidiDetachArgs = serde_json::from_value(args).context("Invalid midi_output_detach arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::MidiOutputDetach(request::MidiDetachRequest {
+                port_pattern: p.port_pattern,
+            })))
+        }
+        "midi_send" => {
+            let p: MidiSendArgs = serde_json::from_value(args).context("Invalid midi_send arguments")?;
+            let message: request::MidiMessageSpec = serde_json::from_value(p.message)
+                .context("Invalid MIDI message specification")?;
+            Ok(Payload::ToolRequest(ToolRequest::MidiSend(request::MidiSendRequest {
+                port_pattern: p.port_pattern,
+                message,
+            })))
+        }
+        "midi_status" => Ok(Payload::ToolRequest(ToolRequest::MidiStatus)),
+
         // === Job Tools ===
         "job_list" => {
             let p: JobListArgs = serde_json::from_value(args).unwrap_or_default();
@@ -967,4 +1004,21 @@ struct RaveStreamStopArgs {
 #[derive(Debug, Deserialize)]
 struct RaveStreamStatusArgs {
     stream_id: String,
+}
+
+// === MIDI I/O Args ===
+#[derive(Debug, Default, Deserialize)]
+struct MidiAttachArgs {
+    port_pattern: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MidiDetachArgs {
+    port_pattern: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MidiSendArgs {
+    port_pattern: Option<String>,
+    message: serde_json::Value,
 }

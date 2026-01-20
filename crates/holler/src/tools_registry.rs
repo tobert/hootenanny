@@ -306,6 +306,106 @@ pub fn list_tools() -> Vec<ToolInfo> {
         },
 
         // ==========================================================================
+        // MIDI I/O Tools (direct ALSA for low latency)
+        // ==========================================================================
+        ToolInfo {
+            name: "midi_list_ports".to_string(),
+            description: "List available MIDI ports".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        ToolInfo {
+            name: "midi_input_attach".to_string(),
+            description: "Attach MIDI input port".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["port_pattern"],
+                "properties": {
+                    "port_pattern": {
+                        "type": "string",
+                        "description": "Port name pattern to match (e.g., 'NiftyCASE', 'BRAINS')"
+                    }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "midi_input_detach".to_string(),
+            description: "Detach MIDI input port".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["port_pattern"],
+                "properties": {
+                    "port_pattern": {
+                        "type": "string",
+                        "description": "Port name pattern to match"
+                    }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "midi_output_attach".to_string(),
+            description: "Attach MIDI output port".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["port_pattern"],
+                "properties": {
+                    "port_pattern": {
+                        "type": "string",
+                        "description": "Port name pattern to match (e.g., 'NiftyCASE', 'BRAINS')"
+                    }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "midi_output_detach".to_string(),
+            description: "Detach MIDI output port".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["port_pattern"],
+                "properties": {
+                    "port_pattern": {
+                        "type": "string",
+                        "description": "Port name pattern to match"
+                    }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "midi_send".to_string(),
+            description: "Send MIDI message to outputs".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["message"],
+                "properties": {
+                    "port_pattern": {
+                        "type": "string",
+                        "description": "Target port pattern (omit for all outputs)"
+                    },
+                    "message": {
+                        "type": "object",
+                        "description": "MIDI message to send",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "description": "Message type: note_on, note_off, control_change, program_change, pitch_bend"
+                            },
+                            "channel": {"type": "integer"},
+                            "pitch": {"type": "integer"},
+                            "velocity": {"type": "integer"},
+                            "controller": {"type": "integer"},
+                            "value": {"type": "integer"},
+                            "program": {"type": "integer"}
+                        }
+                    }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "midi_status".to_string(),
+            description: "Get MIDI I/O status".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        },
+
+        // ==========================================================================
         // Timeline Tools
         // ==========================================================================
         ToolInfo {

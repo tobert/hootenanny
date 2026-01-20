@@ -133,6 +133,25 @@ pub enum ToolRequest {
     GardenGetAudioSnapshot(GardenGetAudioSnapshotRequest),
     /// Capture audio from monitor input to CAS
     AudioCapture(AudioCaptureRequest),
+
+    // ==========================================================================
+    // MIDI I/O (direct ALSA for low latency)
+    // ==========================================================================
+    /// List available MIDI ports
+    MidiListPorts,
+    /// Attach MIDI input
+    MidiInputAttach(MidiAttachRequest),
+    /// Detach MIDI input
+    MidiInputDetach(MidiDetachRequest),
+    /// Attach MIDI output
+    MidiOutputAttach(MidiAttachRequest),
+    /// Detach MIDI output
+    MidiOutputDetach(MidiDetachRequest),
+    /// Send MIDI message
+    MidiSend(MidiSendRequest),
+    /// Get MIDI status
+    MidiStatus,
+
     /// Clear all regions
     GardenClearRegions,
 
@@ -263,6 +282,10 @@ impl ToolRequest {
             Self::GardenAttachAudio(_) | Self::GardenDetachAudio | Self::GardenAudioStatus => ToolTiming::AsyncShort,
             Self::GardenAttachInput(_) | Self::GardenDetachInput | Self::GardenInputStatus => ToolTiming::AsyncShort,
             Self::GardenSetMonitor(_) | Self::GardenGetAudioSnapshot(_) => ToolTiming::AsyncShort,
+            Self::MidiListPorts | Self::MidiStatus => ToolTiming::AsyncShort,
+            Self::MidiInputAttach(_) | Self::MidiInputDetach(_) => ToolTiming::AsyncShort,
+            Self::MidiOutputAttach(_) | Self::MidiOutputDetach(_) => ToolTiming::AsyncShort,
+            Self::MidiSend(_) => ToolTiming::AsyncShort,
             Self::AudioCapture(_) => ToolTiming::AsyncShort,
             Self::GetToolHelp(_) => ToolTiming::AsyncShort,
 
@@ -353,6 +376,13 @@ impl ToolRequest {
             Self::GardenInputStatus => "garden_input_status",
             Self::GardenSetMonitor(_) => "garden_set_monitor",
             Self::GardenGetAudioSnapshot(_) => "garden_get_audio_snapshot",
+            Self::MidiListPorts => "midi_list_ports",
+            Self::MidiInputAttach(_) => "midi_input_attach",
+            Self::MidiInputDetach(_) => "midi_input_detach",
+            Self::MidiOutputAttach(_) => "midi_output_attach",
+            Self::MidiOutputDetach(_) => "midi_output_detach",
+            Self::MidiSend(_) => "midi_send",
+            Self::MidiStatus => "midi_status",
             Self::GetToolHelp(_) => "get_tool_help",
             Self::JobStatus(_) => "job_status",
             Self::JobList(_) => "job_list",
@@ -933,6 +963,83 @@ pub struct AudioCaptureRequest {
     pub tags: Vec<String>,
     /// Creator identifier
     pub creator: Option<String>,
+}
+
+// =============================================================================
+// MIDI I/O Request Types
+// =============================================================================
+
+/// Request to attach a MIDI port (input or output)
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct MidiAttachRequest {
+    /// Port name pattern to match (e.g., "NiftyCASE", "BRAINS")
+    pub port_pattern: String,
+}
+
+/// Request to detach a MIDI port
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct MidiDetachRequest {
+    /// Port name pattern to match
+    pub port_pattern: String,
+}
+
+/// Request to send a MIDI message
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct MidiSendRequest {
+    /// Target port pattern (None = all outputs)
+    pub port_pattern: Option<String>,
+    /// MIDI message to send
+    pub message: MidiMessageSpec,
+}
+
+/// MIDI message specification (matches garden::MidiMessageSpec)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MidiMessageSpec {
+    NoteOff {
+        #[serde(default)]
+        channel: u8,
+        #[serde(default)]
+        pitch: u8,
+    },
+    NoteOn {
+        #[serde(default)]
+        channel: u8,
+        #[serde(default)]
+        pitch: u8,
+        #[serde(default)]
+        velocity: u8,
+    },
+    ControlChange {
+        #[serde(default)]
+        channel: u8,
+        #[serde(default)]
+        controller: u8,
+        #[serde(default)]
+        value: u8,
+    },
+    ProgramChange {
+        #[serde(default)]
+        channel: u8,
+        #[serde(default)]
+        program: u8,
+    },
+    PitchBend {
+        #[serde(default)]
+        channel: u8,
+        #[serde(default)]
+        value: i16,
+    },
+    Raw {
+        #[serde(default)]
+        bytes: Vec<u8>,
+    },
+}
+
+impl Default for MidiMessageSpec {
+    fn default() -> Self {
+        Self::NoteOff { channel: 0, pitch: 0 }
+    }
 }
 
 // =============================================================================

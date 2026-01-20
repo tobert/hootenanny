@@ -656,6 +656,59 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
         ToolRequest::GardenClearRegions => builder.reborrow().set_garden_clear_regions(()),
         ToolRequest::GetToolHelp(req) => builder.reborrow().init_get_tool_help().set_topic(req.topic.as_deref().unwrap_or("")),
 
+        // MIDI I/O - serialized via Cap'n Proto, then routed to chaosgarden
+        ToolRequest::MidiListPorts => builder.reborrow().set_midi_list_ports(()),
+        ToolRequest::MidiInputAttach(req) => {
+            builder.reborrow().init_midi_input_attach().set_port_pattern(&req.port_pattern);
+        }
+        ToolRequest::MidiInputDetach(req) => {
+            builder.reborrow().init_midi_input_detach().set_port_pattern(&req.port_pattern);
+        }
+        ToolRequest::MidiOutputAttach(req) => {
+            builder.reborrow().init_midi_output_attach().set_port_pattern(&req.port_pattern);
+        }
+        ToolRequest::MidiOutputDetach(req) => {
+            builder.reborrow().init_midi_output_detach().set_port_pattern(&req.port_pattern);
+        }
+        ToolRequest::MidiSend(req) => {
+            let mut b = builder.reborrow().init_midi_send();
+            b.set_port_pattern(req.port_pattern.as_deref().unwrap_or(""));
+            match &req.message {
+                MidiMessageSpec::NoteOn { channel, pitch, velocity } => {
+                    b.set_message_type("note_on");
+                    b.set_channel(*channel);
+                    b.set_pitch(*pitch);
+                    b.set_velocity(*velocity);
+                }
+                MidiMessageSpec::NoteOff { channel, pitch } => {
+                    b.set_message_type("note_off");
+                    b.set_channel(*channel);
+                    b.set_pitch(*pitch);
+                }
+                MidiMessageSpec::ControlChange { channel, controller, value } => {
+                    b.set_message_type("control_change");
+                    b.set_channel(*channel);
+                    b.set_controller(*controller);
+                    b.set_value(*value);
+                }
+                MidiMessageSpec::ProgramChange { channel, program } => {
+                    b.set_message_type("program_change");
+                    b.set_channel(*channel);
+                    b.set_program(*program);
+                }
+                MidiMessageSpec::PitchBend { channel, value } => {
+                    b.set_message_type("pitch_bend");
+                    b.set_channel(*channel);
+                    b.set_bend_value(*value);
+                }
+                MidiMessageSpec::Raw { bytes } => {
+                    b.set_message_type("raw");
+                    b.set_raw_bytes(bytes);
+                }
+            }
+        }
+        ToolRequest::MidiStatus => builder.reborrow().set_midi_status(()),
+
         ToolRequest::Ping => {
             // Should be handled by payload_to_capnp_payload
             return Err(capnp::Error::failed("ToolRequest::Ping passed to tool_request builder (should use envelope)".to_string()));
@@ -1155,6 +1208,70 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
                 stream_id: r.get_stream_id()?.to_str()?.to_string(),
             }))
         }
+
+        // MIDI I/O tools
+        tools_capnp::tool_request::MidiListPorts(()) => Ok(ToolRequest::MidiListPorts),
+        tools_capnp::tool_request::MidiInputAttach(m) => {
+            let m = m?;
+            Ok(ToolRequest::MidiInputAttach(MidiAttachRequest {
+                port_pattern: m.get_port_pattern()?.to_str()?.to_string(),
+            }))
+        }
+        tools_capnp::tool_request::MidiInputDetach(m) => {
+            let m = m?;
+            Ok(ToolRequest::MidiInputDetach(MidiDetachRequest {
+                port_pattern: m.get_port_pattern()?.to_str()?.to_string(),
+            }))
+        }
+        tools_capnp::tool_request::MidiOutputAttach(m) => {
+            let m = m?;
+            Ok(ToolRequest::MidiOutputAttach(MidiAttachRequest {
+                port_pattern: m.get_port_pattern()?.to_str()?.to_string(),
+            }))
+        }
+        tools_capnp::tool_request::MidiOutputDetach(m) => {
+            let m = m?;
+            Ok(ToolRequest::MidiOutputDetach(MidiDetachRequest {
+                port_pattern: m.get_port_pattern()?.to_str()?.to_string(),
+            }))
+        }
+        tools_capnp::tool_request::MidiSend(m) => {
+            let m = m?;
+            let msg_type = m.get_message_type()?.to_str()?;
+            let message = match msg_type {
+                "note_on" => MidiMessageSpec::NoteOn {
+                    channel: m.get_channel(),
+                    pitch: m.get_pitch(),
+                    velocity: m.get_velocity(),
+                },
+                "note_off" => MidiMessageSpec::NoteOff {
+                    channel: m.get_channel(),
+                    pitch: m.get_pitch(),
+                },
+                "control_change" => MidiMessageSpec::ControlChange {
+                    channel: m.get_channel(),
+                    controller: m.get_controller(),
+                    value: m.get_value(),
+                },
+                "program_change" => MidiMessageSpec::ProgramChange {
+                    channel: m.get_channel(),
+                    program: m.get_program(),
+                },
+                "pitch_bend" => MidiMessageSpec::PitchBend {
+                    channel: m.get_channel(),
+                    value: m.get_bend_value(),
+                },
+                "raw" => MidiMessageSpec::Raw {
+                    bytes: m.get_raw_bytes()?.to_vec(),
+                },
+                _ => return Err(capnp::Error::failed(format!("Unknown MIDI message type: {}", msg_type))),
+            };
+            Ok(ToolRequest::MidiSend(MidiSendRequest {
+                port_pattern: capnp_optional_string(m.get_port_pattern()?),
+                message,
+            }))
+        }
+        tools_capnp::tool_request::MidiStatus(()) => Ok(ToolRequest::MidiStatus),
 
         _ => Err(capnp::Error::failed("Unsupported ToolRequest variant".to_string())),
     }
@@ -2069,6 +2186,42 @@ fn response_to_capnp_tool_response(
             b.set_output_identity(&r.output_identity);
             b.set_frames_processed(r.frames_processed);
             b.set_latency_ms(r.latency_ms);
+        }
+
+        // MIDI I/O
+        ToolResponse::MidiPorts(r) => {
+            let mut b = builder.reborrow().init_midi_ports();
+            let mut inputs = b.reborrow().init_inputs(r.inputs.len() as u32);
+            for (i, port) in r.inputs.iter().enumerate() {
+                let mut p = inputs.reborrow().get(i as u32);
+                p.set_index(port.index as u32);
+                p.set_name(&port.name);
+            }
+            let mut outputs = b.reborrow().init_outputs(r.outputs.len() as u32);
+            for (i, port) in r.outputs.iter().enumerate() {
+                let mut p = outputs.reborrow().get(i as u32);
+                p.set_index(port.index as u32);
+                p.set_name(&port.name);
+            }
+        }
+        ToolResponse::MidiAttached(r) => {
+            let mut b = builder.reborrow().init_midi_attached();
+            b.set_port_name(&r.port_name);
+        }
+        ToolResponse::MidiStatus(r) => {
+            let mut b = builder.reborrow().init_midi_status();
+            let mut inputs = b.reborrow().init_inputs(r.inputs.len() as u32);
+            for (i, conn) in r.inputs.iter().enumerate() {
+                let mut c = inputs.reborrow().get(i as u32);
+                c.set_port_name(&conn.port_name);
+                c.set_messages(conn.messages);
+            }
+            let mut outputs = b.reborrow().init_outputs(r.outputs.len() as u32);
+            for (i, conn) in r.outputs.iter().enumerate() {
+                let mut c = outputs.reborrow().get(i as u32);
+                c.set_port_name(&conn.port_name);
+                c.set_messages(conn.messages);
+            }
         }
     }
     Ok(())
@@ -2993,6 +3146,62 @@ fn capnp_tool_response_to_response(
                 frames_processed: r.get_frames_processed(),
                 latency_ms: r.get_latency_ms(),
             }))
+        }
+
+        // MIDI I/O
+        Which::MidiPorts(r) => {
+            let r = r?;
+            let inputs = r
+                .get_inputs()?
+                .iter()
+                .map(|p| {
+                    Ok(MidiPortInfo {
+                        index: p.get_index() as usize,
+                        name: p.get_name()?.to_string()?,
+                    })
+                })
+                .collect::<capnp::Result<Vec<_>>>()?;
+            let outputs = r
+                .get_outputs()?
+                .iter()
+                .map(|p| {
+                    Ok(MidiPortInfo {
+                        index: p.get_index() as usize,
+                        name: p.get_name()?.to_string()?,
+                    })
+                })
+                .collect::<capnp::Result<Vec<_>>>()?;
+            Ok(ToolResponse::MidiPorts(MidiPortsResponse { inputs, outputs }))
+        }
+        Which::MidiAttached(r) => {
+            let r = r?;
+            Ok(ToolResponse::MidiAttached(MidiAttachedResponse {
+                port_name: r.get_port_name()?.to_string()?,
+            }))
+        }
+        Which::MidiStatus(r) => {
+            let r = r?;
+            let inputs = r
+                .get_inputs()?
+                .iter()
+                .map(|c| {
+                    Ok(MidiConnectionInfo {
+                        port_name: c.get_port_name()?.to_string()?,
+                        messages: c.get_messages(),
+                    })
+                })
+                .collect::<capnp::Result<Vec<_>>>()?;
+            let outputs = r
+                .get_outputs()?
+                .iter()
+                .map(|c| {
+                    Ok(MidiConnectionInfo {
+                        port_name: c.get_port_name()?.to_string()?,
+                        messages: c.get_messages(),
+                    })
+                })
+                .collect::<capnp::Result<Vec<_>>>()?;
+            Ok(ToolResponse::MidiStatus(MidiStatusResponse { inputs, outputs }))
         }
     }
 }

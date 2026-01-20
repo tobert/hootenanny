@@ -124,7 +124,38 @@ struct ToolRequest {
     raveStreamStart @77 :RaveStreamStart;
     raveStreamStop @78 :RaveStreamStop;
     raveStreamStatus @79 :RaveStreamStatus;
+
+    # === MIDI I/O Tools (routed to chaosgarden) ===
+    midiListPorts @82 :Void;
+    midiInputAttach @83 :MidiAttach;
+    midiInputDetach @84 :MidiDetach;
+    midiOutputAttach @85 :MidiAttach;
+    midiOutputDetach @86 :MidiDetach;
+    midiSend @87 :MidiSend;
+    midiStatus @88 :Void;
   }
+}
+
+# === MIDI I/O Types ===
+struct MidiAttach {
+  portPattern @0 :Text;
+}
+
+struct MidiDetach {
+  portPattern @0 :Text;
+}
+
+struct MidiSend {
+  portPattern @0 :Text;  # Optional, empty = all outputs
+  messageType @1 :Text;  # note_on, note_off, control_change, etc.
+  channel @2 :UInt8;
+  pitch @3 :UInt8;
+  velocity @4 :UInt8;
+  controller @5 :UInt8;
+  value @6 :UInt8;
+  program @7 :UInt8;
+  bendValue @8 :Int16;
+  rawBytes @9 :Data;
 }
 
 # === CAS Types ===

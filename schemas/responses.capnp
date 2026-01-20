@@ -118,6 +118,11 @@ struct ToolResponse {
     raveStreamStarted @59 :RaveStreamStartedResponse;
     raveStreamStopped @60 :RaveStreamStoppedResponse;
     raveStreamStatus @61 :RaveStreamStatusResponse;
+
+    # MIDI I/O
+    midiPorts @64 :MidiPortsResponse;
+    midiAttached @65 :MidiAttachedResponse;
+    midiStatus @66 :MidiStatusResponse;
   }
 }
 
@@ -759,4 +764,32 @@ struct RaveStreamStatusResponse {
   outputIdentity @4 :Text;
   framesProcessed @5 :UInt64;   # Number of audio frames processed
   latencyMs @6 :UInt32;
+}
+
+# =============================================================================
+# MIDI I/O Responses
+# =============================================================================
+
+struct MidiPortInfo {
+  index @0 :UInt32;
+  name @1 :Text;
+}
+
+struct MidiPortsResponse {
+  inputs @0 :List(MidiPortInfo);
+  outputs @1 :List(MidiPortInfo);
+}
+
+struct MidiAttachedResponse {
+  portName @0 :Text;
+}
+
+struct MidiConnectionInfo {
+  portName @0 :Text;
+  messages @1 :UInt64;
+}
+
+struct MidiStatusResponse {
+  inputs @0 :List(MidiConnectionInfo);
+  outputs @1 :List(MidiConnectionInfo);
 }

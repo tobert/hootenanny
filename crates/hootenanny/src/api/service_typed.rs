@@ -3664,5 +3664,142 @@ impl EventDualityServer {
             _ => Err(ToolError::internal("Unexpected payload type")),
         }
     }
+
+    // =========================================================================
+    // MIDI I/O (direct ALSA via chaosgarden)
+    // =========================================================================
+
+    /// List available MIDI input and output ports.
+    pub async fn midi_list_ports_typed(
+        &self,
+    ) -> Result<hooteproto::responses::MidiPortsResponse, ToolError> {
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
+
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
+
+        match manager.tool_request(ToolRequest::MidiListPorts).await {
+            Ok(ToolResponse::MidiPorts(resp)) => Ok(resp),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("List MIDI ports failed: {}", e))),
+        }
+    }
+
+    /// Attach a MIDI input by port name pattern.
+    pub async fn midi_input_attach_typed(
+        &self,
+        request: hooteproto::request::MidiAttachRequest,
+    ) -> Result<hooteproto::responses::MidiAttachedResponse, ToolError> {
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
+
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
+
+        match manager.tool_request(ToolRequest::MidiInputAttach(request)).await {
+            Ok(ToolResponse::MidiAttached(resp)) => Ok(resp),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Attach MIDI input failed: {}", e))),
+        }
+    }
+
+    /// Detach a MIDI input by port name pattern.
+    pub async fn midi_input_detach_typed(
+        &self,
+        request: hooteproto::request::MidiDetachRequest,
+    ) -> Result<hooteproto::responses::MidiStatusResponse, ToolError> {
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
+
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
+
+        // Detach returns Ack, then fetch status
+        match manager.tool_request(ToolRequest::MidiInputDetach(request)).await {
+            Ok(ToolResponse::Ack(_)) => self.midi_status_typed().await,
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Detach MIDI input failed: {}", e))),
+        }
+    }
+
+    /// Attach a MIDI output by port name pattern.
+    pub async fn midi_output_attach_typed(
+        &self,
+        request: hooteproto::request::MidiAttachRequest,
+    ) -> Result<hooteproto::responses::MidiAttachedResponse, ToolError> {
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
+
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
+
+        match manager.tool_request(ToolRequest::MidiOutputAttach(request)).await {
+            Ok(ToolResponse::MidiAttached(resp)) => Ok(resp),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Attach MIDI output failed: {}", e))),
+        }
+    }
+
+    /// Detach a MIDI output by port name pattern.
+    pub async fn midi_output_detach_typed(
+        &self,
+        request: hooteproto::request::MidiDetachRequest,
+    ) -> Result<hooteproto::responses::MidiStatusResponse, ToolError> {
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
+
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
+
+        // Detach returns Ack, then fetch status
+        match manager.tool_request(ToolRequest::MidiOutputDetach(request)).await {
+            Ok(ToolResponse::Ack(_)) => self.midi_status_typed().await,
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Detach MIDI output failed: {}", e))),
+        }
+    }
+
+    /// Send a MIDI message to an output port.
+    pub async fn midi_send_typed(
+        &self,
+        request: hooteproto::request::MidiSendRequest,
+    ) -> Result<hooteproto::responses::AckResponse, ToolError> {
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
+
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
+
+        match manager.tool_request(ToolRequest::MidiSend(request)).await {
+            Ok(ToolResponse::Ack(resp)) => Ok(resp),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Send MIDI failed: {}", e))),
+        }
+    }
+
+    /// Get MIDI I/O status (active connections and message counts).
+    pub async fn midi_status_typed(
+        &self,
+    ) -> Result<hooteproto::responses::MidiStatusResponse, ToolError> {
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
+
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
+
+        match manager.tool_request(ToolRequest::MidiStatus).await {
+            Ok(ToolResponse::MidiStatus(resp)) => Ok(resp),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("Get MIDI status failed: {}", e))),
+        }
+    }
 }
 

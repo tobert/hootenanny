@@ -711,6 +711,50 @@ impl TypedDispatcher {
                 }
             }
 
+            // === MIDI I/O (direct ALSA via chaosgarden) ===
+            ToolRequest::MidiListPorts => {
+                match self.server.midi_list_ports_typed().await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::MidiPorts(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::MidiInputAttach(req) => {
+                match self.server.midi_input_attach_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::MidiAttached(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::MidiInputDetach(req) => {
+                match self.server.midi_input_detach_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::MidiStatus(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::MidiOutputAttach(req) => {
+                match self.server.midi_output_attach_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::MidiAttached(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::MidiOutputDetach(req) => {
+                match self.server.midi_output_detach_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::MidiStatus(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::MidiSend(req) => {
+                match self.server.midi_send_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::Ack(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::MidiStatus => {
+                match self.server.midi_status_typed().await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::MidiStatus(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+
             // === AsyncLong tools (routed via dispatch_async_return_job_id) ===
             ToolRequest::MusicgenGenerate(_)
             | ToolRequest::YueGenerate(_)

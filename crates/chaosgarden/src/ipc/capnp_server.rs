@@ -412,6 +412,37 @@ impl CapnpGardenServer {
             ToolRequest::GardenSetMonitor(r) => ShellRequest::SetMonitor { enabled: r.enabled, gain: r.gain },
             ToolRequest::GardenGetAudioSnapshot(r) => ShellRequest::GetAudioSnapshot { frames: r.frames },
 
+            // MIDI I/O (direct ALSA)
+            ToolRequest::MidiListPorts => ShellRequest::ListMidiPorts,
+            ToolRequest::MidiInputAttach(r) => ShellRequest::AttachMidiInput { port_pattern: r.port_pattern.clone() },
+            ToolRequest::MidiInputDetach(r) => ShellRequest::DetachMidiInput { port_pattern: r.port_pattern.clone() },
+            ToolRequest::MidiOutputAttach(r) => ShellRequest::AttachMidiOutput { port_pattern: r.port_pattern.clone() },
+            ToolRequest::MidiOutputDetach(r) => ShellRequest::DetachMidiOutput { port_pattern: r.port_pattern.clone() },
+            ToolRequest::MidiSend(r) => {
+                let msg = match &r.message {
+                    hooteproto::request::MidiMessageSpec::NoteOn { channel, pitch, velocity } => {
+                        hooteproto::garden::MidiMessageSpec::NoteOn { channel: *channel, pitch: *pitch, velocity: *velocity }
+                    }
+                    hooteproto::request::MidiMessageSpec::NoteOff { channel, pitch } => {
+                        hooteproto::garden::MidiMessageSpec::NoteOff { channel: *channel, pitch: *pitch }
+                    }
+                    hooteproto::request::MidiMessageSpec::ControlChange { channel, controller, value } => {
+                        hooteproto::garden::MidiMessageSpec::ControlChange { channel: *channel, controller: *controller, value: *value }
+                    }
+                    hooteproto::request::MidiMessageSpec::ProgramChange { channel, program } => {
+                        hooteproto::garden::MidiMessageSpec::ProgramChange { channel: *channel, program: *program }
+                    }
+                    hooteproto::request::MidiMessageSpec::PitchBend { channel, value } => {
+                        hooteproto::garden::MidiMessageSpec::PitchBend { channel: *channel, value: *value }
+                    }
+                    hooteproto::request::MidiMessageSpec::Raw { bytes } => {
+                        hooteproto::garden::MidiMessageSpec::Raw { bytes: bytes.clone() }
+                    }
+                };
+                ShellRequest::SendMidi { port_pattern: r.port_pattern.clone(), message: msg }
+            }
+            ToolRequest::MidiStatus => ShellRequest::GetMidiStatus,
+
             // GardenQuery is handled by hootenanny, not chaosgarden
             ToolRequest::GardenQuery(_) => {
                 return Payload::Error {
@@ -526,6 +557,45 @@ fn shell_reply_to_payload(reply: hooteproto::garden::ShellReply) -> Payload {
         }
         ShellReply::PendingApprovals { approvals: _ } => {
             Payload::TypedResponse(ResponseEnvelope::ack("pending_approvals".to_string()))
+        }
+        // MIDI I/O responses
+        ShellReply::MidiPorts { inputs, outputs } => {
+            Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::MidiPorts(hooteproto::responses::MidiPortsResponse {
+                    inputs: inputs.into_iter().map(|p| hooteproto::responses::MidiPortInfo {
+                        index: p.index,
+                        name: p.name,
+                    }).collect(),
+                    outputs: outputs.into_iter().map(|p| hooteproto::responses::MidiPortInfo {
+                        index: p.index,
+                        name: p.name,
+                    }).collect(),
+                })
+            ))
+        }
+        ShellReply::MidiInputAttached { port_name } => {
+            Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::MidiAttached(hooteproto::responses::MidiAttachedResponse { port_name })
+            ))
+        }
+        ShellReply::MidiOutputAttached { port_name } => {
+            Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::MidiAttached(hooteproto::responses::MidiAttachedResponse { port_name })
+            ))
+        }
+        ShellReply::MidiStatus { inputs, outputs } => {
+            Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::MidiStatus(hooteproto::responses::MidiStatusResponse {
+                    inputs: inputs.into_iter().map(|c| hooteproto::responses::MidiConnectionInfo {
+                        port_name: c.port_name,
+                        messages: c.messages,
+                    }).collect(),
+                    outputs: outputs.into_iter().map(|c| hooteproto::responses::MidiConnectionInfo {
+                        port_name: c.port_name,
+                        messages: c.messages,
+                    }).collect(),
+                })
+            ))
         }
         ShellReply::Error { error, traceback } => {
             Payload::Error {

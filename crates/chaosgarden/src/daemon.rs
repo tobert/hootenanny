@@ -137,6 +137,9 @@ pub struct GardenDaemon {
     rave_input_producer: Arc<Mutex<Option<AudioRingProducer>>>,
     // Consumer: read RAVE-processed audio for mixing
     rave_output_consumer: Arc<Mutex<Option<AudioRingConsumer>>>,
+
+    // MIDI I/O manager (direct ALSA for low latency)
+    midi_manager: crate::midi_io::MidiIOManager,
 }
 
 impl GardenDaemon {
@@ -208,6 +211,7 @@ impl GardenDaemon {
             rave_streaming: Mutex::new(RaveStreamingClient::new()),
             rave_input_producer: Arc::new(Mutex::new(None::<AudioRingProducer>)),
             rave_output_consumer: Arc::new(Mutex::new(None::<AudioRingConsumer>)),
+            midi_manager: crate::midi_io::MidiIOManager::new(),
         }
     }
 
@@ -897,6 +901,198 @@ impl GardenDaemon {
         }
     }
 
+    // === MIDI I/O Methods ===
+
+    /// List available MIDI ports
+    fn list_midi_ports(&self) -> ShellReply {
+        let inputs = match crate::midi_io::list_input_ports() {
+            Ok(ports) => ports
+                .into_iter()
+                .map(|p| crate::ipc::MidiPortSpec {
+                    index: p.index,
+                    name: p.name,
+                })
+                .collect(),
+            Err(e) => {
+                return ShellReply::Error {
+                    error: format!("Failed to list MIDI inputs: {}", e),
+                    traceback: None,
+                };
+            }
+        };
+
+        let outputs = match crate::midi_io::list_output_ports() {
+            Ok(ports) => ports
+                .into_iter()
+                .map(|p| crate::ipc::MidiPortSpec {
+                    index: p.index,
+                    name: p.name,
+                })
+                .collect(),
+            Err(e) => {
+                return ShellReply::Error {
+                    error: format!("Failed to list MIDI outputs: {}", e),
+                    traceback: None,
+                };
+            }
+        };
+
+        ShellReply::MidiPorts { inputs, outputs }
+    }
+
+    /// Attach a MIDI input by port pattern
+    fn attach_midi_input(&self, port_pattern: &str) -> ShellReply {
+        // For now, just log received MIDI - later we'll publish to IOPub
+        let callback: crate::midi_io::MidiInputCallback = Box::new(move |msg| {
+            debug!(
+                "MIDI received: {:?} (timestamp: {}µs)",
+                msg.message, msg.timestamp_us
+            );
+        });
+
+        match self.midi_manager.attach_input(port_pattern, callback) {
+            Ok(port_name) => {
+                info!("Attached MIDI input: {}", port_name);
+                ShellReply::MidiInputAttached { port_name }
+            }
+            Err(e) => ShellReply::Error {
+                error: format!("Failed to attach MIDI input: {}", e),
+                traceback: None,
+            },
+        }
+    }
+
+    /// Attach a MIDI output by port pattern
+    fn attach_midi_output(&self, port_pattern: &str) -> ShellReply {
+        match self.midi_manager.attach_output(port_pattern) {
+            Ok(port_name) => {
+                info!("Attached MIDI output: {}", port_name);
+                ShellReply::MidiOutputAttached { port_name }
+            }
+            Err(e) => ShellReply::Error {
+                error: format!("Failed to attach MIDI output: {}", e),
+                traceback: None,
+            },
+        }
+    }
+
+    /// Detach a MIDI input
+    fn detach_midi_input(&self, port_pattern: &str) -> ShellReply {
+        if self.midi_manager.detach_input(port_pattern) {
+            info!("Detached MIDI input matching: {}", port_pattern);
+            ShellReply::Ok {
+                result: serde_json::Value::Null,
+            }
+        } else {
+            ShellReply::Error {
+                error: format!("No MIDI input matching '{}' to detach", port_pattern),
+                traceback: None,
+            }
+        }
+    }
+
+    /// Detach a MIDI output
+    fn detach_midi_output(&self, port_pattern: &str) -> ShellReply {
+        if self.midi_manager.detach_output(port_pattern) {
+            info!("Detached MIDI output matching: {}", port_pattern);
+            ShellReply::Ok {
+                result: serde_json::Value::Null,
+            }
+        } else {
+            ShellReply::Error {
+                error: format!("No MIDI output matching '{}' to detach", port_pattern),
+                traceback: None,
+            }
+        }
+    }
+
+    /// Send a MIDI message to connected outputs
+    fn send_midi(&self, port_pattern: Option<&str>, message: &crate::ipc::MidiMessageSpec) -> ShellReply {
+        use crate::primitives::MidiMessage;
+
+        // Convert IPC MidiMessageSpec to internal MidiMessage
+        let midi_msg = match message {
+            crate::ipc::MidiMessageSpec::NoteOn { channel, pitch, velocity } => {
+                MidiMessage::NoteOn {
+                    channel: *channel,
+                    pitch: *pitch,
+                    velocity: *velocity,
+                }
+            }
+            crate::ipc::MidiMessageSpec::NoteOff { channel, pitch } => {
+                MidiMessage::NoteOff {
+                    channel: *channel,
+                    pitch: *pitch,
+                }
+            }
+            crate::ipc::MidiMessageSpec::ControlChange { channel, controller, value } => {
+                MidiMessage::ControlChange {
+                    channel: *channel,
+                    controller: *controller,
+                    value: *value,
+                }
+            }
+            crate::ipc::MidiMessageSpec::ProgramChange { channel, program } => {
+                MidiMessage::ProgramChange {
+                    channel: *channel,
+                    program: *program,
+                }
+            }
+            crate::ipc::MidiMessageSpec::PitchBend { channel, value } => {
+                MidiMessage::PitchBend {
+                    channel: *channel,
+                    value: *value,
+                }
+            }
+            crate::ipc::MidiMessageSpec::Raw { bytes: _ } => {
+                // Raw MIDI send not yet implemented - need to expose send_raw on manager
+                return ShellReply::Error {
+                    error: "Raw MIDI send not yet implemented".to_string(),
+                    traceback: None,
+                };
+            }
+        };
+
+        let result = if let Some(pattern) = port_pattern {
+            self.midi_manager.send_to(pattern, &midi_msg)
+        } else {
+            self.midi_manager.send_to_all(&midi_msg)
+        };
+
+        match result {
+            Ok(()) => ShellReply::Ok {
+                result: serde_json::Value::Null,
+            },
+            Err(e) => ShellReply::Error {
+                error: format!("Failed to send MIDI: {}", e),
+                traceback: None,
+            },
+        }
+    }
+
+    /// Get MIDI I/O status
+    fn get_midi_status(&self) -> ShellReply {
+        let status = self.midi_manager.status();
+        ShellReply::MidiStatus {
+            inputs: status
+                .inputs
+                .into_iter()
+                .map(|s| crate::ipc::MidiConnectionSpec {
+                    port_name: s.port_name,
+                    messages: s.messages,
+                })
+                .collect(),
+            outputs: status
+                .outputs
+                .into_iter()
+                .map(|s| crate::ipc::MidiConnectionSpec {
+                    port_name: s.port_name,
+                    messages: s.messages,
+                })
+                .collect(),
+        }
+    }
+
     // === RAVE Streaming Methods ===
 
     /// Start a RAVE streaming session
@@ -1011,6 +1207,22 @@ impl GardenDaemon {
     fn get_rave_streaming_status(&self, stream_id: String) -> ShellReply {
         let rave = self.rave_streaming.lock().unwrap();
 
+        // Get RT stats from audio output (if attached)
+        let (rt_rave_writes, rt_rave_samples_written, rt_rave_reads, rt_rave_samples_read) = {
+            let output = self.audio_output.read().unwrap();
+            if let Some(ref stream) = *output {
+                let stats = stream.stats();
+                (
+                    stats.rave_writes.load(Ordering::Relaxed),
+                    stats.rave_samples_written.load(Ordering::Relaxed),
+                    stats.rave_reads.load(Ordering::Relaxed),
+                    stats.rave_samples_read.load(Ordering::Relaxed),
+                )
+            } else {
+                (0, 0, 0, 0)
+            }
+        };
+
         match rave.session() {
             Some(session) if session.stream_id == stream_id => {
                 let stats = rave.stats();
@@ -1026,6 +1238,10 @@ impl GardenDaemon {
                     output_identity: session.output_identity.clone(),
                     frames_processed,
                     latency_ms,
+                    rt_rave_writes,
+                    rt_rave_samples_written,
+                    rt_rave_reads,
+                    rt_rave_samples_read,
                 }
             }
             Some(session) => ShellReply::Error {
@@ -1040,6 +1256,10 @@ impl GardenDaemon {
                 output_identity: String::new(),
                 frames_processed: 0,
                 latency_ms: 0,
+                rt_rave_writes,
+                rt_rave_samples_written,
+                rt_rave_reads,
+                rt_rave_samples_read,
             },
         }
     }
@@ -1587,6 +1807,29 @@ impl GardenDaemon {
             }
             ShellRequest::RaveStreamStatus { stream_id } => {
                 self.get_rave_streaming_status(stream_id)
+            }
+
+            // MIDI I/O (direct ALSA)
+            ShellRequest::ListMidiPorts => {
+                self.list_midi_ports()
+            }
+            ShellRequest::AttachMidiInput { port_pattern } => {
+                self.attach_midi_input(&port_pattern)
+            }
+            ShellRequest::AttachMidiOutput { port_pattern } => {
+                self.attach_midi_output(&port_pattern)
+            }
+            ShellRequest::DetachMidiInput { port_pattern } => {
+                self.detach_midi_input(&port_pattern)
+            }
+            ShellRequest::DetachMidiOutput { port_pattern } => {
+                self.detach_midi_output(&port_pattern)
+            }
+            ShellRequest::SendMidi { port_pattern, message } => {
+                self.send_midi(port_pattern.as_deref(), &message)
+            }
+            ShellRequest::GetMidiStatus => {
+                self.get_midi_status()
             }
 
             // Unhandled requests

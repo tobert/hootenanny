@@ -220,6 +220,52 @@ pub struct PortRef {
     pub port_name: String,
 }
 
+/// MIDI message specification for shell commands
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MidiMessageSpec {
+    NoteOn {
+        channel: u8,
+        pitch: u8,
+        velocity: u8,
+    },
+    NoteOff {
+        channel: u8,
+        pitch: u8,
+    },
+    ControlChange {
+        channel: u8,
+        controller: u8,
+        value: u8,
+    },
+    ProgramChange {
+        channel: u8,
+        program: u8,
+    },
+    PitchBend {
+        channel: u8,
+        value: i16,
+    },
+    /// Raw MIDI bytes (for sysex, clock, etc.)
+    Raw {
+        bytes: Vec<u8>,
+    },
+}
+
+/// Information about a MIDI port
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MidiPortSpec {
+    pub index: usize,
+    pub name: String,
+}
+
+/// Status of a MIDI connection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MidiConnectionSpec {
+    pub port_name: String,
+    pub messages: u64,
+}
+
 /// Summary of a region for queries
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegionSummary {
@@ -461,6 +507,37 @@ pub enum ShellRequest {
     RaveStreamStatus {
         stream_id: String,
     },
+
+    // MIDI I/O (direct ALSA for low latency)
+    /// List available MIDI ports
+    ListMidiPorts,
+    /// Attach a MIDI input by port name pattern
+    AttachMidiInput {
+        /// Port name pattern to match (e.g., "NiftyCASE", "BRAINS")
+        port_pattern: String,
+    },
+    /// Attach a MIDI output by port name pattern
+    AttachMidiOutput {
+        /// Port name pattern to match
+        port_pattern: String,
+    },
+    /// Detach a MIDI input by port name pattern
+    DetachMidiInput {
+        port_pattern: String,
+    },
+    /// Detach a MIDI output by port name pattern
+    DetachMidiOutput {
+        port_pattern: String,
+    },
+    /// Send MIDI message to connected outputs
+    SendMidi {
+        /// Target port pattern (None = all outputs)
+        port_pattern: Option<String>,
+        /// MIDI message to send
+        message: MidiMessageSpec,
+    },
+    /// Get MIDI I/O status
+    GetMidiStatus,
 }
 
 /// Stream format definition for audio/MIDI capture
@@ -601,10 +678,40 @@ pub enum ShellReply {
         model: String,
         input_identity: String,
         output_identity: String,
-        /// Frames processed since session start
+        /// Frames processed since session start (from RAVE client thread)
         frames_processed: u64,
         /// Expected latency in milliseconds
         latency_ms: u32,
+        /// RT callback stats: writes to RAVE input ring
+        #[serde(default)]
+        rt_rave_writes: u64,
+        /// RT callback stats: samples written to RAVE input ring
+        #[serde(default)]
+        rt_rave_samples_written: u64,
+        /// RT callback stats: reads from RAVE output ring
+        #[serde(default)]
+        rt_rave_reads: u64,
+        /// RT callback stats: samples read from RAVE output ring
+        #[serde(default)]
+        rt_rave_samples_read: u64,
+    },
+    /// Available MIDI ports
+    MidiPorts {
+        inputs: Vec<MidiPortSpec>,
+        outputs: Vec<MidiPortSpec>,
+    },
+    /// MIDI input attached
+    MidiInputAttached {
+        port_name: String,
+    },
+    /// MIDI output attached
+    MidiOutputAttached {
+        port_name: String,
+    },
+    /// MIDI I/O status
+    MidiStatus {
+        inputs: Vec<MidiConnectionSpec>,
+        outputs: Vec<MidiConnectionSpec>,
     },
 }
 
@@ -764,6 +871,33 @@ pub enum IOPubEvent {
         stream_uri: String,
         error: String,
         recoverable: bool,
+    },
+
+    // MIDI events
+    /// MIDI message received from hardware
+    MidiReceived {
+        /// Port name the message came from
+        port_name: String,
+        /// Timestamp in microseconds
+        timestamp_us: u64,
+        /// The MIDI message
+        message: MidiMessageSpec,
+    },
+    /// MIDI input connected
+    MidiInputConnected {
+        port_name: String,
+    },
+    /// MIDI input disconnected
+    MidiInputDisconnected {
+        port_name: String,
+    },
+    /// MIDI output connected
+    MidiOutputConnected {
+        port_name: String,
+    },
+    /// MIDI output disconnected
+    MidiOutputDisconnected {
+        port_name: String,
     },
 }
 
