@@ -224,16 +224,25 @@ impl JobStore {
         hooteproto::responses::JobSummary { pending, running }
     }
 
-    /// Remove completed/failed/cancelled jobs older than the given age.
+    /// Remove completed/failed/cancelled jobs older than the given ages.
+    ///
+    /// Uses `success_max_age` for successfully completed jobs and `failed_max_age`
+    /// for failed/cancelled jobs (which persist longer for debugging).
     ///
     /// Returns the number of jobs removed.
-    pub fn cleanup_completed_older_than(&self, max_age_secs: u64) -> usize {
+    pub fn cleanup_completed_older_than(&self, success_max_age: u64) -> usize {
+        self.cleanup_with_ttls(success_max_age, FAILED_JOB_TTL_SECS)
+    }
+
+    /// Remove completed/failed/cancelled jobs with configurable TTLs per state.
+    fn cleanup_with_ttls(&self, success_max_age: u64, failed_max_age: u64) -> usize {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
 
-        let cutoff = now.saturating_sub(max_age_secs);
+        let success_cutoff = now.saturating_sub(success_max_age);
+        let failed_cutoff = now.saturating_sub(failed_max_age);
 
         let mut jobs = self.jobs.lock().unwrap();
         let mut handles = self.handles.lock().unwrap();
@@ -241,16 +250,18 @@ impl JobStore {
         let to_remove: Vec<String> = jobs
             .iter()
             .filter(|(_, job)| {
-                // Only remove terminal states
-                let is_terminal = matches!(
-                    job.status,
-                    JobStatus::Complete | JobStatus::Failed | JobStatus::Cancelled
-                );
+                let Some(completed_at) = job.completed_at else {
+                    return false;
+                };
 
-                // Check if completed before cutoff
-                let is_old = job.completed_at.is_some_and(|t| t < cutoff);
-
-                is_terminal && is_old
+                match job.status {
+                    // Successful jobs use shorter TTL
+                    JobStatus::Complete => completed_at < success_cutoff,
+                    // Failed/cancelled jobs persist longer for debugging
+                    JobStatus::Failed | JobStatus::Cancelled => completed_at < failed_cutoff,
+                    // Non-terminal states are never cleaned up
+                    JobStatus::Pending | JobStatus::Running => false,
+                }
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -263,7 +274,12 @@ impl JobStore {
         }
 
         if count > 0 {
-            tracing::debug!(removed = count, max_age_secs, "Cleaned up expired jobs");
+            tracing::debug!(
+                removed = count,
+                success_max_age,
+                failed_max_age,
+                "Cleaned up expired jobs"
+            );
         }
 
         count
@@ -324,8 +340,11 @@ impl Default for JobStore {
     }
 }
 
-/// Default TTL for completed jobs (5 minutes)
+/// Default TTL for successfully completed jobs (5 minutes)
 pub const DEFAULT_JOB_TTL_SECS: u64 = 300;
+
+/// TTL for failed/cancelled jobs - longer so agents can inspect errors (30 minutes)
+pub const FAILED_JOB_TTL_SECS: u64 = 1800;
 
 /// TTL for fire-and-forget jobs like garden commands (60 seconds)
 pub const FIRE_AND_FORGET_TTL_SECS: u64 = 60;

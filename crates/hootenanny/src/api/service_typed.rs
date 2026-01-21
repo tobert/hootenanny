@@ -2628,7 +2628,7 @@ impl EventDualityServer {
         let guidance_scale_val = guidance_scale.unwrap_or(3.0);
         let do_sample_val = do_sample.unwrap_or(true);
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let result: anyhow::Result<hooteproto::responses::ToolResponse> = (async {
                 let response = local_models
                     .run_musicgen_generate(
@@ -2713,6 +2713,7 @@ impl EventDualityServer {
                 }
             }
         });
+        self.job_store.store_handle(&job_id, handle);
 
         Ok(hooteproto::responses::JobStartedResponse {
             job_id: job_id.as_str().to_string(),
@@ -2749,7 +2750,7 @@ impl EventDualityServer {
         let segments = run_n_segments.unwrap_or(2);
         let seed_val = seed.unwrap_or(0);
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let result: anyhow::Result<hooteproto::responses::ToolResponse> = (async {
                 let response = local_models
                     .run_yue_generate(
@@ -2834,6 +2835,7 @@ impl EventDualityServer {
                 }
             }
         });
+        self.job_store.store_handle(&job_id, handle);
 
         Ok(hooteproto::responses::JobStartedResponse {
             job_id: job_id.as_str().to_string(),
@@ -2872,7 +2874,7 @@ impl EventDualityServer {
             return Err(ToolError::validation("invalid_params", "Either audio_hash or audio_path required"));
         };
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let result: anyhow::Result<hooteproto::responses::ToolResponse> = (async {
                 // Prepare audio for BeatThis (mono 22050 Hz)
                 let prepared_audio = prepare_audio_for_beatthis(&audio_bytes)
@@ -2932,6 +2934,7 @@ impl EventDualityServer {
                 }
             }
         });
+        self.job_store.store_handle(&job_id, handle);
 
         Ok(hooteproto::responses::JobStartedResponse {
             job_id: job_id.as_str().to_string(),
@@ -2985,7 +2988,7 @@ impl EventDualityServer {
 
         let text_cands = if text_candidates.is_empty() { None } else { Some(text_candidates) };
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let result: anyhow::Result<hooteproto::responses::ToolResponse> = (async {
                 let response = local_models
                     .run_clap_analyze(
@@ -3042,6 +3045,7 @@ impl EventDualityServer {
                 }
             }
         });
+        self.job_store.store_handle(&job_id, handle);
 
         Ok(hooteproto::responses::JobStartedResponse {
             job_id: job_id.as_str().to_string(),
