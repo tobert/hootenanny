@@ -3314,6 +3314,19 @@ impl EventDualityServer {
     ) -> Result<hooteproto::responses::AudioCapturedResponse, ToolError> {
         use std::io::Cursor;
 
+        // Check if monitor is enabled when capturing from monitor source
+        let source = request.source.as_deref().unwrap_or("monitor");
+        if source == "monitor" {
+            let input_status = self.garden_input_status_typed().await?;
+            if !input_status.monitor_enabled {
+                return Err(ToolError::validation(
+                    "monitor_disabled",
+                    "Cannot capture from monitor - monitor is disabled. \
+                     Use audio_monitor(enabled=true) first.",
+                ));
+            }
+        }
+
         let sample_rate = 48000u32;
         let channels = 2u16;
         let total_samples_needed = (request.duration_seconds * sample_rate as f32) as usize * channels as usize;
