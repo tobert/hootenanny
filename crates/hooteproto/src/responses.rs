@@ -66,6 +66,7 @@ pub enum ToolResponse {
     BeatsAnalyzed(BeatsAnalyzedResponse),
     ClapAnalyzed(ClapAnalyzedResponse),
     MidiInfo(MidiInfoResponse),
+    AudioInfo(AudioInfoResponse),
 
     // === Garden/Transport ===
     GardenStatus(GardenStatusResponse),
@@ -596,6 +597,23 @@ pub struct MidiInfoResponse {
     pub note_count: usize,
     /// MIDI format (0, 1, or 2)
     pub format: u8,
+}
+
+/// Audio file information (no GPU required)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioInfoResponse {
+    /// Duration in seconds
+    pub duration_seconds: f64,
+    /// Sample rate in Hz
+    pub sample_rate: u32,
+    /// Number of channels
+    pub channels: u16,
+    /// Peak level in dB (0 dB = full scale)
+    pub peak_db: f32,
+    /// Mean (RMS) level in dB
+    pub mean_db: f32,
+    /// True if audio appears silent (mean_db < -60)
+    pub is_silent: bool,
 }
 
 // =============================================================================

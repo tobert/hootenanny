@@ -42,6 +42,7 @@ struct ToolResponse {
     beatsAnalyzed @19 :BeatsAnalyzedResponse;
     clapAnalyzed @20 :ClapAnalyzedResponse;
     midiInfo @54 :MidiInfoResponse;
+    audioInfo @67 :AudioInfoResponse;
 
     # Garden/Transport
     gardenStatus @21 :GardenStatusResponse;
@@ -426,6 +427,15 @@ struct MidiInfoResponse {
   ppq @8 :UInt16;
   noteCount @9 :UInt32;
   format @10 :UInt8;
+}
+
+struct AudioInfoResponse {
+  durationSeconds @0 :Float64;
+  sampleRate @1 :UInt32;
+  channels @2 :UInt16;
+  peakDb @3 :Float32;
+  meanDb @4 :Float32;
+  isSilent @5 :Bool;
 }
 
 # =============================================================================

@@ -365,6 +365,13 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 hash: p.hash,
             })))
         }
+        "audio_info" => {
+            let p: AudioInfoArgs = serde_json::from_value(args).context("Invalid audio_info arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::AudioInfo(request::AudioInfoRequest {
+                artifact_id: p.artifact_id,
+                hash: p.hash,
+            })))
+        }
 
         // === Artifact Tools ===
         "artifact_upload" => {
@@ -814,6 +821,12 @@ struct ClapAnalyzeArgs {
 
 #[derive(Debug, Deserialize)]
 struct MidiInfoArgs {
+    artifact_id: Option<String>,
+    hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AudioInfoArgs {
     artifact_id: Option<String>,
     hash: Option<String>,
 }

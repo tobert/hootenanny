@@ -75,6 +75,8 @@ pub enum ToolRequest {
     ClapAnalyze(ClapAnalyzeRequest),
     /// Extract MIDI file metadata (tempo, time signature, duration)
     MidiInfo(MidiInfoRequest),
+    /// Get audio file information (levels, duration, sample rate) without GPU
+    AudioInfo(AudioInfoRequest),
 
     // ==========================================================================
     // ABC Notation
@@ -269,6 +271,7 @@ impl ToolRequest {
             Self::ArtifactGet(_) | Self::ArtifactList(_) | Self::ArtifactCreate(_) => ToolTiming::AsyncShort,
             Self::CasInspect(_) => ToolTiming::AsyncShort,
             Self::MidiInfo(_) => ToolTiming::AsyncShort,
+            Self::AudioInfo(_) => ToolTiming::AsyncShort,
             Self::Ping | Self::ListResources => ToolTiming::AsyncShort,
             Self::ReadResource(_) => ToolTiming::AsyncShort,
             Self::CasStore(_) | Self::CasGet(_) | Self::CasUploadFile(_) | Self::CasStats => ToolTiming::AsyncShort,
@@ -351,6 +354,7 @@ impl ToolRequest {
             Self::BeatthisAnalyze(_) => "beatthis_analyze",
             Self::ClapAnalyze(_) => "clap_analyze",
             Self::MidiInfo(_) => "midi_info",
+            Self::AudioInfo(_) => "audio_info",
             Self::AbcParse(_) => "abc_parse",
             Self::AbcValidate(_) => "abc_validate",
             Self::AbcTranspose(_) => "abc_transpose",
@@ -653,6 +657,14 @@ fn default_clap_tasks() -> Vec<String> {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MidiInfoRequest {
     /// Artifact ID or CAS hash of the MIDI file
+    pub artifact_id: Option<String>,
+    /// Direct CAS hash (alternative to artifact_id)
+    pub hash: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioInfoRequest {
+    /// Artifact ID of the audio file
     pub artifact_id: Option<String>,
     /// Direct CAS hash (alternative to artifact_id)
     pub hash: Option<String>,

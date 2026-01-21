@@ -534,6 +534,17 @@ pub fn list_tools() -> Vec<ToolInfo> {
                 }
             }),
         },
+        ToolInfo {
+            name: "audio_info".to_string(),
+            description: "Get audio file information (levels, duration, sample rate) without GPU".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "artifact_id": { "type": "string", "description": "Artifact ID of audio file" },
+                    "hash": { "type": "string", "description": "CAS hash of audio file (alternative to artifact_id)" }
+                }
+            }),
+        },
 
         // ==========================================================================
         // RAVE Tools (Realtime Audio Variational autoEncoder)

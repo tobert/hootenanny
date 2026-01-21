@@ -413,6 +413,11 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             m.set_artifact_id(req.artifact_id.as_deref().unwrap_or(""));
             m.set_hash(req.hash.as_deref().unwrap_or(""));
         }
+        ToolRequest::AudioInfo(req) => {
+            let mut a = builder.reborrow().init_audio_info();
+            a.set_artifact_id(req.artifact_id.as_deref().unwrap_or(""));
+            a.set_hash(req.hash.as_deref().unwrap_or(""));
+        }
         ToolRequest::MusicgenGenerate(req) => {
             let mut m = builder.reborrow().init_musicgen_generate();
             m.set_prompt(req.prompt.as_deref().unwrap_or(""));
@@ -883,6 +888,13 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
             Ok(ToolRequest::MidiInfo(MidiInfoRequest {
                 artifact_id: capnp_optional_string(m.get_artifact_id()?),
                 hash: capnp_optional_string(m.get_hash()?),
+            }))
+        }
+        tools_capnp::tool_request::AudioInfo(a) => {
+            let a = a?;
+            Ok(ToolRequest::AudioInfo(AudioInfoRequest {
+                artifact_id: capnp_optional_string(a.get_artifact_id()?),
+                hash: capnp_optional_string(a.get_hash()?),
             }))
         }
         tools_capnp::tool_request::MusicgenGenerate(m) => {
@@ -1885,6 +1897,15 @@ fn response_to_capnp_tool_response(
             b.set_note_count(r.note_count as u32);
             b.set_format(r.format);
         }
+        ToolResponse::AudioInfo(r) => {
+            let mut b = builder.reborrow().init_audio_info();
+            b.set_duration_seconds(r.duration_seconds);
+            b.set_sample_rate(r.sample_rate);
+            b.set_channels(r.channels);
+            b.set_peak_db(r.peak_db);
+            b.set_mean_db(r.mean_db);
+            b.set_is_silent(r.is_silent);
+        }
 
         // Garden/Transport
         ToolResponse::GardenStatus(r) => {
@@ -2680,6 +2701,17 @@ fn capnp_tool_response_to_response(
                 ppq: r.get_ppq(),
                 note_count: r.get_note_count() as usize,
                 format: r.get_format(),
+            }))
+        }
+        Which::AudioInfo(r) => {
+            let r = r?;
+            Ok(ToolResponse::AudioInfo(AudioInfoResponse {
+                duration_seconds: r.get_duration_seconds(),
+                sample_rate: r.get_sample_rate(),
+                channels: r.get_channels(),
+                peak_db: r.get_peak_db(),
+                mean_db: r.get_mean_db(),
+                is_silent: r.get_is_silent(),
             }))
         }
 

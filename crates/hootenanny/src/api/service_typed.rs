@@ -3107,6 +3107,55 @@ impl EventDualityServer {
         })
     }
 
+    /// Get audio file information (duration, sample rate, levels) without GPU.
+    pub async fn audio_info_typed(
+        &self,
+        request: hooteproto::request::AudioInfoRequest,
+    ) -> Result<hooteproto::responses::AudioInfoResponse, ToolError> {
+        // Get audio content - either from artifact or direct hash
+        let hash = if let Some(ref artifact_id) = request.artifact_id {
+            let store = self.artifact_store.read().map_err(|_| ToolError::internal("Lock poisoned"))?;
+            let artifact = store.get(artifact_id)
+                .map_err(|e| ToolError::internal(e.to_string()))?
+                .ok_or_else(|| ToolError::not_found("artifact", artifact_id.clone()))?;
+            artifact.content_hash.as_str().to_string()
+        } else if let Some(ref h) = request.hash {
+            h.clone()
+        } else {
+            return Err(ToolError::validation("missing_parameter", "Either artifact_id or hash must be provided"));
+        };
+
+        // Get audio bytes from CAS
+        let content = self.local_models
+            .inspect_cas_content(&hash)
+            .await
+            .map_err(|e| ToolError::not_found("content", e.to_string()))?;
+
+        let path = content.local_path
+            .ok_or_else(|| ToolError::not_found("content", hash.clone()))?;
+
+        let audio_bytes = tokio::fs::read(&path)
+            .await
+            .map_err(|e| ToolError::internal(format!("Failed to read audio file: {}", e)))?;
+
+        // Decode audio
+        let decoded = chaosgarden::decode_audio(&audio_bytes)
+            .map_err(|e| ToolError::internal(format!("Failed to decode audio: {}", e)))?;
+
+        // Calculate audio levels
+        let (peak_db, mean_db) = Self::calculate_audio_levels(&decoded.samples);
+        let is_silent = mean_db < -60.0;
+
+        Ok(hooteproto::responses::AudioInfoResponse {
+            duration_seconds: decoded.duration_seconds(),
+            sample_rate: decoded.sample_rate,
+            channels: decoded.channels as u16,
+            peak_db,
+            mean_db,
+            is_silent,
+        })
+    }
+
     // =========================================================================
     // Garden Audio Tools
     // =========================================================================
@@ -3817,6 +3866,27 @@ impl EventDualityServer {
             Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
             Err(e) => Err(ToolError::internal(format!("Get MIDI status failed: {}", e))),
         }
+    }
+
+    // =========================================================================
+    // Audio Analysis Helpers
+    // =========================================================================
+
+    /// Calculate peak and RMS audio levels in dB.
+    ///
+    /// Returns (peak_db, mean_db) where 0 dB = full scale.
+    fn calculate_audio_levels(samples: &[f32]) -> (f32, f32) {
+        if samples.is_empty() {
+            return (f32::NEG_INFINITY, f32::NEG_INFINITY);
+        }
+
+        let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+
+        let peak_db = if peak > 0.0 { 20.0 * peak.log10() } else { f32::NEG_INFINITY };
+        let mean_db = if rms > 0.0 { 20.0 * rms.log10() } else { f32::NEG_INFINITY };
+
+        (peak_db, mean_db)
     }
 }
 

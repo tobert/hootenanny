@@ -37,6 +37,7 @@ struct ToolRequest {
     beatthisAnalyze @17 :BeatthisAnalyze;
     clapAnalyze @18 :ClapAnalyze;
     midiInfo @72 :MidiInfo;
+    audioInfo @89 :AudioInfo;
 
     # === Generation Tools ===
     musicgenGenerate @19 :MusicgenGenerate;
@@ -290,6 +291,11 @@ struct ClapAnalyze {
 }
 
 struct MidiInfo {
+  artifactId @0 :Text;
+  hash @1 :Text;
+}
+
+struct AudioInfo {
   artifactId @0 :Text;
   hash @1 :Text;
 }
