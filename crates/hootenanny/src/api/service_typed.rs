@@ -2874,6 +2874,20 @@ impl EventDualityServer {
             return Err(ToolError::validation("invalid_params", "Either audio_hash or audio_path required"));
         };
 
+        // Check for silence before expensive GPU inference
+        let decoded = chaosgarden::decode_audio(&audio_bytes)
+            .map_err(|e| ToolError::internal(format!("Failed to decode audio: {}", e)))?;
+        let (_, mean_db) = Self::calculate_audio_levels(&decoded.samples);
+        if mean_db < -60.0 {
+            return Err(ToolError::validation(
+                "silent_audio",
+                format!(
+                    "Audio appears silent (mean: {:.1} dB). Beat detection requires audible content.",
+                    mean_db
+                ),
+            ));
+        }
+
         let handle = tokio::spawn(async move {
             let result: anyhow::Result<hooteproto::responses::ToolResponse> = (async {
                 // Prepare audio for BeatThis (mono 22050 Hz)
