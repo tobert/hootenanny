@@ -6,8 +6,7 @@
 //! - Payload ↔ Cap'n Proto (for wire serialization)
 
 use crate::{
-    AnalysisTask, Encoding, Payload, SampleFormat, StreamDefinition, StreamFormat,
-    TimelineEventType,
+    Payload, SampleFormat, StreamDefinition, StreamFormat, TimelineEventType,
 };
 
 // Cap'n Proto imports for reading requests
@@ -1366,161 +1365,6 @@ fn set_stream_definition(
     }
 }
 
-/// Helper: Convert capnp Encoding to Rust Encoding
-fn capnp_to_encoding(reader: common_capnp::encoding::Reader) -> capnp::Result<Encoding> {
-    match reader.which()? {
-        common_capnp::encoding::Midi(id) => Ok(Encoding::Midi { artifact_id: id?.to_str()?.to_string() }),
-        common_capnp::encoding::Audio(id) => Ok(Encoding::Audio { artifact_id: id?.to_str()?.to_string() }),
-        common_capnp::encoding::Abc(abc) => Ok(Encoding::Abc { notation: abc?.to_str()?.to_string() }),
-        common_capnp::encoding::Hash(hash) => {
-            let h = hash;
-            Ok(Encoding::Hash {
-                content_hash: h.get_content_hash()?.to_str()?.to_string(),
-                format: h.get_format()?.to_str()?.to_string(),
-            })
-        }
-    }
-}
-
-/// Helper: Convert Rust Encoding to capnp Encoding
-fn encoding_to_capnp(mut builder: common_capnp::encoding::Builder, encoding: &Encoding) {
-    match encoding {
-        Encoding::Midi { artifact_id } => builder.set_midi(artifact_id),
-        Encoding::Audio { artifact_id } => builder.set_audio(artifact_id),
-        Encoding::Abc { notation } => builder.set_abc(notation),
-        Encoding::Hash { content_hash, format } => {
-            let mut h = builder.init_hash();
-            h.set_content_hash(content_hash);
-            h.set_format(format);
-        }
-    }
-}
-
-/// Helper: Convert capnp AnalysisTask to Rust AnalysisTask
-/// Note: ZeroShot labels must be populated separately from zeroShotLabels field
-fn capnp_to_analysis_task(task: common_capnp::AnalysisTask, zero_shot_labels: Vec<String>) -> AnalysisTask {
-    match task {
-        common_capnp::AnalysisTask::Classify => AnalysisTask::Classify,
-        common_capnp::AnalysisTask::Beats => AnalysisTask::Beats,
-        common_capnp::AnalysisTask::Embeddings => AnalysisTask::Embeddings,
-        common_capnp::AnalysisTask::Genre => AnalysisTask::Genre,
-        common_capnp::AnalysisTask::Mood => AnalysisTask::Mood,
-        common_capnp::AnalysisTask::ZeroShot => AnalysisTask::ZeroShot { labels: zero_shot_labels },
-    }
-}
-
-/// Helper: Convert Rust AnalysisTask to capnp AnalysisTask
-/// Note: ZeroShot labels are handled separately via zeroShotLabels field
-fn analysis_task_to_capnp(task: &AnalysisTask) -> common_capnp::AnalysisTask {
-    match task {
-        AnalysisTask::Classify => common_capnp::AnalysisTask::Classify,
-        AnalysisTask::Beats => common_capnp::AnalysisTask::Beats,
-        AnalysisTask::Embeddings => common_capnp::AnalysisTask::Embeddings,
-        AnalysisTask::Genre => common_capnp::AnalysisTask::Genre,
-        AnalysisTask::Mood => common_capnp::AnalysisTask::Mood,
-        AnalysisTask::ZeroShot { .. } => common_capnp::AnalysisTask::ZeroShot,
-    }
-}
-
-// =============================================================================
-// DAW Tool Helper Functions
-// =============================================================================
-
-/// Helper: Convert Rust Space to capnp Space
-fn space_to_capnp(space: &crate::Space) -> common_capnp::Space {
-    match space {
-        crate::Space::Orpheus => common_capnp::Space::Orpheus,
-        crate::Space::OrpheusChildren => common_capnp::Space::OrpheusChildren,
-        crate::Space::OrpheusMonoMelodies => common_capnp::Space::OrpheusMonoMelodies,
-        crate::Space::OrpheusLoops => common_capnp::Space::OrpheusLoops,
-        crate::Space::OrpheusBridge => common_capnp::Space::OrpheusBridge,
-        crate::Space::MusicGen => common_capnp::Space::MusicGen,
-        crate::Space::Yue => common_capnp::Space::Yue,
-        crate::Space::Abc => common_capnp::Space::Abc,
-    }
-}
-
-/// Helper: Convert capnp Space to Rust Space
-fn capnp_to_space(space: common_capnp::Space) -> crate::Space {
-    match space {
-        common_capnp::Space::Orpheus => crate::Space::Orpheus,
-        common_capnp::Space::OrpheusChildren => crate::Space::OrpheusChildren,
-        common_capnp::Space::OrpheusMonoMelodies => crate::Space::OrpheusMonoMelodies,
-        common_capnp::Space::OrpheusLoops => crate::Space::OrpheusLoops,
-        common_capnp::Space::OrpheusBridge => crate::Space::OrpheusBridge,
-        common_capnp::Space::MusicGen => crate::Space::MusicGen,
-        common_capnp::Space::Yue => crate::Space::Yue,
-        common_capnp::Space::Abc => crate::Space::Abc,
-    }
-}
-
-/// Helper: Convert Rust InferenceContext to capnp InferenceContext
-fn inference_to_capnp(mut builder: common_capnp::inference_context::Builder, inference: &crate::InferenceContext) {
-    builder.set_temperature(inference.temperature.unwrap_or(0.0));
-    builder.set_top_p(inference.top_p.unwrap_or(0.0));
-    builder.set_top_k(inference.top_k.unwrap_or(0));
-    builder.set_seed(inference.seed.unwrap_or(0));
-    builder.set_max_tokens(inference.max_tokens.unwrap_or(0));
-    builder.set_duration_seconds(inference.duration_seconds.unwrap_or(0.0));
-    builder.set_guidance_scale(inference.guidance_scale.unwrap_or(0.0));
-    builder.set_variant(inference.variant.as_deref().unwrap_or(""));
-}
-
-/// Helper: Convert capnp InferenceContext to Rust InferenceContext
-fn capnp_to_inference(reader: common_capnp::inference_context::Reader) -> capnp::Result<crate::InferenceContext> {
-    Ok(crate::InferenceContext {
-        temperature: Some(reader.get_temperature()).filter(|&v| v != 0.0),
-        top_p: Some(reader.get_top_p()).filter(|&v| v != 0.0),
-        top_k: Some(reader.get_top_k()).filter(|&v| v != 0),
-        seed: Some(reader.get_seed()).filter(|&v| v != 0),
-        max_tokens: Some(reader.get_max_tokens()).filter(|&v| v != 0),
-        duration_seconds: Some(reader.get_duration_seconds()).filter(|&v| v != 0.0),
-        guidance_scale: Some(reader.get_guidance_scale()).filter(|&v| v != 0.0),
-        variant: {
-            let v = reader.get_variant()?.to_str()?;
-            if v.is_empty() { None } else { Some(v.to_string()) }
-        },
-    })
-}
-
-/// Helper: Convert Rust ProjectionTarget to capnp ProjectionTarget
-fn projection_target_to_capnp(builder: common_capnp::projection_target::Builder, target: &crate::ProjectionTarget) {
-    match target {
-        crate::ProjectionTarget::Audio { soundfont_hash, sample_rate } => {
-            let mut a = builder.init_audio();
-            a.set_soundfont_hash(soundfont_hash);
-            a.set_sample_rate(sample_rate.unwrap_or(44100));
-        }
-        crate::ProjectionTarget::Midi { channel, velocity, program } => {
-            let mut m = builder.init_midi();
-            m.set_channel(channel.unwrap_or(0));
-            m.set_velocity(velocity.unwrap_or(80));
-            m.set_program(program.unwrap_or(0));
-        }
-    }
-}
-
-/// Helper: Convert capnp ProjectionTarget to Rust ProjectionTarget
-fn capnp_to_projection_target(reader: common_capnp::projection_target::Reader) -> capnp::Result<crate::ProjectionTarget> {
-    match reader.which()? {
-        common_capnp::projection_target::Audio(a) => {
-            let a = a;
-            Ok(crate::ProjectionTarget::Audio {
-                soundfont_hash: a.get_soundfont_hash()?.to_str()?.to_string(),
-                sample_rate: Some(a.get_sample_rate()).filter(|&v| v != 0),
-            })
-        }
-        common_capnp::projection_target::Midi(m) => {
-            let m = m;
-            Ok(crate::ProjectionTarget::Midi {
-                channel: Some(m.get_channel()).filter(|&v| v != 0),
-                velocity: Some(m.get_velocity()).filter(|&v| v != 0),
-                program: Some(m.get_program()).filter(|&v| v != 0),
-            })
-        }
-    }
-}
-
 // =============================================================================
 // Response Serialization (Rust → Cap'n Proto)
 // =============================================================================
@@ -1914,6 +1758,56 @@ fn response_to_capnp_tool_response(
             b.set_position_beats(r.position_beats);
             b.set_tempo_bpm(r.tempo_bpm);
             b.set_region_count(r.region_count as u64);
+        }
+        ToolResponse::UnifiedStatus(r) => {
+            let mut b = builder.reborrow().init_unified_status();
+
+            // Transport
+            let mut transport = b.reborrow().init_transport();
+            transport.set_state(transport_state_to_capnp(&r.transport.state));
+            transport.set_position_beats(r.transport.position_beats);
+            transport.set_tempo_bpm(r.transport.tempo_bpm);
+            transport.set_region_count(r.transport.region_count as u64);
+
+            // Audio Output
+            let mut audio_out = b.reborrow().init_audio_output();
+            audio_out.set_attached(r.audio_output.attached);
+            audio_out.set_device_name(r.audio_output.device_name.as_deref().unwrap_or(""));
+            audio_out.set_sample_rate(r.audio_output.sample_rate.unwrap_or(0));
+            audio_out.set_latency_frames(r.audio_output.latency_frames.unwrap_or(0));
+            audio_out.set_callbacks(r.audio_output.callbacks);
+            audio_out.set_samples_written(r.audio_output.samples_written);
+            audio_out.set_underruns(r.audio_output.underruns);
+
+            // Audio Input
+            let mut audio_in = b.reborrow().init_audio_input();
+            audio_in.set_attached(r.audio_input.attached);
+            audio_in.set_device_name(r.audio_input.device_name.as_deref().unwrap_or(""));
+            audio_in.set_sample_rate(r.audio_input.sample_rate.unwrap_or(0));
+            audio_in.set_channels(r.audio_input.channels.unwrap_or(0));
+            audio_in.set_callbacks(r.audio_input.callbacks);
+            audio_in.set_samples_captured(r.audio_input.samples_captured);
+            audio_in.set_overruns(r.audio_input.overruns);
+
+            // Monitor
+            let mut monitor = b.reborrow().init_monitor();
+            monitor.set_enabled(r.monitor.enabled);
+            monitor.set_gain(r.monitor.gain);
+
+            // MIDI
+            let mut midi = b.reborrow().init_midi();
+            let mut inputs = midi.reborrow().init_inputs(r.midi.inputs.len() as u32);
+            for (i, input) in r.midi.inputs.iter().enumerate() {
+                let mut inp = inputs.reborrow().get(i as u32);
+                inp.set_port_name(&input.port_name);
+                inp.set_messages(input.messages);
+            }
+            let mut outputs = midi.reborrow().init_outputs(r.midi.outputs.len() as u32);
+            for (i, output) in r.midi.outputs.iter().enumerate() {
+                let mut out = outputs.reborrow().get(i as u32);
+                out.set_port_name(&output.port_name);
+                out.set_messages(output.messages);
+            }
         }
         ToolResponse::GardenRegions(r) => {
             let mut b = builder.reborrow().init_garden_regions();
@@ -3234,6 +3128,82 @@ fn capnp_tool_response_to_response(
                 })
                 .collect::<capnp::Result<Vec<_>>>()?;
             Ok(ToolResponse::MidiStatus(MidiStatusResponse { inputs, outputs }))
+        }
+        Which::UnifiedStatus(r) => {
+            let r = r?;
+
+            // Transport
+            let transport_r = r.get_transport()?;
+            let transport = TransportStatus {
+                state: capnp_to_transport_state(transport_r.get_state()?),
+                position_beats: transport_r.get_position_beats(),
+                tempo_bpm: transport_r.get_tempo_bpm(),
+                region_count: transport_r.get_region_count() as usize,
+            };
+
+            // Audio Output
+            let audio_out_r = r.get_audio_output()?;
+            let device_name = audio_out_r.get_device_name()?.to_string()?;
+            let audio_output = AudioOutputStatus {
+                attached: audio_out_r.get_attached(),
+                device_name: if device_name.is_empty() { None } else { Some(device_name) },
+                sample_rate: Some(audio_out_r.get_sample_rate()).filter(|&v| v > 0),
+                latency_frames: Some(audio_out_r.get_latency_frames()).filter(|&v| v > 0),
+                callbacks: audio_out_r.get_callbacks(),
+                samples_written: audio_out_r.get_samples_written(),
+                underruns: audio_out_r.get_underruns(),
+            };
+
+            // Audio Input
+            let audio_in_r = r.get_audio_input()?;
+            let input_device_name = audio_in_r.get_device_name()?.to_string()?;
+            let audio_input = AudioInputStatus {
+                attached: audio_in_r.get_attached(),
+                device_name: if input_device_name.is_empty() { None } else { Some(input_device_name) },
+                sample_rate: Some(audio_in_r.get_sample_rate()).filter(|&v| v > 0),
+                channels: Some(audio_in_r.get_channels()).filter(|&v| v > 0),
+                callbacks: audio_in_r.get_callbacks(),
+                samples_captured: audio_in_r.get_samples_captured(),
+                overruns: audio_in_r.get_overruns(),
+            };
+
+            // Monitor
+            let monitor_r = r.get_monitor()?;
+            let monitor = MonitorStatus {
+                enabled: monitor_r.get_enabled(),
+                gain: monitor_r.get_gain(),
+            };
+
+            // MIDI
+            let midi_r = r.get_midi()?;
+            let inputs = midi_r
+                .get_inputs()?
+                .iter()
+                .map(|c| {
+                    Ok(MidiConnectionInfo {
+                        port_name: c.get_port_name()?.to_string()?,
+                        messages: c.get_messages(),
+                    })
+                })
+                .collect::<capnp::Result<Vec<_>>>()?;
+            let outputs = midi_r
+                .get_outputs()?
+                .iter()
+                .map(|c| {
+                    Ok(MidiConnectionInfo {
+                        port_name: c.get_port_name()?.to_string()?,
+                        messages: c.get_messages(),
+                    })
+                })
+                .collect::<capnp::Result<Vec<_>>>()?;
+
+            Ok(ToolResponse::UnifiedStatus(UnifiedStatusResponse {
+                transport,
+                audio_output,
+                audio_input,
+                monitor,
+                midi: MidiStatusResponse { inputs, outputs },
+            }))
         }
     }
 }

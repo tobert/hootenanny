@@ -443,6 +443,20 @@ impl CapnpGardenServer {
             }
             ToolRequest::MidiStatus => ShellRequest::GetMidiStatus,
 
+            // RAVE streaming (realtime neural audio processing)
+            ToolRequest::RaveStreamStart(r) => ShellRequest::RaveStreamStart {
+                model: r.model,
+                input_identity: r.input_identity,
+                output_identity: r.output_identity,
+                buffer_size: r.buffer_size,
+            },
+            ToolRequest::RaveStreamStop(r) => ShellRequest::RaveStreamStop {
+                stream_id: r.stream_id,
+            },
+            ToolRequest::RaveStreamStatus(r) => ShellRequest::RaveStreamStatus {
+                stream_id: r.stream_id,
+            },
+
             // GardenQuery is handled by hootenanny, not chaosgarden
             ToolRequest::GardenQuery(_) => {
                 return Payload::Error {
@@ -603,6 +617,39 @@ fn shell_reply_to_payload(reply: hooteproto::garden::ShellReply) -> Payload {
                 message: error,
                 details: traceback.map(|t| serde_json::json!({ "traceback": t })),
             }
+        }
+        // RAVE streaming responses
+        ShellReply::RaveStreamStarted { stream_id, model, input_identity, output_identity, latency_ms } => {
+            Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::RaveStreamStarted(hooteproto::responses::RaveStreamStartedResponse {
+                    stream_id,
+                    model,
+                    input_identity,
+                    output_identity,
+                    latency_ms,
+                })
+            ))
+        }
+        ShellReply::RaveStreamStopped { stream_id, duration_seconds } => {
+            Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::RaveStreamStopped(hooteproto::responses::RaveStreamStoppedResponse {
+                    stream_id,
+                    duration_seconds,
+                })
+            ))
+        }
+        ShellReply::RaveStreamStatus { stream_id, running, model, input_identity, output_identity, frames_processed, latency_ms, .. } => {
+            Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::RaveStreamStatus(hooteproto::responses::RaveStreamStatusResponse {
+                    stream_id,
+                    running,
+                    model,
+                    input_identity,
+                    output_identity,
+                    frames_processed,
+                    latency_ms,
+                })
+            ))
         }
         // Catch-all for other ShellReply variants (NodeAdded, etc.)
         other => {

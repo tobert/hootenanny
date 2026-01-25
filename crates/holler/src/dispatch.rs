@@ -12,45 +12,6 @@ use hooteproto::request::{self, ToolRequest};
 use serde::Deserialize;
 use serde_json::Value;
 
-/// Preprocess JSON args to handle string-encoded nested objects.
-fn preprocess_encoding_field(mut args: Value) -> Value {
-    if let Some(obj) = args.as_object_mut() {
-        // Handle encoding field (used by schedule, analyze, project, etc.)
-        if let Some(encoding) = obj.get_mut("encoding") {
-            if let Some(s) = encoding.as_str() {
-                if let Ok(parsed) = serde_json::from_str::<Value>(s) {
-                    *encoding = parsed;
-                }
-            }
-        }
-        // Handle target field (used by project)
-        if let Some(target) = obj.get_mut("target") {
-            if let Some(s) = target.as_str() {
-                if let Ok(parsed) = serde_json::from_str::<Value>(s) {
-                    *target = parsed;
-                }
-            }
-        }
-        // Handle seed field (used by sample)
-        if let Some(seed) = obj.get_mut("seed") {
-            if let Some(s) = seed.as_str() {
-                if let Ok(parsed) = serde_json::from_str::<Value>(s) {
-                    *seed = parsed;
-                }
-            }
-        }
-        // Handle inference field (used by sample, extend, bridge)
-        if let Some(inference) = obj.get_mut("inference") {
-            if let Some(s) = inference.as_str() {
-                if let Ok(parsed) = serde_json::from_str::<Value>(s) {
-                    *inference = parsed;
-                }
-            }
-        }
-    }
-    args
-}
-
 /// Convert MCP tool call (name + JSON args) to typed Payload.
 pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
     match name {

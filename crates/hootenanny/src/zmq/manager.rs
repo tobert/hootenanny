@@ -12,7 +12,7 @@ use tokio_stream::Stream;
 use tracing::{debug, error, info, warn};
 
 use hooteproto::garden::{
-    Beat, ControlReply, ControlRequest, IOPubEvent, ShellReply, ShellRequest,
+    ControlReply, ControlRequest, IOPubEvent, ShellReply, ShellRequest,
 };
 use hooteproto::request::ToolRequest;
 use hooteproto::responses::ToolResponse;
@@ -224,41 +224,6 @@ impl GardenManager {
         });
 
         Ok(())
-    }
-
-    // --- Convenience methods for common operations ---
-
-    /// Play
-    pub async fn play(&self) -> Result<ShellReply> {
-        self.request(ShellRequest::Play).await
-    }
-
-    /// Pause
-    pub async fn pause(&self) -> Result<ShellReply> {
-        self.request(ShellRequest::Pause).await
-    }
-
-    /// Stop
-    pub async fn stop(&self) -> Result<ShellReply> {
-        self.request(ShellRequest::Stop).await
-    }
-
-    /// Seek to beat position
-    pub async fn seek(&self, beat: f64) -> Result<ShellReply> {
-        self.request(ShellRequest::Seek {
-            beat: Beat(beat),
-        })
-        .await
-    }
-
-    /// Set tempo
-    pub async fn set_tempo(&self, bpm: f64) -> Result<ShellReply> {
-        self.request(ShellRequest::SetTempo { bpm }).await
-    }
-
-    /// Get transport state
-    pub async fn get_transport_state(&self) -> Result<ShellReply> {
-        self.request(ShellRequest::GetTransportState).await
     }
 
     /// Emergency pause (control channel)

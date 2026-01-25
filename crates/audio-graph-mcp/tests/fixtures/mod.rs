@@ -206,7 +206,3 @@ impl Default for TestFixture {
         Self::new()
     }
 }
-
-pub fn studio_pipewire_snapshot() -> PipeWireSnapshot {
-    TestFixture::create_pipewire_snapshot()
-}

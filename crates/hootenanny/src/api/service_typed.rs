@@ -302,6 +302,76 @@ impl EventDualityServer {
         }
     }
 
+    /// Get unified system status - combines transport, audio, and MIDI status.
+    ///
+    /// Makes 4 parallel ZMQ requests to chaosgarden and combines the results
+    /// into a single unified response suitable for GUI polling.
+    pub async fn unified_status_typed(
+        &self,
+    ) -> Result<hooteproto::responses::UnifiedStatusResponse, ToolError> {
+        use hooteproto::responses::{
+            AudioInputStatus, AudioOutputStatus, MidiConnectionInfo, MidiStatusResponse,
+            MonitorStatus, TransportStatus, UnifiedStatusResponse,
+        };
+
+        // Fire all 4 requests in parallel
+        let (transport, audio_out, audio_in, midi) = tokio::try_join!(
+            self.garden_status_typed(),
+            self.garden_audio_status_typed(),
+            self.garden_input_status_typed(),
+            self.midi_status_typed(),
+        )?;
+
+        Ok(UnifiedStatusResponse {
+            transport: TransportStatus {
+                state: transport.state,
+                position_beats: transport.position_beats,
+                tempo_bpm: transport.tempo_bpm,
+                region_count: transport.region_count,
+            },
+            audio_output: AudioOutputStatus {
+                attached: audio_out.attached,
+                device_name: audio_out.device_name,
+                sample_rate: audio_out.sample_rate,
+                latency_frames: audio_out.latency_frames,
+                callbacks: audio_out.callbacks,
+                samples_written: audio_out.samples_written,
+                underruns: audio_out.underruns,
+            },
+            audio_input: AudioInputStatus {
+                attached: audio_in.attached,
+                device_name: audio_in.device_name,
+                sample_rate: audio_in.sample_rate,
+                channels: audio_in.channels,
+                callbacks: audio_in.callbacks,
+                samples_captured: audio_in.samples_captured,
+                overruns: audio_in.overruns,
+            },
+            monitor: MonitorStatus {
+                enabled: audio_in.monitor_enabled,
+                gain: audio_in.monitor_gain,
+            },
+            midi: MidiStatusResponse {
+                inputs: midi
+                    .inputs
+                    .into_iter()
+                    .map(|i| MidiConnectionInfo {
+                        port_name: i.port_name,
+                        messages: i.messages,
+                    })
+                    .collect(),
+                outputs: midi
+                    .outputs
+                    .into_iter()
+                    .map(|o| MidiConnectionInfo {
+                        port_name: o.port_name,
+                        messages: o.messages,
+                    })
+                    .collect(),
+            },
+        })
+    }
+
     /// Get garden regions - typed response
     pub async fn garden_get_regions_typed(
         &self,
@@ -3552,7 +3622,6 @@ impl EventDualityServer {
         &self,
         request: hooteproto::request::RaveStreamStartRequest,
     ) -> Result<hooteproto::responses::RaveStreamStartedResponse, ToolError> {
-        use hooteproto::garden::ShellRequest;
         use hooteproto::request::ToolRequest;
         use hooteproto::responses::ToolResponse;
         use hooteproto::Payload;
@@ -3604,29 +3673,22 @@ impl EventDualityServer {
             )
         })?;
 
-        // Send shell request to chaosgarden
-        let shell_result = manager
-            .request(ShellRequest::RaveStreamStart {
-                model: request.model.clone(),
-                input_identity: request.input_identity.clone(),
-                output_identity: request.output_identity.clone(),
-                buffer_size: request.buffer_size,
-            })
+        // Send tool request to chaosgarden (uses Cap'n Proto path)
+        let garden_result = manager
+            .tool_request(ToolRequest::RaveStreamStart(request.clone()))
             .await;
 
-        match shell_result {
-            Ok(hooteproto::garden::ShellReply::RaveStreamStarted { .. }) => {
+        match garden_result {
+            Ok(ToolResponse::RaveStreamStarted(_)) => {
                 tracing::info!("RAVE streaming started: stream_id={}", stream_id);
             }
-            Ok(hooteproto::garden::ShellReply::Error { error, .. }) => {
-                tracing::warn!("chaosgarden RAVE start warning: {}", error);
-                // Continue anyway - Python RAVE is ready
+            Ok(_) => {
+                tracing::warn!("chaosgarden RAVE start: unexpected response type");
             }
             Err(e) => {
                 tracing::warn!("chaosgarden RAVE start failed: {}", e);
                 // Continue anyway - Python RAVE is ready
             }
-            _ => {}
         }
 
         Ok(hooteproto::responses::RaveStreamStartedResponse {
@@ -3643,17 +3705,14 @@ impl EventDualityServer {
         &self,
         request: hooteproto::request::RaveStreamStopRequest,
     ) -> Result<hooteproto::responses::RaveStreamStoppedResponse, ToolError> {
-        use hooteproto::garden::ShellRequest;
         use hooteproto::request::ToolRequest;
         use hooteproto::responses::ToolResponse;
         use hooteproto::Payload;
 
-        // Step 1: Stop chaosgarden audio routing
+        // Step 1: Stop chaosgarden audio routing (uses Cap'n Proto path)
         if let Some(manager) = self.garden_manager.as_ref() {
             let _ = manager
-                .request(ShellRequest::RaveStreamStop {
-                    stream_id: request.stream_id.clone(),
-                })
+                .tool_request(ToolRequest::RaveStreamStop(request.clone()))
                 .await;
         }
 
