@@ -176,6 +176,10 @@ pub fn encode_midi_message(msg: &MidiMessage) -> Vec<u8> {
             let msb = ((centered >> 7) & 0x7F) as u8;
             vec![0xE0 | (channel & 0x0F), lsb, msb]
         }
+        MidiMessage::Start => vec![0xFA],
+        MidiMessage::Stop => vec![0xFC],
+        MidiMessage::Continue => vec![0xFB],
+        MidiMessage::TimingClock => vec![0xF8],
     }
 }
 

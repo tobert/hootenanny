@@ -380,6 +380,14 @@ pub enum MidiMessage {
         channel: u8,
         value: i16,
     },
+    /// MIDI Start (0xFA)
+    Start,
+    /// MIDI Stop (0xFC)
+    Stop,
+    /// MIDI Continue (0xFB)
+    Continue,
+    /// MIDI Timing Clock (0xF8)
+    TimingClock,
 }
 
 /// Convert from garden MidiMessageSpec to internal MidiMessage
@@ -408,6 +416,10 @@ impl TryFrom<&hooteproto::garden::MidiMessageSpec> for MidiMessage {
             hooteproto::garden::MidiMessageSpec::Raw { .. } => {
                 Err("Raw MIDI messages cannot be converted to MidiMessage")
             }
+            hooteproto::garden::MidiMessageSpec::Start => Ok(MidiMessage::Start),
+            hooteproto::garden::MidiMessageSpec::Stop => Ok(MidiMessage::Stop),
+            hooteproto::garden::MidiMessageSpec::Continue => Ok(MidiMessage::Continue),
+            hooteproto::garden::MidiMessageSpec::TimingClock => Ok(MidiMessage::TimingClock),
         }
     }
 }

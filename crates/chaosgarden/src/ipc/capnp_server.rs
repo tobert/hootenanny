@@ -438,6 +438,18 @@ impl CapnpGardenServer {
                     hooteproto::request::MidiMessageSpec::Raw { bytes } => {
                         hooteproto::garden::MidiMessageSpec::Raw { bytes: bytes.clone() }
                     }
+                    hooteproto::request::MidiMessageSpec::Start => {
+                        hooteproto::garden::MidiMessageSpec::Start
+                    }
+                    hooteproto::request::MidiMessageSpec::Stop => {
+                        hooteproto::garden::MidiMessageSpec::Stop
+                    }
+                    hooteproto::request::MidiMessageSpec::Continue => {
+                        hooteproto::garden::MidiMessageSpec::Continue
+                    }
+                    hooteproto::request::MidiMessageSpec::TimingClock => {
+                        hooteproto::garden::MidiMessageSpec::TimingClock
+                    }
                 };
                 ShellRequest::SendMidi { port_pattern: r.port_pattern.clone(), message: msg }
             }

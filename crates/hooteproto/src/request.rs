@@ -1046,6 +1046,14 @@ pub enum MidiMessageSpec {
         #[serde(default)]
         bytes: Vec<u8>,
     },
+    /// MIDI Start (0xFA) - system real-time
+    Start,
+    /// MIDI Stop (0xFC) - system real-time
+    Stop,
+    /// MIDI Continue (0xFB) - system real-time
+    Continue,
+    /// MIDI Timing Clock (0xF8) - system real-time
+    TimingClock,
 }
 
 

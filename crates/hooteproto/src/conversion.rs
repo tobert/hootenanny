@@ -709,6 +709,18 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
                     b.set_message_type("raw");
                     b.set_raw_bytes(bytes);
                 }
+                MidiMessageSpec::Start => {
+                    b.set_message_type("start");
+                }
+                MidiMessageSpec::Stop => {
+                    b.set_message_type("stop");
+                }
+                MidiMessageSpec::Continue => {
+                    b.set_message_type("continue");
+                }
+                MidiMessageSpec::TimingClock => {
+                    b.set_message_type("timing_clock");
+                }
             }
         }
         ToolRequest::MidiStatus => builder.reborrow().set_midi_status(()),
@@ -1275,6 +1287,10 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
                 "raw" => MidiMessageSpec::Raw {
                     bytes: m.get_raw_bytes()?.to_vec(),
                 },
+                "start" => MidiMessageSpec::Start,
+                "stop" => MidiMessageSpec::Stop,
+                "continue" => MidiMessageSpec::Continue,
+                "timing_clock" => MidiMessageSpec::TimingClock,
                 _ => return Err(capnp::Error::failed(format!("Unknown MIDI message type: {}", msg_type))),
             };
             Ok(ToolRequest::MidiSend(MidiSendRequest {

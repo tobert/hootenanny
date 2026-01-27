@@ -246,10 +246,18 @@ pub enum MidiMessageSpec {
         channel: u8,
         value: i16,
     },
-    /// Raw MIDI bytes (for sysex, clock, etc.)
+    /// Raw MIDI bytes (for sysex, etc.)
     Raw {
         bytes: Vec<u8>,
     },
+    /// MIDI Start (0xFA) - system real-time
+    Start,
+    /// MIDI Stop (0xFC) - system real-time
+    Stop,
+    /// MIDI Continue (0xFB) - system real-time
+    Continue,
+    /// MIDI Timing Clock (0xF8) - system real-time
+    TimingClock,
 }
 
 /// Convert from MCP request MidiMessageSpec to garden MidiMessageSpec
@@ -274,6 +282,10 @@ impl From<&crate::request::MidiMessageSpec> for MidiMessageSpec {
             crate::request::MidiMessageSpec::Raw { bytes } => {
                 MidiMessageSpec::Raw { bytes: bytes.clone() }
             }
+            crate::request::MidiMessageSpec::Start => MidiMessageSpec::Start,
+            crate::request::MidiMessageSpec::Stop => MidiMessageSpec::Stop,
+            crate::request::MidiMessageSpec::Continue => MidiMessageSpec::Continue,
+            crate::request::MidiMessageSpec::TimingClock => MidiMessageSpec::TimingClock,
         }
     }
 }
