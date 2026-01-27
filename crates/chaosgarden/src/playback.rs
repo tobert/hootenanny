@@ -13,11 +13,12 @@ use uuid::Uuid;
 
 use crate::graph::Graph;
 use crate::latent::MixInSchedule;
+use crate::midi_file::ParsedMidiFile;
 use crate::nodes::{AudioFileNode, ContentResolver};
 use crate::primitives::{
-    AudioBuffer, Beat, Behavior, BoxedNode, ContentType, MidiBuffer, Node, ProcessContext,
-    ProcessError, ProcessingMode, Region, Sample, SignalBuffer, SignalType, TempoMap,
-    TransportState,
+    AudioBuffer, Beat, Behavior, BoxedNode, ContentType, MidiBuffer, MidiMessage, Node,
+    ProcessContext, ProcessError, ProcessingMode, Region, Sample, SignalBuffer, SignalType,
+    TempoMap, TransportState,
 };
 
 /// Pre-compiled graph ready for realtime execution
@@ -164,6 +165,31 @@ struct ActiveAudioRegion {
     gain: f32,
 }
 
+/// Tracks an active MIDI region with parsed events
+pub struct ActiveMidiRegion {
+    /// Region ID
+    pub region_id: Uuid,
+    /// Parsed MIDI file with events
+    pub parsed: ParsedMidiFile,
+    /// Current playhead position in ticks
+    pub playhead_tick: u64,
+    /// Last processed tick (to detect events we need to send)
+    pub last_processed_tick: u64,
+    /// Region start beat on timeline
+    pub region_start_beat: Beat,
+    /// Optional port pattern for targeted output
+    pub port_pattern: Option<String>,
+}
+
+/// A MIDI event to be sent to external hardware
+#[derive(Debug, Clone)]
+pub struct PendingMidiEvent {
+    /// The MIDI message to send
+    pub message: MidiMessage,
+    /// Optional port pattern (None = send to all outputs)
+    pub port_pattern: Option<String>,
+}
+
 /// The realtime playback engine
 pub struct PlaybackEngine {
     sample_rate: u32,
@@ -177,6 +203,8 @@ pub struct PlaybackEngine {
     active_regions: HashSet<Uuid>,
     /// Active audio nodes for PlayContent::Audio regions
     active_audio_nodes: HashMap<Uuid, ActiveAudioRegion>,
+    /// Active MIDI regions for PlayContent::Midi regions
+    active_midi_regions: HashMap<Uuid, ActiveMidiRegion>,
     /// Content resolver for loading audio (optional - if None, regions are skipped)
     content_resolver: Option<Arc<dyn ContentResolver>>,
     /// Scratch buffer for mixing region audio
@@ -197,6 +225,7 @@ impl PlaybackEngine {
             active_crossfades: Vec::new(),
             active_regions: HashSet::new(),
             active_audio_nodes: HashMap::new(),
+            active_midi_regions: HashMap::new(),
             content_resolver: None,
             region_buffer: AudioBuffer::new(buffer_size, 2),
         }
@@ -220,6 +249,7 @@ impl PlaybackEngine {
             active_crossfades: Vec::new(),
             active_regions: HashSet::new(),
             active_audio_nodes: HashMap::new(),
+            active_midi_regions: HashMap::new(),
             content_resolver: Some(resolver),
             region_buffer: AudioBuffer::new(buffer_size, 2),
         }
@@ -228,6 +258,103 @@ impl PlaybackEngine {
     /// Set content resolver
     pub fn set_resolver(&mut self, resolver: Arc<dyn ContentResolver>) {
         self.content_resolver = Some(resolver);
+    }
+
+    /// Add a MIDI region for playback
+    ///
+    /// The region will start playing at the specified beat position.
+    /// MIDI events are sent relative to the region start.
+    pub fn add_midi_region(
+        &mut self,
+        region_id: Uuid,
+        parsed: ParsedMidiFile,
+        start_beat: Beat,
+        port_pattern: Option<String>,
+    ) {
+        let active_region = ActiveMidiRegion {
+            region_id,
+            parsed,
+            playhead_tick: 0,
+            last_processed_tick: 0,
+            region_start_beat: start_beat,
+            port_pattern,
+        };
+        self.active_midi_regions.insert(region_id, active_region);
+        tracing::debug!(
+            region_id = %region_id,
+            start_beat = start_beat.0,
+            "Added MIDI region for playback"
+        );
+    }
+
+    /// Remove a MIDI region
+    pub fn remove_midi_region(&mut self, region_id: Uuid) -> bool {
+        if self.active_midi_regions.remove(&region_id).is_some() {
+            tracing::debug!(region_id = %region_id, "Removed MIDI region");
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get all active MIDI region IDs
+    pub fn active_midi_region_ids(&self) -> Vec<Uuid> {
+        self.active_midi_regions.keys().copied().collect()
+    }
+
+    /// Get pending MIDI events that should be sent based on current playback position
+    ///
+    /// This method should be called each tick to collect events that need to be
+    /// sent to external MIDI hardware. The events are returned with their target
+    /// port pattern (if any).
+    ///
+    /// After calling this, the internal playheads are updated.
+    pub fn pending_midi_events(&mut self) -> Vec<PendingMidiEvent> {
+        if self.transport != TransportState::Playing {
+            return Vec::new();
+        }
+
+        let current_beat = self.position.beats;
+        let mut events = Vec::new();
+
+        for active in self.active_midi_regions.values_mut() {
+            // Calculate position within the MIDI file based on timeline position
+            let beat_in_region = current_beat.0 - active.region_start_beat.0;
+            if beat_in_region < 0.0 {
+                // Haven't reached this region yet
+                continue;
+            }
+
+            // Check if past the end of the MIDI file
+            let duration_beats = active.parsed.duration_beats();
+            if beat_in_region >= duration_beats {
+                // Past end of MIDI content - nothing to send
+                continue;
+            }
+
+            // Convert beat position to tick in the MIDI file
+            let target_tick = active.parsed.beat_to_tick(beat_in_region);
+
+            // Get events between last processed tick and current tick
+            for event in active.parsed.events_in_range(active.last_processed_tick, target_tick + 1) {
+                events.push(PendingMidiEvent {
+                    message: event.message.clone(),
+                    port_pattern: active.port_pattern.clone(),
+                });
+            }
+
+            // Update playhead
+            active.last_processed_tick = target_tick + 1;
+            active.playhead_tick = target_tick;
+        }
+
+        events
+    }
+
+    /// Clear all MIDI regions (e.g., on stop)
+    pub fn clear_midi_regions(&mut self) {
+        self.active_midi_regions.clear();
+        tracing::debug!("Cleared all MIDI regions");
     }
 
     /// Process one buffer
@@ -506,6 +633,11 @@ impl PlaybackEngine {
     pub fn stop(&mut self) {
         self.transport = TransportState::Stopped;
         self.position = PlaybackPosition::default();
+        // Reset MIDI region playheads (but don't remove them)
+        for active in self.active_midi_regions.values_mut() {
+            active.playhead_tick = 0;
+            active.last_processed_tick = 0;
+        }
     }
 
     /// Transport control: pause
@@ -518,6 +650,21 @@ impl PlaybackEngine {
         let tick = self.tempo_map.beat_to_tick(beat);
         self.position.samples = self.tempo_map.tick_to_sample(tick, self.sample_rate);
         self.position.beats = beat;
+
+        // Update MIDI region playheads based on new position
+        for active in self.active_midi_regions.values_mut() {
+            let beat_in_region = beat.0 - active.region_start_beat.0;
+            if beat_in_region < 0.0 {
+                // Before region start - reset to beginning
+                active.playhead_tick = 0;
+                active.last_processed_tick = 0;
+            } else {
+                // Calculate tick position in MIDI file
+                let midi_tick = active.parsed.beat_to_tick(beat_in_region);
+                active.playhead_tick = midi_tick;
+                active.last_processed_tick = midi_tick;
+            }
+        }
     }
 
     /// Get current position

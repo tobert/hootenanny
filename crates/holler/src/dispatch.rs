@@ -176,6 +176,20 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             })))
         }
         "midi_status" => Ok(Payload::ToolRequest(ToolRequest::MidiStatus)),
+        "midi_play" => {
+            let p: MidiPlayArgs = serde_json::from_value(args).context("Invalid midi_play arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::MidiPlay(request::MidiPlayRequest {
+                artifact_id: p.artifact_id,
+                port_pattern: p.port_pattern,
+                start_beat: p.start_beat.unwrap_or(0.0),
+            })))
+        }
+        "midi_stop" => {
+            let p: MidiStopArgs = serde_json::from_value(args).context("Invalid midi_stop arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::MidiStop(request::MidiStopRequest {
+                region_id: p.region_id,
+            })))
+        }
 
         // === Job Tools ===
         "job_list" => {
@@ -995,4 +1009,16 @@ struct MidiDetachArgs {
 struct MidiSendArgs {
     port_pattern: Option<String>,
     message: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct MidiPlayArgs {
+    artifact_id: String,
+    port_pattern: Option<String>,
+    start_beat: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MidiStopArgs {
+    region_id: String,
 }

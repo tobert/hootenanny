@@ -454,6 +454,21 @@ impl CapnpGardenServer {
                 ShellRequest::SendMidi { port_pattern: r.port_pattern.clone(), message: msg }
             }
             ToolRequest::MidiStatus => ShellRequest::GetMidiStatus,
+            ToolRequest::MidiPlay(r) => ShellRequest::PlayMidi {
+                content_hash: r.artifact_id.clone(), // artifact_id contains content_hash from hootenanny
+                port_pattern: r.port_pattern,
+                start_beat: r.start_beat,
+            },
+            ToolRequest::MidiStop(r) => {
+                match Uuid::parse_str(&r.region_id) {
+                    Ok(id) => ShellRequest::StopMidi { region_id: id },
+                    Err(e) => return Payload::Error {
+                        code: "invalid_uuid".to_string(),
+                        message: e.to_string(),
+                        details: None,
+                    },
+                }
+            }
 
             // RAVE streaming (realtime neural audio processing)
             ToolRequest::RaveStreamStart(r) => ShellRequest::RaveStreamStart {
@@ -620,6 +635,22 @@ fn shell_reply_to_payload(reply: hooteproto::garden::ShellReply) -> Payload {
                         port_name: c.port_name,
                         messages: c.messages,
                     }).collect(),
+                })
+            ))
+        }
+        ShellReply::MidiPlayStarted { region_id, duration_beats, event_count } => {
+            Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::MidiPlayStarted(hooteproto::responses::MidiPlayStartedResponse {
+                    region_id: region_id.to_string(),
+                    duration_beats,
+                    event_count,
+                })
+            ))
+        }
+        ShellReply::MidiPlayStopped { region_id } => {
+            Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::MidiPlayStopped(hooteproto::responses::MidiPlayStoppedResponse {
+                    region_id: region_id.to_string(),
                 })
             ))
         }

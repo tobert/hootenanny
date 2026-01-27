@@ -153,6 +153,10 @@ pub enum ToolRequest {
     MidiSend(MidiSendRequest),
     /// Get MIDI status
     MidiStatus,
+    /// Play MIDI file to external outputs
+    MidiPlay(MidiPlayRequest),
+    /// Stop MIDI file playback
+    MidiStop(MidiStopRequest),
 
     /// Clear all regions
     GardenClearRegions,
@@ -289,6 +293,7 @@ impl ToolRequest {
             Self::MidiInputAttach(_) | Self::MidiInputDetach(_) => ToolTiming::AsyncShort,
             Self::MidiOutputAttach(_) | Self::MidiOutputDetach(_) => ToolTiming::AsyncShort,
             Self::MidiSend(_) => ToolTiming::AsyncShort,
+            Self::MidiPlay(_) | Self::MidiStop(_) => ToolTiming::AsyncShort,
             Self::AudioCapture(_) => ToolTiming::AsyncShort,
             Self::GetToolHelp(_) => ToolTiming::AsyncShort,
 
@@ -387,6 +392,8 @@ impl ToolRequest {
             Self::MidiOutputDetach(_) => "midi_output_detach",
             Self::MidiSend(_) => "midi_send",
             Self::MidiStatus => "midi_status",
+            Self::MidiPlay(_) => "midi_play",
+            Self::MidiStop(_) => "midi_stop",
             Self::GetToolHelp(_) => "get_tool_help",
             Self::JobStatus(_) => "job_status",
             Self::JobList(_) => "job_list",
@@ -1054,6 +1061,25 @@ pub enum MidiMessageSpec {
     Continue,
     /// MIDI Timing Clock (0xF8) - system real-time
     TimingClock,
+}
+
+/// Request to play a MIDI file to external outputs
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiPlayRequest {
+    /// Artifact ID of the MIDI file
+    pub artifact_id: String,
+    /// Target port pattern (None = all outputs)
+    pub port_pattern: Option<String>,
+    /// Timeline position to start playback (beat)
+    #[serde(default)]
+    pub start_beat: f64,
+}
+
+/// Request to stop MIDI file playback
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiStopRequest {
+    /// Region ID returned by MidiPlay
+    pub region_id: String,
 }
 
 

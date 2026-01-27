@@ -576,6 +576,22 @@ pub enum ShellRequest {
     },
     /// Get MIDI I/O status
     GetMidiStatus,
+
+    /// Play a MIDI file to external outputs
+    PlayMidi {
+        /// CAS hash of the MIDI file content
+        content_hash: String,
+        /// Target port pattern (None = all outputs)
+        port_pattern: Option<String>,
+        /// Timeline position to start playback (beat)
+        start_beat: f64,
+    },
+
+    /// Stop/remove a MIDI playback region
+    StopMidi {
+        /// Region ID returned by PlayMidi
+        region_id: Uuid,
+    },
 }
 
 /// Stream format definition for audio/MIDI capture
@@ -750,6 +766,20 @@ pub enum ShellReply {
     MidiStatus {
         inputs: Vec<MidiConnectionSpec>,
         outputs: Vec<MidiConnectionSpec>,
+    },
+    /// MIDI playback started
+    MidiPlayStarted {
+        /// Region ID for tracking/stopping this playback
+        region_id: Uuid,
+        /// Duration in beats
+        duration_beats: f64,
+        /// Number of MIDI events in the file
+        event_count: usize,
+    },
+    /// MIDI playback stopped
+    MidiPlayStopped {
+        /// Region ID that was stopped
+        region_id: Uuid,
     },
 }
 

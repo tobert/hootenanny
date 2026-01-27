@@ -70,6 +70,7 @@ pub enum ToolResponse {
 
     // === Garden/Transport ===
     GardenStatus(GardenStatusResponse),
+    UnifiedStatus(UnifiedStatusResponse),
     GardenRegions(GardenRegionsResponse),
     GardenRegionCreated(GardenRegionCreatedResponse),
     GardenQueryResult(GardenQueryResultResponse),
@@ -83,6 +84,8 @@ pub enum ToolResponse {
     MidiPorts(MidiPortsResponse),
     MidiAttached(MidiAttachedResponse),
     MidiStatus(MidiStatusResponse),
+    MidiPlayStarted(MidiPlayStartedResponse),
+    MidiPlayStopped(MidiPlayStoppedResponse),
 
     // === Graph ===
     GraphIdentity(GraphIdentityResponse),
@@ -636,6 +639,69 @@ pub struct GardenStatusResponse {
     pub region_count: usize,
 }
 
+// =============================================================================
+// Unified Status Response (combines transport, audio, MIDI status)
+// =============================================================================
+
+/// Transport subsystem status.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TransportStatus {
+    pub state: TransportState,
+    pub position_beats: f64,
+    pub tempo_bpm: f64,
+    pub region_count: usize,
+}
+
+/// Audio output subsystem status.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioOutputStatus {
+    pub attached: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_rate: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_frames: Option<u32>,
+    pub callbacks: u64,
+    pub samples_written: u64,
+    pub underruns: u64,
+}
+
+/// Audio input subsystem status.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioInputStatus {
+    pub attached: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_rate: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channels: Option<u32>,
+    pub callbacks: u64,
+    pub samples_captured: u64,
+    pub overruns: u64,
+}
+
+/// Monitor passthrough status.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MonitorStatus {
+    pub enabled: bool,
+    pub gain: f32,
+}
+
+/// Unified system status combining all subsystems.
+///
+/// This provides a complete system snapshot in a single response,
+/// suitable for high-frequency polling by GUIs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnifiedStatusResponse {
+    pub transport: TransportStatus,
+    pub audio_output: AudioOutputStatus,
+    pub audio_input: AudioInputStatus,
+    pub monitor: MonitorStatus,
+    pub midi: MidiStatusResponse,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GardenRegionInfo {
     pub region_id: String,
@@ -749,6 +815,20 @@ pub struct MidiStatusResponse {
 pub struct MidiConnectionInfo {
     pub port_name: String,
     pub messages: u64,
+}
+
+/// MIDI playback started
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiPlayStartedResponse {
+    pub region_id: String,
+    pub duration_beats: f64,
+    pub event_count: usize,
+}
+
+/// MIDI playback stopped
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiPlayStoppedResponse {
+    pub region_id: String,
 }
 
 // =============================================================================

@@ -725,6 +725,12 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
         }
         ToolRequest::MidiStatus => builder.reborrow().set_midi_status(()),
 
+        // MidiPlay and MidiStop are garden shell requests, not Cap'n Proto
+        // They're dispatched via json_to_payload in holler/dispatch.rs
+        ToolRequest::MidiPlay(_) | ToolRequest::MidiStop(_) => {
+            return Err(capnp::Error::failed("MidiPlay/MidiStop are garden shell requests, not Cap'n Proto".to_string()));
+        }
+
         ToolRequest::Ping => {
             // Should be handled by payload_to_capnp_payload
             return Err(capnp::Error::failed("ToolRequest::Ping passed to tool_request builder (should use envelope)".to_string()));
@@ -2153,6 +2159,13 @@ fn response_to_capnp_tool_response(
                 c.set_port_name(&conn.port_name);
                 c.set_messages(conn.messages);
             }
+        }
+        // MidiPlayStarted and MidiPlayStopped are returned via JSON from garden shell
+        // They don't go through Cap'n Proto serialization
+        ToolResponse::MidiPlayStarted(_) | ToolResponse::MidiPlayStopped(_) => {
+            return Err(capnp::Error::failed(
+                "MidiPlayStarted/MidiPlayStopped are garden shell responses, not Cap'n Proto".to_string(),
+            ));
         }
     }
     Ok(())

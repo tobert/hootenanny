@@ -19,6 +19,7 @@ pub mod external_io;
 pub mod graph;
 pub mod ipc;
 pub mod latent;
+pub mod midi_file;
 pub mod midi_io;
 pub mod mixer;
 pub mod nodes;
@@ -55,13 +56,14 @@ pub use nodes::{
     decode_audio, decode_wav, AudioFileNode, ContentResolver, DecodedAudio, FileCasClient,
     MemoryResolver,
 };
-pub use playback::{CompiledGraph, PlaybackEngine, PlaybackPosition};
+pub use playback::{ActiveMidiRegion, CompiledGraph, PendingMidiEvent, PlaybackEngine, PlaybackPosition};
 pub use primitives::*;
 pub use daemon::{DaemonConfig, GardenDaemon};
 pub use monitor_input::{MonitorInputConfig, MonitorInputError, MonitorInputStream, MonitorStats};
 pub use pipewire_output::{MonitorMixState, PipeWireOutputConfig, PipeWireOutputError, PipeWireOutputStream, StreamStats};
 pub use pipewire_input::{PipeWireInputConfig, PipeWireInputError, PipeWireInputStream};
 pub use tick_clock::TickClock;
+pub use midi_file::{MidiFileEvent, ParsedMidiFile, TempoChange as MidiTempoChange, parse_midi_file};
 pub use midi_io::{
     ActiveMidiInput, ActiveMidiOutput, MidiConnectionStatus, MidiError, MidiIOManager,
     MidiIOStatus, MidiPortInfo, TimestampedMidiMessage, encode_midi_message, list_input_ports,

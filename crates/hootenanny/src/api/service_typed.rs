@@ -3941,6 +3941,64 @@ impl EventDualityServer {
         }
     }
 
+    /// Play a MIDI artifact to external outputs.
+    ///
+    /// Looks up the artifact to get the content hash, then sends a PlayMidi
+    /// request to chaosgarden which loads the MIDI file and schedules it
+    /// for playback to attached MIDI outputs.
+    pub async fn midi_play_typed(
+        &self,
+        request: hooteproto::request::MidiPlayRequest,
+    ) -> Result<hooteproto::responses::MidiPlayStartedResponse, ToolError> {
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
+
+        // Look up artifact to get content hash - scope the lock to avoid Send issues
+        let content_hash = {
+            let store = self.artifact_store.read().map_err(|_| ToolError::internal("Lock poisoned"))?;
+            let artifact = store.get(&request.artifact_id)
+                .map_err(|e| ToolError::internal(e.to_string()))?
+                .ok_or_else(|| ToolError::not_found("artifact", &request.artifact_id))?;
+            artifact.content_hash.as_str().to_string()
+        };
+
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
+
+        match manager.tool_request(ToolRequest::MidiPlay(hooteproto::request::MidiPlayRequest {
+            artifact_id: content_hash, // Pass the content_hash to daemon
+            port_pattern: request.port_pattern,
+            start_beat: request.start_beat,
+        })).await {
+            Ok(ToolResponse::MidiPlayStarted(resp)) => Ok(resp),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("MIDI play failed: {}", e))),
+        }
+    }
+
+    /// Stop MIDI file playback.
+    ///
+    /// Removes the MIDI region from the playback engine, stopping any
+    /// further MIDI events from being sent to outputs.
+    pub async fn midi_stop_typed(
+        &self,
+        request: hooteproto::request::MidiStopRequest,
+    ) -> Result<hooteproto::responses::MidiPlayStoppedResponse, ToolError> {
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
+
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
+
+        match manager.tool_request(ToolRequest::MidiStop(request)).await {
+            Ok(ToolResponse::MidiPlayStopped(resp)) => Ok(resp),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("MIDI stop failed: {}", e))),
+        }
+    }
+
     // =========================================================================
     // Audio Analysis Helpers
     // =========================================================================

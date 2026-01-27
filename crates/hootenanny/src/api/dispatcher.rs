@@ -114,8 +114,8 @@ impl TypedDispatcher {
             }
 
             // === Garden Status/Query (ZMQ to chaosgarden) ===
-            ToolRequest::GardenStatus => match self.server.garden_status_typed().await {
-                Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenStatus(resp)),
+            ToolRequest::GardenStatus => match self.server.unified_status_typed().await {
+                Ok(resp) => ResponseEnvelope::success(ToolResponse::UnifiedStatus(resp)),
                 Err(e) => ResponseEnvelope::error(e),
             },
             ToolRequest::GardenGetRegions(req) => {
@@ -757,6 +757,18 @@ impl TypedDispatcher {
             ToolRequest::MidiStatus => {
                 match self.server.midi_status_typed().await {
                     Ok(resp) => ResponseEnvelope::success(ToolResponse::MidiStatus(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::MidiPlay(req) => {
+                match self.server.midi_play_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::MidiPlayStarted(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::MidiStop(req) => {
+                match self.server.midi_stop_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::MidiPlayStopped(resp)),
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }

@@ -207,7 +207,10 @@ pub fn list_tools() -> Vec<ToolInfo> {
         ToolInfo {
             name: "status".to_string(),
             description: "System status".to_string(),
-            input_schema: serde_json::json!({"type": "object"}),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "description": "Returns unified system status with transport, audio, and MIDI subsystems. Response includes: transport (state, position_beats, tempo_bpm, region_count), audio_output (attached, device_name, sample_rate, latency_frames, callbacks, samples_written, underruns), audio_input (attached, device_name, sample_rate, channels, callbacks, samples_captured, overruns), monitor (enabled, gain), midi (inputs, outputs with port_name and messages count)."
+            }),
         },
         ToolInfo {
             name: "play".to_string(),
@@ -403,6 +406,42 @@ pub fn list_tools() -> Vec<ToolInfo> {
             name: "midi_status".to_string(),
             description: "Get MIDI I/O status".to_string(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        ToolInfo {
+            name: "midi_play".to_string(),
+            description: "Play a MIDI artifact to external MIDI outputs".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "artifact_id": {
+                        "description": "Artifact ID of the MIDI file to play",
+                        "type": "string"
+                    },
+                    "port_pattern": {
+                        "description": "Target port pattern (omit for all outputs)",
+                        "type": "string"
+                    },
+                    "start_beat": {
+                        "description": "Timeline position to start playback (default: 0)",
+                        "type": "number"
+                    }
+                },
+                "required": ["artifact_id"]
+            }),
+        },
+        ToolInfo {
+            name: "midi_stop".to_string(),
+            description: "Stop MIDI file playback".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "region_id": {
+                        "description": "Region ID returned by midi_play",
+                        "type": "string"
+                    }
+                },
+                "required": ["region_id"]
+            }),
         },
 
         // ==========================================================================

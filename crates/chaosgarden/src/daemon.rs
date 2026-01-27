@@ -9,7 +9,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
 
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
 use crate::ipc::{
@@ -623,6 +623,19 @@ impl GardenDaemon {
                 debug!("Playback process error: {}", e);
             }
         }
+
+        // Process MIDI events and send to external hardware
+        // Errors are logged at trace level to avoid impacting the hot path
+        let pending_midi = engine.pending_midi_events();
+        for event in pending_midi {
+            let result = match &event.port_pattern {
+                Some(pattern) => self.midi_manager.send_to(pattern, &event.message),
+                None => self.midi_manager.send_to_all(&event.message),
+            };
+            if let Err(e) = result {
+                trace!("MIDI send error: {:?}", e);
+            }
+        }
         // Note: producer_guard dropped here, releasing the Mutex
     }
 
@@ -1078,6 +1091,107 @@ impl GardenDaemon {
                     messages: s.messages,
                 })
                 .collect(),
+        }
+    }
+
+    /// Play a MIDI file to external outputs
+    ///
+    /// Loads the MIDI file from CAS, parses it, and adds it as a MIDI region
+    /// in the playback engine. MIDI events will be sent to attached outputs
+    /// during playback.
+    fn play_midi(
+        &self,
+        content_hash: &str,
+        port_pattern: Option<String>,
+        start_beat: f64,
+    ) -> ShellReply {
+        // Check if we have a content resolver for CAS access
+        let resolver = match &self.content_resolver {
+            Some(r) => r,
+            None => {
+                return ShellReply::Error {
+                    error: "Content resolver not configured - cannot load MIDI files".to_string(),
+                    traceback: None,
+                };
+            }
+        };
+
+        // Load MIDI file from CAS
+        let midi_bytes = match resolver.resolve(content_hash) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                return ShellReply::Error {
+                    error: format!("Failed to load MIDI file: {}", e),
+                    traceback: None,
+                };
+            }
+        };
+
+        // Parse MIDI file
+        let parsed = match crate::midi_file::parse_midi_file(&midi_bytes) {
+            Ok(p) => p,
+            Err(e) => {
+                return ShellReply::Error {
+                    error: format!("Failed to parse MIDI file: {}", e),
+                    traceback: None,
+                };
+            }
+        };
+
+        let duration_beats = parsed.duration_beats();
+        let event_count = parsed.events.len();
+        let region_id = Uuid::new_v4();
+
+        // Add MIDI region to playback engine
+        let mut engine_guard = self.playback_engine.write().unwrap();
+        if let Some(engine) = engine_guard.as_mut() {
+            engine.add_midi_region(
+                region_id,
+                parsed,
+                crate::primitives::Beat(start_beat),
+                port_pattern,
+            );
+
+            info!(
+                region_id = %region_id,
+                content_hash = %content_hash,
+                start_beat = start_beat,
+                duration_beats = duration_beats,
+                event_count = event_count,
+                "Added MIDI playback region"
+            );
+
+            ShellReply::MidiPlayStarted {
+                region_id,
+                duration_beats,
+                event_count,
+            }
+        } else {
+            ShellReply::Error {
+                error: "Playback engine not initialized".to_string(),
+                traceback: None,
+            }
+        }
+    }
+
+    /// Stop/remove a MIDI playback region
+    fn stop_midi(&self, region_id: Uuid) -> ShellReply {
+        let mut engine_guard = self.playback_engine.write().unwrap();
+        if let Some(engine) = engine_guard.as_mut() {
+            if engine.remove_midi_region(region_id) {
+                info!(region_id = %region_id, "Stopped MIDI playback region");
+                ShellReply::MidiPlayStopped { region_id }
+            } else {
+                ShellReply::Error {
+                    error: format!("MIDI region {} not found", region_id),
+                    traceback: None,
+                }
+            }
+        } else {
+            ShellReply::Error {
+                error: "Playback engine not initialized".to_string(),
+                traceback: None,
+            }
         }
     }
 
@@ -1818,6 +1932,14 @@ impl GardenDaemon {
             }
             ShellRequest::GetMidiStatus => {
                 self.get_midi_status()
+            }
+
+            // MIDI file playback
+            ShellRequest::PlayMidi { content_hash, port_pattern, start_beat } => {
+                self.play_midi(&content_hash, port_pattern, start_beat)
+            }
+            ShellRequest::StopMidi { region_id } => {
+                self.stop_midi(region_id)
             }
 
             // Unhandled requests
