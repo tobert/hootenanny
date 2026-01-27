@@ -14,9 +14,11 @@ use axum::{
     },
     http::{header, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
+use hooteproto::request::{GardenSetMonitorRequest, ToolRequest};
+use hooteproto::responses::ToolResponse;
 use cas::{ContentStore, FileStore as CasFileStore};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -40,6 +42,7 @@ pub fn router(state: WebState) -> Router {
         .route("/ui", get(serve_ui))
         .route("/stream/live", get(stream_live_ws))
         .route("/stream/live/status", get(stream_status))
+        .route("/api/monitor", post(set_monitor))
         .route("/", get(serve_root))
         .with_state(state)
 }
@@ -191,7 +194,49 @@ async fn stream_status(State(state): State<WebState>) -> impl IntoResponse {
     }))
 }
 
-/// HTML template for the artifact browser UI
+#[derive(Debug, Deserialize)]
+struct MonitorRequest {
+    enabled: Option<bool>,
+    gain: Option<f32>,
+}
+
+/// Set monitor gain/enabled state
+async fn set_monitor(
+    State(state): State<WebState>,
+    Json(body): Json<MonitorRequest>,
+) -> impl IntoResponse {
+    if let Some(ref manager) = state.garden_manager {
+        let request = ToolRequest::GardenSetMonitor(GardenSetMonitorRequest {
+            enabled: body.enabled,
+            gain: body.gain,
+        });
+        match manager.tool_request(request).await {
+            Ok(ToolResponse::GardenMonitorStatus(status)) => (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "ok": true,
+                    "enabled": status.enabled,
+                    "gain": status.gain
+                })),
+            ),
+            Ok(_) => (
+                StatusCode::OK,
+                Json(serde_json::json!({"ok": true})),
+            ),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ),
+        }
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "no garden backend"})),
+        )
+    }
+}
+
+/// HTML template for the Winamp-inspired player UI
 const UI_HTML: &str = r##"<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -199,72 +244,732 @@ const UI_HTML: &str = r##"<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Hootenanny</title>
   <style>
-    :root { --bg: #1a1a2e; --card: #16213e; --accent: #e94560; --text: #eee; --muted: #888; }
+    :root {
+      --bg-dark: #0d0d1a;
+      --bg-mid: #1a1a2e;
+      --bg-panel: #12121f;
+      --border-light: #3a3a5a;
+      --border-dark: #0a0a12;
+      --text: #e8e8f0;
+      --text-muted: #888899;
+      --accent-cyan: #0ff;
+      --accent-pink: #f0a;
+      --accent-green: #0f0;
+      --spectrum-low: #22ff22;
+      --spectrum-mid: #ffff22;
+      --spectrum-high: #ff4422;
+    }
+
+    @font-face {
+      font-family: 'Digital';
+      src: local('Courier New'), local('monospace');
+    }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); padding: 1rem; min-height: 100vh; }
-    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem; }
-    h1 { font-size: 1.5rem; display: flex; align-items: center; gap: 0.5rem; }
-    .live-toggle { background: var(--accent); border: none; color: white; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; font-size: 0.9rem; }
-    .live-toggle:hover { opacity: 0.9; }
-    .live-toggle.active { background: #0c6; }
-    .filters { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
-    .filters input, .filters select { padding: 0.5rem; border: 1px solid #333; border-radius: 4px; background: var(--card); color: var(--text); font-size: 0.9rem; }
-    .filters input { flex: 1; min-width: 150px; }
-    .artifacts { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
-    .artifact { background: var(--card); padding: 1rem; border-radius: 8px; }
-    .artifact-type { font-size: 0.7rem; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
-    .artifact-id { font-weight: 600; margin: 0.25rem 0; word-break: break-all; font-size: 0.95rem; }
-    .artifact-meta { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.5rem; }
-    .artifact audio { width: 100%; margin-top: 0.5rem; height: 36px; }
-    .artifact a { color: var(--accent); text-decoration: none; font-size: 0.85rem; }
-    .artifact a:hover { text-decoration: underline; }
-    .live-section { background: var(--card); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; }
-    .live-section h3 { font-size: 1rem; margin-bottom: 0.5rem; }
-    .visualizer { height: 60px; background: #0a0a15; border-radius: 4px; margin-bottom: 0.5rem; }
-    .status { font-size: 0.8rem; color: var(--muted); }
-    .empty { text-align: center; padding: 3rem; color: var(--muted); }
-    .tag { display: inline-block; background: #2a2a4e; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.7rem; margin-right: 0.25rem; margin-top: 0.25rem; }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: linear-gradient(180deg, var(--bg-mid) 0%, var(--bg-dark) 100%);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 0.5rem;
+    }
+
+    /* Title bar */
+    .titlebar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.5rem 1rem;
+      background: linear-gradient(90deg, var(--bg-panel) 0%, var(--bg-mid) 50%, var(--bg-panel) 100%);
+      border: 1px solid var(--border-light);
+      border-bottom: 1px solid var(--border-dark);
+      border-radius: 4px 4px 0 0;
+    }
+
+    .titlebar h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      background: linear-gradient(90deg, var(--accent-cyan), var(--accent-pink));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .tagline {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
+    /* Player section */
+    .player {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-light);
+      border-top: none;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    /* Spectrum analyzer */
+    .spectrum-container {
+      background: var(--bg-dark);
+      border: 2px inset var(--border-dark);
+      border-radius: 2px;
+      padding: 4px;
+    }
+
+    #spectrum {
+      width: 100%;
+      height: 100px;
+      display: block;
+      background: #0a0a12;
+      border-radius: 2px;
+    }
+
+    /* Controls row */
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    /* Time display */
+    .time-block {
+      background: #000;
+      border: 2px inset var(--border-dark);
+      padding: 0.5rem 0.75rem;
+      border-radius: 2px;
+      min-width: 80px;
+      text-align: center;
+    }
+
+    .time {
+      font-family: 'Courier New', monospace;
+      font-size: 1.5rem;
+      font-weight: bold;
+      color: var(--accent-green);
+      text-shadow: 0 0 8px var(--accent-green);
+      letter-spacing: 0.1em;
+    }
+
+    .samplerate {
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* Transport buttons */
+    .transport {
+      display: flex;
+      gap: 0.25rem;
+    }
+
+    .btn {
+      width: 36px;
+      height: 28px;
+      background: linear-gradient(180deg, #3a3a4e 0%, #2a2a3e 50%, #1a1a2e 100%);
+      border: 1px outset var(--border-light);
+      border-radius: 3px;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.1s;
+    }
+
+    .btn:hover {
+      background: linear-gradient(180deg, #4a4a5e 0%, #3a3a4e 50%, #2a2a3e 100%);
+    }
+
+    .btn:active {
+      border-style: inset;
+      background: linear-gradient(180deg, #1a1a2e 0%, #2a2a3e 50%, #3a3a4e 100%);
+    }
+
+    .btn.play {
+      width: 44px;
+      color: var(--accent-green);
+    }
+
+    .btn.play.active {
+      color: var(--accent-pink);
+      text-shadow: 0 0 6px var(--accent-pink);
+    }
+
+    /* Volume control */
+    .volume-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex: 1;
+      max-width: 200px;
+    }
+
+    .volume-icon {
+      font-size: 1rem;
+      color: var(--text-muted);
+    }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      flex: 1;
+      height: 8px;
+      background: linear-gradient(90deg, var(--spectrum-low), var(--spectrum-mid), var(--spectrum-high));
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 18px;
+      background: linear-gradient(180deg, #eee 0%, #888 100%);
+      border: 1px solid #444;
+      border-radius: 2px;
+      cursor: pointer;
+    }
+
+    input[type="range"]::-moz-range-thumb {
+      width: 14px;
+      height: 18px;
+      background: linear-gradient(180deg, #eee 0%, #888 100%);
+      border: 1px solid #444;
+      border-radius: 2px;
+      cursor: pointer;
+    }
+
+    /* Status indicator */
+    .status-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-left: auto;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #444;
+      transition: all 0.3s;
+    }
+
+    .status-dot.connected {
+      background: var(--accent-green);
+      box-shadow: 0 0 6px var(--accent-green);
+    }
+
+    .status-text {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    /* Track info */
+    .track-info {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      padding: 0.5rem;
+      background: var(--bg-dark);
+      border: 1px inset var(--border-dark);
+      border-radius: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Artifacts section */
+    .artifacts {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-light);
+      border-top: none;
+      border-radius: 0 0 4px 4px;
+      overflow: hidden;
+    }
+
+    .artifacts-header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.75rem 1rem;
+      background: linear-gradient(180deg, var(--bg-mid) 0%, var(--bg-panel) 100%);
+      border-bottom: 1px solid var(--border-dark);
+    }
+
+    .artifacts-header h2 {
+      font-size: 0.85rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--accent-cyan);
+    }
+
+    .artifacts-header input[type="search"] {
+      flex: 1;
+      max-width: 200px;
+      padding: 0.35rem 0.5rem;
+      background: var(--bg-dark);
+      border: 1px inset var(--border-dark);
+      border-radius: 3px;
+      color: var(--text);
+      font-size: 0.8rem;
+    }
+
+    .artifacts-header input::placeholder {
+      color: var(--text-muted);
+    }
+
+    .artifacts-header select {
+      padding: 0.35rem 0.5rem;
+      background: var(--bg-dark);
+      border: 1px inset var(--border-dark);
+      border-radius: 3px;
+      color: var(--text);
+      font-size: 0.8rem;
+    }
+
+    /* Artifact grid */
+    .artifact-grid {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.75rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 0.75rem;
+      align-content: start;
+    }
+
+    .artifact-card {
+      background: var(--bg-dark);
+      border: 1px solid var(--border-dark);
+      border-radius: 4px;
+      padding: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      transition: all 0.15s;
+    }
+
+    .artifact-card:hover {
+      border-color: var(--accent-cyan);
+      box-shadow: 0 0 8px rgba(0, 255, 255, 0.2);
+    }
+
+    .artifact-icon {
+      font-size: 1.5rem;
+      line-height: 1;
+    }
+
+    .artifact-name {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text);
+      word-break: break-all;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+
+    .artifact-creator {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+
+    .artifact-actions {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: auto;
+      padding-top: 0.35rem;
+    }
+
+    .artifact-actions button,
+    .artifact-actions a {
+      background: transparent;
+      border: 1px solid var(--border-light);
+      border-radius: 3px;
+      color: var(--text-muted);
+      padding: 0.25rem 0.5rem;
+      font-size: 0.7rem;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.1s;
+    }
+
+    .artifact-actions button:hover,
+    .artifact-actions a:hover {
+      border-color: var(--accent-cyan);
+      color: var(--accent-cyan);
+    }
+
+    .empty {
+      grid-column: 1 / -1;
+      text-align: center;
+      padding: 2rem;
+      color: var(--text-muted);
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 10px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: var(--bg-dark);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border-light);
+      border-radius: 5px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--accent-cyan);
+    }
   </style>
 </head>
 <body>
-  <div class="header">
-    <h1>🎵 Hootenanny</h1>
-    <button class="live-toggle" id="liveToggle" title="Stream live audio output">▶ Live</button>
-  </div>
+  <div class="app">
+    <header class="titlebar">
+      <h1>🎵 HOOTENANNY</h1>
+      <span class="tagline">♪ every voice welcome</span>
+    </header>
 
-  <div class="live-section" id="liveSection" style="display:none;">
-    <h3>Live Output</h3>
-    <canvas class="visualizer" id="visualizer"></canvas>
-    <div class="status" id="streamStatus">Click Live to connect...</div>
-  </div>
+    <main class="player">
+      <div class="spectrum-container">
+        <canvas id="spectrum"></canvas>
+      </div>
 
-  <div class="filters">
-    <input type="search" id="search" placeholder="Search artifacts...">
-    <select id="typeFilter">
-      <option value="">All types</option>
-      <option value="audio">Audio</option>
-      <option value="midi">MIDI</option>
-      <option value="soundfont">SoundFont</option>
-    </select>
-    <select id="creatorFilter">
-      <option value="">All creators</option>
-    </select>
-  </div>
+      <div class="controls">
+        <div class="time-block">
+          <div class="time" id="time">0:00</div>
+          <div class="samplerate">48kHz</div>
+        </div>
 
-  <div class="artifacts" id="artifactList">
-    <div class="empty">Loading artifacts...</div>
+        <div class="transport">
+          <button class="btn" id="btnPrev" title="Previous">◄◄</button>
+          <button class="btn play" id="btnPlay" title="Play/Pause">▶</button>
+          <button class="btn" id="btnStop" title="Stop">■</button>
+          <button class="btn" id="btnNext" title="Next">►►</button>
+        </div>
+
+        <div class="volume-wrap">
+          <span class="volume-icon">🔊</span>
+          <input type="range" id="volume" min="0" max="100" value="80" title="Volume">
+        </div>
+
+        <div class="status-wrap">
+          <div class="status-dot" id="statusDot"></div>
+          <span class="status-text" id="statusText">Ready</span>
+        </div>
+      </div>
+
+      <div class="track-info" id="trackInfo">
+        ♫ Click ▶ to start live audio stream
+      </div>
+    </main>
+
+    <section class="artifacts">
+      <div class="artifacts-header">
+        <h2>ARTIFACTS</h2>
+        <input type="search" id="search" placeholder="🔍 search...">
+        <select id="typeFilter">
+          <option value="">All types</option>
+          <option value="audio">Audio</option>
+          <option value="midi">MIDI</option>
+          <option value="soundfont">SoundFont</option>
+        </select>
+        <select id="creatorFilter">
+          <option value="">All creators</option>
+        </select>
+      </div>
+      <div class="artifact-grid" id="artifactList">
+        <div class="empty">Loading artifacts...</div>
+      </div>
+    </section>
   </div>
 
   <script>
-    const API_BASE = '';
+    // State
     let allArtifacts = [];
     let ws = null;
     let audioCtx = null;
     let workletNode = null;
+    let analyser = null;
+    let isPlaying = false;
+    let startTime = 0;
 
+    // Spectrum analyzer state
+    const peakHold = new Float32Array(64);
+    const peakDecay = 0.97;
+
+    // DOM elements
+    const canvas = document.getElementById('spectrum');
+    const ctx = canvas.getContext('2d');
+    const timeDisplay = document.getElementById('time');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const trackInfo = document.getElementById('trackInfo');
+    const btnPlay = document.getElementById('btnPlay');
+    const volumeSlider = document.getElementById('volume');
+
+    // Resize canvas to match container
+    function resizeCanvas() {
+      const container = canvas.parentElement;
+      canvas.width = container.clientWidth - 8;
+      canvas.height = 100;
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    // Format time as m:ss
+    function formatTime(seconds) {
+      const m = Math.floor(seconds / 60);
+      const s = Math.floor(seconds % 60);
+      return `${m}:${s.toString().padStart(2, '0')}`;
+    }
+
+    // Update time display
+    function updateTime() {
+      if (audioCtx && isPlaying) {
+        const elapsed = audioCtx.currentTime - startTime;
+        timeDisplay.textContent = formatTime(elapsed);
+      }
+      requestAnimationFrame(updateTime);
+    }
+
+    // Draw spectrum analyzer
+    function drawSpectrum() {
+      requestAnimationFrame(drawSpectrum);
+
+      if (!analyser) {
+        // Draw idle state
+        ctx.fillStyle = '#0a0a12';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        return;
+      }
+
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(data);
+
+      const { width, height } = canvas;
+      ctx.fillStyle = '#0a0a12';
+      ctx.fillRect(0, 0, width, height);
+
+      const barCount = 64;
+      const gap = 2;
+      const barWidth = (width - (barCount - 1) * gap) / barCount;
+      const binSize = Math.floor(data.length / barCount);
+
+      for (let i = 0; i < barCount; i++) {
+        // Average frequency bins with slight weighting toward higher bins
+        let sum = 0;
+        for (let j = 0; j < binSize; j++) {
+          sum += data[i * binSize + j];
+        }
+        const value = sum / binSize / 255;
+        const barHeight = value * height * 0.95;
+
+        // Update peak hold
+        if (value > peakHold[i]) peakHold[i] = value;
+        else peakHold[i] *= peakDecay;
+
+        const x = i * (barWidth + gap);
+
+        // Draw bar with gradient
+        const gradient = ctx.createLinearGradient(0, height, 0, height - barHeight);
+        gradient.addColorStop(0, '#22ff22');
+        gradient.addColorStop(0.5, '#ffff22');
+        gradient.addColorStop(1, '#ff4422');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x, height - barHeight, barWidth, barHeight);
+
+        // Draw peak hold line
+        const peakY = height - peakHold[i] * height * 0.95;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x, peakY - 2, barWidth, 2);
+      }
+    }
+
+    // Initialize audio context and worklet
+    async function initAudio() {
+      if (audioCtx) return;
+
+      audioCtx = new AudioContext({ sampleRate: 48000 });
+
+      // Create analyser
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.75;
+
+      // Create worklet for PCM playback
+      const workletCode = `
+        class PCMProcessor extends AudioWorkletProcessor {
+          constructor() {
+            super();
+            this.buffer = [];
+            this.port.onmessage = e => {
+              // Handle clear command
+              if (e.data === 'clear') {
+                this.buffer = [];
+                return;
+              }
+              this.buffer.push(...e.data);
+              // Keep max 1 second of audio buffered
+              if (this.buffer.length > 96000) {
+                this.buffer.splice(0, this.buffer.length - 48000);
+              }
+            };
+          }
+          process(inputs, outputs) {
+            const out = outputs[0];
+            const needed = out[0].length * 2;
+            for (let ch = 0; ch < out.length; ch++) {
+              for (let i = 0; i < out[ch].length; i++) {
+                const idx = i * 2 + ch;
+                out[ch][i] = idx < this.buffer.length ? this.buffer[idx] : 0;
+              }
+            }
+            if (this.buffer.length >= needed) {
+              this.buffer.splice(0, needed);
+            }
+            return true;
+          }
+        }
+        registerProcessor('pcm-processor', PCMProcessor);
+      `;
+
+      const blob = new Blob([workletCode], { type: 'application/javascript' });
+      await audioCtx.audioWorklet.addModule(URL.createObjectURL(blob));
+      workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor');
+
+      // Route through analyser
+      workletNode.connect(analyser);
+      analyser.connect(audioCtx.destination);
+    }
+
+    // Start live streaming
+    async function startLive() {
+      await initAudio();
+
+      const wsUrl = `wss://${location.host}/stream/live`;
+      ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+
+      statusText.textContent = 'Connecting...';
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ type: 'start', buffer_ms: 150 }));
+        statusDot.classList.add('connected');
+        statusText.textContent = 'Connected';
+        trackInfo.textContent = '♫ Live audio stream ─ 48kHz stereo';
+        isPlaying = true;
+        startTime = audioCtx.currentTime;
+        btnPlay.classList.add('active');
+        btnPlay.textContent = '⏸';
+      };
+
+      ws.onmessage = (e) => {
+        if (e.data instanceof ArrayBuffer && e.data.byteLength > 8) {
+          const samples = new Float32Array(e.data, 8);
+          workletNode.port.postMessage(Array.from(samples));
+        }
+      };
+
+      ws.onerror = () => {
+        statusDot.classList.remove('connected');
+        statusText.textContent = 'Error';
+      };
+
+      ws.onclose = () => {
+        statusDot.classList.remove('connected');
+        statusText.textContent = 'Disconnected';
+        isPlaying = false;
+        btnPlay.classList.remove('active');
+        btnPlay.textContent = '▶';
+      };
+    }
+
+    // Stop streaming
+    function stopLive() {
+      if (ws) {
+        ws.send(JSON.stringify({ type: 'stop' }));
+        ws.close();
+        ws = null;
+      }
+      // Clear the audio buffer to stop any looping samples
+      if (workletNode) {
+        workletNode.port.postMessage('clear');
+      }
+      statusDot.classList.remove('connected');
+      statusText.textContent = 'Stopped';
+      trackInfo.textContent = '♫ Click ▶ to start live audio stream';
+      isPlaying = false;
+      btnPlay.classList.remove('active');
+      btnPlay.textContent = '▶';
+    }
+
+    // Volume control
+    async function setVolume(value) {
+      try {
+        await fetch('/api/monitor', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ gain: value / 100 })
+        });
+      } catch (e) {
+        console.warn('Failed to set volume:', e);
+      }
+    }
+
+    // Transport controls
+    btnPlay.onclick = () => {
+      if (isPlaying) {
+        stopLive();
+      } else {
+        startLive();
+      }
+    };
+
+    document.getElementById('btnStop').onclick = () => {
+      stopLive();
+      startTime = 0;
+      timeDisplay.textContent = '0:00';
+    };
+
+    volumeSlider.oninput = function() {
+      setVolume(this.value);
+    };
+
+    // Artifact functions
     async function loadArtifacts() {
       try {
-        const res = await fetch(`${API_BASE}/artifacts?limit=200`);
+        const res = await fetch('/artifacts?limit=200');
         allArtifacts = await res.json();
         populateCreatorFilter();
         renderArtifacts();
@@ -282,6 +987,22 @@ const UI_HTML: &str = r##"<!DOCTYPE html>
         opt.textContent = c;
         select.appendChild(opt);
       });
+    }
+
+    function getTypeIcon(tags) {
+      if (tags.some(t => t.includes('midi'))) return '🎹';
+      if (tags.some(t => t.includes('audio') || t.includes('wav'))) return '🔊';
+      if (tags.some(t => t.includes('soundfont'))) return '🎸';
+      return '📄';
+    }
+
+    function getType(tags) {
+      const typeTag = tags.find(t => t.startsWith('type:'));
+      return typeTag ? typeTag.split(':')[1] : 'unknown';
+    }
+
+    function isAudio(tags) {
+      return tags.some(t => t === 'type:audio' || t === 'type:wav' || t.includes('audio'));
     }
 
     function renderArtifacts() {
@@ -303,109 +1024,61 @@ const UI_HTML: &str = r##"<!DOCTYPE html>
       }
 
       list.innerHTML = filtered.map(a => `
-        <div class="artifact">
-          <div class="artifact-type">${getType(a.tags)}</div>
-          <div class="artifact-id">${a.id}</div>
-          <div class="artifact-meta">${a.creator} · ${new Date(a.created_at).toLocaleDateString()}</div>
-          <div>${a.tags.map(t => `<span class="tag">${t}</span>`).join('')}</div>
-          ${isAudio(a.tags) ? `<audio controls preload="none" src="${a.content_url}"></audio>` : `<a href="${a.content_url}" target="_blank">Download</a>`}
+        <div class="artifact-card">
+          <div class="artifact-icon">${getTypeIcon(a.tags)}</div>
+          <div class="artifact-name" title="${a.id}">${a.id}</div>
+          <div class="artifact-creator">${a.creator}</div>
+          <div class="artifact-actions">
+            ${isAudio(a.tags) ? `<button onclick="playArtifact('${a.content_url}')" title="Play">▶</button>` : ''}
+            <a href="${a.content_url}" download title="Download">⬇</a>
+          </div>
         </div>
       `).join('');
     }
 
-    function getType(tags) {
-      const typeTag = tags.find(t => t.startsWith('type:'));
-      return typeTag ? typeTag.split(':')[1] : 'unknown';
-    }
-
-    function isAudio(tags) {
-      return tags.some(t => t === 'type:audio' || t === 'type:wav' || t.includes('audio'));
-    }
-
-    // Live streaming with AudioWorklet
-    async function startLive() {
-      if (!audioCtx) {
-        audioCtx = new AudioContext({ sampleRate: 48000 });
-        const workletCode = `
-          class PCMProcessor extends AudioWorkletProcessor {
-            constructor() {
-              super();
-              this.buffer = [];
-              this.port.onmessage = e => {
-                this.buffer.push(...e.data);
-                if (this.buffer.length > 48000) this.buffer.splice(0, this.buffer.length - 48000);
-              };
-            }
-            process(inputs, outputs) {
-              const out = outputs[0];
-              const needed = out[0].length * 2;
-              for (let ch = 0; ch < out.length; ch++) {
-                for (let i = 0; i < out[ch].length; i++) {
-                  const idx = i * 2 + ch;
-                  out[ch][i] = idx < this.buffer.length ? this.buffer[idx] : 0;
-                }
-              }
-              if (this.buffer.length >= needed) this.buffer.splice(0, needed);
-              return true;
-            }
-          }
-          registerProcessor('pcm-processor', PCMProcessor);
-        `;
-        const blob = new Blob([workletCode], { type: 'application/javascript' });
-        await audioCtx.audioWorklet.addModule(URL.createObjectURL(blob));
-        workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor');
-        workletNode.connect(audioCtx.destination);
-      }
-
-      const wsUrl = `wss://${location.host}/stream/live`;
-      ws = new WebSocket(wsUrl);
-      ws.binaryType = 'arraybuffer';
-      document.getElementById('streamStatus').textContent = 'Connecting...';
-
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ type: 'start', buffer_ms: 150 }));
-        document.getElementById('streamStatus').textContent = 'Connected - streaming audio';
+    // Play artifact audio
+    async function playArtifact(url) {
+      await initAudio();
+      const audio = new Audio(url);
+      const source = audioCtx.createMediaElementSource(audio);
+      source.connect(analyser);
+      analyser.connect(audioCtx.destination);
+      audio.play();
+      isPlaying = true;
+      startTime = audioCtx.currentTime;
+      trackInfo.textContent = '♫ Playing artifact...';
+      audio.onended = () => {
+        isPlaying = false;
+        trackInfo.textContent = '♫ Click ▶ to start live audio stream';
       };
+    }
 
-      ws.onmessage = (e) => {
-        if (e.data instanceof ArrayBuffer && e.data.byteLength > 8) {
-          const samples = new Float32Array(e.data, 8);
-          workletNode.port.postMessage(Array.from(samples));
+    // Status polling
+    async function pollStatus() {
+      try {
+        const res = await fetch('/stream/live/status');
+        const status = await res.json();
+        if (status.status === 'available' && !ws && !isPlaying) {
+          statusText.textContent = 'Ready';
         }
-      };
-
-      ws.onerror = () => {
-        document.getElementById('streamStatus').textContent = 'Connection error';
-      };
-
-      ws.onclose = () => {
-        document.getElementById('streamStatus').textContent = 'Disconnected';
-      };
-    }
-
-    function stopLive() {
-      if (ws) { ws.close(); ws = null; }
-      document.getElementById('streamStatus').textContent = 'Click Live to connect...';
-    }
-
-    document.getElementById('liveToggle').onclick = function() {
-      const section = document.getElementById('liveSection');
-      if (this.classList.toggle('active')) {
-        section.style.display = 'block';
-        this.textContent = '⏹ Stop';
-        startLive();
-      } else {
-        section.style.display = 'none';
-        this.textContent = '▶ Live';
-        stopLive();
+      } catch (e) {
+        // Ignore
       }
-    };
+    }
 
+    // Event listeners
     document.getElementById('search').oninput = renderArtifacts;
     document.getElementById('typeFilter').onchange = renderArtifacts;
     document.getElementById('creatorFilter').onchange = renderArtifacts;
 
+    // Init
     loadArtifacts();
+    drawSpectrum();
+    updateTime();
+    setInterval(pollStatus, 5000);
+
+    // Set initial volume from slider
+    setVolume(volumeSlider.value);
   </script>
 </body>
 </html>
