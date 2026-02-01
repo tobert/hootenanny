@@ -4,6 +4,44 @@
 
 Dumping stuff here so we don't lose it.
 
+### WebSocket Audio Streaming Exploration (2026-01-27)
+
+**Current State - it works!**
+- PCM2902 audio capture via PipeWire monitor input
+- Monitor passthrough to output (can hear input in speakers)
+- Streaming tap ring buffer captures final mix
+- WebSocket endpoint at `/stream/live`
+- HTTP API at `/ui`, `/artifacts`, `/stream/live/status`
+- TLS enabled, access via `https://100.83.138.103:8082/ui`
+
+**Issues Found:**
+
+1. **Bind address not localhost**
+   - Server binds to `100.83.138.103:8082` (Tailscale IP) instead of `127.0.0.1:8082`
+   - Likely config in `~/.config/hootenanny/config.toml`
+
+2. **No volume/level visualization in UI**
+   - The UI has a canvas visualizer but no waveform drawing code
+   - Just shows an empty dark rectangle
+
+3. **Dead code warnings in test files** (from diagnostics)
+   - `client_concurrency.rs:85` - `delayed_router` never used
+   - `integration.rs:27` - `frames_to_multipart` never used
+   - `integration.rs:58` - `HubStats.clients_seen` never read
+   - `integration.rs:65-66` - `frontend_endpoint`, `backend_endpoint` never read
+   - `mcp_client.rs:13-70` - `ToolInfo`, `McpClient` and fields never used
+   - These are test scaffolding that was never finished or used
+
+**Architecture:**
+```
+PCM2902 → MonitorInputStream → AudioRingBuffer → PipeWireOutputStream → Speakers
+                                                         │
+                                                         ▼
+                                                   StreamingTap ──► WebSocket ──► Browser AudioWorklet ──► Speakers
+```
+
+---
+
 - let's keep a note - clap is too slow to be blocking for audio analyze, maybe it could include a job id for it, and only when asked to
   with a param. also clap seems to be running on cpu. we'll pursue that in another session. also analyze could look at just how much of
   file is sparse / 0's to help with this. a lot of our empty wavs are all zeroes. could maybe also do some band pass analysis in there
