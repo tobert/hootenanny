@@ -255,6 +255,26 @@ async fn main() -> Result<()> {
         None
     };
 
+    // --- Orpheus Connection (lazy - ZMQ connects when peer available) ---
+    let orpheus_endpoint = &config.bootstrap.connections.orpheus;
+    let orpheus_client: Option<Arc<zmq::OrpheusClient>> = if !orpheus_endpoint.is_empty() {
+        info!("🎼 Connecting to Orpheus at {}...", orpheus_endpoint);
+        let orpheus_config = zmq::orpheus_config(orpheus_endpoint, zmq::DEFAULT_ORPHEUS_TIMEOUT_MS);
+        Some(zmq::OrpheusClient::new(orpheus_config).await)
+    } else {
+        None
+    };
+
+    // --- Beat-this Connection (lazy - ZMQ connects when peer available) ---
+    let beatthis_endpoint = &config.bootstrap.connections.beatthis;
+    let beatthis_client: Option<Arc<zmq::BeatthisClient>> = if !beatthis_endpoint.is_empty() {
+        info!("🥁 Connecting to beat-this at {}...", beatthis_endpoint);
+        let beatthis_config = zmq::beatthis_config(beatthis_endpoint, zmq::DEFAULT_BEATTHIS_TIMEOUT_MS);
+        Some(zmq::BeatthisClient::new(beatthis_config).await)
+    } else {
+        None
+    };
+
     let http_addr = config.infra.bind.http_bind_addr();
     let zmq_router = &config.infra.bind.zmq_router;
     let zmq_pub = &config.infra.bind.zmq_pub;
@@ -323,6 +343,8 @@ async fn main() -> Result<()> {
         .with_garden(garden_manager.clone())
         .with_vibeweaver(vibeweaver_client.clone())
         .with_rave(rave_client.clone())
+        .with_orpheus(orpheus_client.clone())
+        .with_beatthis(beatthis_client.clone())
         .with_broadcaster(Some(broadcast_publisher))
         .with_stream_manager(Some(stream_manager.clone()))
         .with_session_manager(Some(session_manager.clone()))

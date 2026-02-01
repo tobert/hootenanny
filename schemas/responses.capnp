@@ -124,6 +124,9 @@ struct ToolResponse {
     midiPorts @64 :MidiPortsResponse;
     midiAttached @65 :MidiAttachedResponse;
     midiStatus @66 :MidiStatusResponse;
+
+    # Unified Status (all subsystems in one response)
+    unifiedStatus @68 :UnifiedStatusResponse;
   }
 }
 
@@ -802,4 +805,48 @@ struct MidiConnectionInfo {
 struct MidiStatusResponse {
   inputs @0 :List(MidiConnectionInfo);
   outputs @1 :List(MidiConnectionInfo);
+}
+
+# =============================================================================
+# Unified Status Response
+# =============================================================================
+
+struct TransportStatus {
+  state @0 :TransportState;
+  positionBeats @1 :Float64;
+  tempoBpm @2 :Float64;
+  regionCount @3 :UInt64;
+}
+
+struct AudioOutputStatus {
+  attached @0 :Bool;
+  deviceName @1 :Text;
+  sampleRate @2 :UInt32;
+  latencyFrames @3 :UInt32;
+  callbacks @4 :UInt64;
+  samplesWritten @5 :UInt64;
+  underruns @6 :UInt64;
+}
+
+struct AudioInputStatus {
+  attached @0 :Bool;
+  deviceName @1 :Text;
+  sampleRate @2 :UInt32;
+  channels @3 :UInt32;
+  callbacks @4 :UInt64;
+  samplesCaptured @5 :UInt64;
+  overruns @6 :UInt64;
+}
+
+struct MonitorStatus {
+  enabled @0 :Bool;
+  gain @1 :Float32;
+}
+
+struct UnifiedStatusResponse {
+  transport @0 :TransportStatus;
+  audioOutput @1 :AudioOutputStatus;
+  audioInput @2 :AudioInputStatus;
+  monitor @3 :MonitorStatus;
+  midi @4 :MidiStatusResponse;
 }

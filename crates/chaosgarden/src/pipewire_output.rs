@@ -106,6 +106,11 @@ pub struct StreamStats {
     pub monitor_samples: std::sync::atomic::AtomicU64,
     // Warmup flag - don't count underruns until first successful read
     pub warmed_up: std::sync::atomic::AtomicBool,
+    // RAVE streaming counters
+    pub rave_writes: std::sync::atomic::AtomicU64,
+    pub rave_samples_written: std::sync::atomic::AtomicU64,
+    pub rave_reads: std::sync::atomic::AtomicU64,
+    pub rave_samples_read: std::sync::atomic::AtomicU64,
 }
 
 impl PipeWireOutputStream {

@@ -5,7 +5,7 @@ use crate::job_system::JobStore;
 use crate::mcp_tools::local_models::LocalModels;
 use crate::sessions::SessionManager;
 use crate::streams::{SlicingEngine, StreamManager};
-use crate::zmq::{BroadcastPublisher, GardenManager, RaveClient, VibeweaverClient};
+use crate::zmq::{BeatthisClient, BroadcastPublisher, GardenManager, OrpheusClient, RaveClient, VibeweaverClient};
 use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use std::sync::{Arc, RwLock};
 
@@ -22,6 +22,10 @@ pub struct EventDualityServer {
     pub vibeweaver: Option<Arc<VibeweaverClient>>,
     /// Optional RAVE client for audio codec service
     pub rave: Option<Arc<RaveClient>>,
+    /// Optional Orpheus client for MIDI generation service
+    pub orpheus: Option<Arc<OrpheusClient>>,
+    /// Optional beat-this client for beat detection service
+    pub beatthis: Option<Arc<BeatthisClient>>,
     /// Optional broadcast publisher for SSE events via holler
     pub broadcaster: Option<BroadcastPublisher>,
     /// Stream manager for capture sessions
@@ -61,6 +65,8 @@ impl EventDualityServer {
             garden_manager: None,
             vibeweaver: None,
             rave: None,
+            orpheus: None,
+            beatthis: None,
             broadcaster: None,
             stream_manager: None,
             session_manager: None,
@@ -84,6 +90,18 @@ impl EventDualityServer {
     /// Create with RAVE client for audio codec service
     pub fn with_rave(mut self, rave: Option<Arc<RaveClient>>) -> Self {
         self.rave = rave;
+        self
+    }
+
+    /// Create with Orpheus client for MIDI generation service
+    pub fn with_orpheus(mut self, orpheus: Option<Arc<OrpheusClient>>) -> Self {
+        self.orpheus = orpheus;
+        self
+    }
+
+    /// Create with beat-this client for beat detection service
+    pub fn with_beatthis(mut self, beatthis: Option<Arc<BeatthisClient>>) -> Self {
+        self.beatthis = beatthis;
         self
     }
 
