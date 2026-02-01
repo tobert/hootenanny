@@ -106,6 +106,11 @@ pub struct StreamStats {
     pub monitor_samples: std::sync::atomic::AtomicU64,
     // Warmup flag - don't count underruns until first successful read
     pub warmed_up: std::sync::atomic::AtomicBool,
+    // RAVE streaming counters
+    pub rave_writes: std::sync::atomic::AtomicU64,
+    pub rave_samples_written: std::sync::atomic::AtomicU64,
+    pub rave_reads: std::sync::atomic::AtomicU64,
+    pub rave_samples_read: std::sync::atomic::AtomicU64,
 }
 
 impl PipeWireOutputStream {
@@ -467,30 +472,35 @@ fn run_pipewire_loop(
                         // Mark warmed up after first successful read
                         stats.warmed_up.store(true, Ordering::Relaxed);
 
-                        // Check if RAVE streaming is active (non-blocking)
-                        let rave_active = rave_input.as_ref()
-                            .and_then(|r| r.try_lock().ok())
-                            .map(|g| g.is_some())
-                            .unwrap_or(false);
-
-                        if rave_active {
-                            // RAVE is active - send to RAVE, don't mix raw monitor
-                            if let Some(ref rave_in) = rave_input {
-                                if let Ok(mut guard) = rave_in.try_lock() {
-                                    if let Some(ref mut producer) = *guard {
-                                        producer.write(&temp_slice[..read]);
+                        // Try to write to RAVE if streaming is active (single lock scope)
+                        let rave_wrote = if let Some(ref rave_in) = rave_input {
+                            if let Ok(mut guard) = rave_in.try_lock() {
+                                if let Some(ref mut producer) = *guard {
+                                    let written = producer.write(&temp_slice[..read]);
+                                    if written > 0 {
+                                        stats.rave_writes.fetch_add(1, Ordering::Relaxed);
+                                        stats.rave_samples_written.fetch_add(written as u64, Ordering::Relaxed);
                                     }
+                                    written > 0
+                                } else {
+                                    false
                                 }
+                            } else {
+                                false
                             }
-                            // Don't set has_audio - RAVE output will provide it
                         } else {
-                            // No RAVE - mix raw monitor directly to output
+                            false
+                        };
+
+                        if !rave_wrote {
+                            // No RAVE or write failed - mix raw monitor directly to output
                             let gain = mon.gain.load(Ordering::Relaxed);
                             for i in 0..read {
                                 output_slice[i] += temp_slice[i] * gain;
                             }
                             has_audio = true;
                         }
+                        // If rave_wrote, don't set has_audio - RAVE output will provide it
                     }
                 }
             }
@@ -517,6 +527,8 @@ fn run_pipewire_loop(
                         // Read RAVE-processed audio
                         let rave_read = consumer.read(temp_slice);
                         if rave_read > 0 {
+                            stats.rave_reads.fetch_add(1, Ordering::Relaxed);
+                            stats.rave_samples_read.fetch_add(rave_read as u64, Ordering::Relaxed);
                             // Mix RAVE output with existing audio
                             for i in 0..rave_read {
                                 output_slice[i] += temp_slice[i];
