@@ -103,28 +103,49 @@ Include Co-Authored-By for all contributors:
 
 ### Adding a New Tool
 
+**⚠️ IMPORTANT: There are TWO dispatch files that BOTH need updates:**
+- `holler/dispatch.rs` — JSON tool name → ToolRequest (MCP gateway)
+- `hootenanny/dispatcher.rs` — ToolRequest → execution (application layer)
+
+Missing either one causes "Unknown tool" errors at runtime.
+
+**Complete checklist:**
+
 1. **Schema** — `crates/hooteproto/schemas/tools.capnp`
    - Add request struct
    - Add variant to `ToolRequest` union
 
 2. **Rust Types** — `crates/hooteproto/src/request.rs`
    - Add request struct with serde derives
-   - Add enum variant
+   - Add enum variant to `ToolRequest`
    - Implement `tool_name()` and `timing()`
 
-3. **Serialization** — `crates/hooteproto/src/conversion.rs`
+3. **Response Types** — `crates/hooteproto/src/responses.rs`
+   - Add response struct if returning data
+   - Add enum variant to `ToolResponse`
+
+4. **Serialization** — `crates/hooteproto/src/conversion.rs`
    - Add to `request_to_capnp_tool_request()`
    - Add to `capnp_tool_request_to_request()`
+   - (For garden shell tools, add error path placeholder)
 
-4. **MCP Dispatch** — `crates/holler/src/dispatch.rs`
-   - Add JSON args struct
-   - Add match arm in `json_to_payload()`
+5. **MCP Discovery** — `crates/holler/src/tools_registry.rs`
+   - Add `ToolInfo` entry with JSON schema for MCP clients
 
-5. **Execution** — `crates/hootenanny/src/api/typed_dispatcher.rs`
-   - Add match arm in `dispatch_async()` or `dispatch_fire_and_forget()`
+6. **MCP Dispatch** — `crates/holler/src/dispatch.rs` ⚠️
+   - Add JSON args struct (at bottom of file)
+   - Add match arm in `json_to_payload()` mapping tool name → ToolRequest
 
-6. **Discovery** — `crates/holler/src/tools_registry.rs`
-   - Add to `list_tools()` with JSON schema
+7. **Execution Dispatch** — `crates/hootenanny/src/api/dispatcher.rs` ⚠️
+   - Add match arm calling the typed method
+
+8. **Implementation** — `crates/hootenanny/src/api/service_typed.rs`
+   - Add `*_typed()` method with actual logic
+
+**For garden shell tools** (audio, MIDI, transport):
+- Add `ShellRequest`/`ShellReply` variants in `hooteproto/src/garden.rs`
+- Implement handler in `chaosgarden/src/daemon.rs`
+- The `service_typed.rs` method uses `manager.request(ShellRequest::...)`
 
 ### Cap'n Proto Rebuilds
 
