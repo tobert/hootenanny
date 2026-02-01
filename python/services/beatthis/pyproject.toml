@@ -1,0 +1,26 @@
+[project]
+name = "beatthis-service"
+version = "0.1.0"
+description = "Beat-this beat/downbeat detection service for hootenanny"
+requires-python = ">=3.12"
+dependencies = [
+    "hootpy",
+    "torch>=2.0",
+    "numpy>=1.26",
+    "beat_this @ git+https://github.com/CPJKU/beat_this.git",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["beatthis"]
+
+[tool.uv.sources]
+hootpy = { workspace = true }
+
+# Note: For AMD ROCm support, install torch separately:
+#   pip install torch --index-url https://download.pytorch.org/whl/rocm6.2
+# Or for CUDA:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124

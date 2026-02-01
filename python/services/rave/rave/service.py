@@ -35,8 +35,18 @@ MODELS_DIR = Path(os.environ.get(
 # RAVE operates at 48kHz
 RAVE_SAMPLE_RATE = 48000
 
-# Default streaming endpoint
-DEFAULT_STREAMING_ENDPOINT = "tcp://127.0.0.1:5592"
+# IPC socket directory helper
+def _socket_dir() -> str:
+    """Get the IPC socket directory path."""
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        return f"{xdg}/hootenanny"
+    return os.path.expanduser("~/.hootenanny/run")
+
+
+# Default endpoints (IPC sockets)
+DEFAULT_ENDPOINT = f"ipc://{_socket_dir()}/rave.sock"
+DEFAULT_STREAMING_ENDPOINT = f"ipc://{_socket_dir()}/rave-stream.sock"
 
 
 @dataclass
@@ -678,8 +688,8 @@ async def main():
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    # Parse endpoints from args or environment
-    endpoint = os.environ.get("RAVE_ENDPOINT", "tcp://127.0.0.1:5591")
+    # Parse endpoints from args or environment (IPC sockets by default)
+    endpoint = os.environ.get("RAVE_ENDPOINT", DEFAULT_ENDPOINT)
     streaming_endpoint = os.environ.get("RAVE_STREAMING_ENDPOINT", DEFAULT_STREAMING_ENDPOINT)
 
     if len(sys.argv) > 1:
