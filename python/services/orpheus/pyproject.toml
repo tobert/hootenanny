@@ -1,0 +1,16 @@
+[project]
+name = "orpheus-service"
+version = "0.1.0"
+description = "Orpheus MIDI generation service for hootenanny"
+requires-python = ">=3.12"
+dependencies = [
+    # torch provided by system (python-pytorch-rocm or python-pytorch-cuda)
+    "hootpy[orpheus]",
+    "numpy>=1.26",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+hootpy = { workspace = true }

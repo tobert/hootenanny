@@ -26,6 +26,10 @@ pub fn default_models() -> ModelsConfig {
 }
 
 /// Connection endpoints for other Hootenanny services.
+///
+/// All Python model services use IPC sockets by default:
+/// - Socket directory: `$XDG_RUNTIME_DIR/hootenanny/` or `~/.hootenanny/run/`
+/// - Services create the directory on startup if needed
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionsConfig {
     /// Chaosgarden endpoint: "local" for IPC, or "tcp://host:port"
@@ -39,9 +43,37 @@ pub struct ConnectionsConfig {
     /// RAVE ZMQ endpoint (RAVE audio codec service via hootpy)
     #[serde(default = "ConnectionsConfig::default_rave")]
     pub rave: String,
+
+    /// RAVE streaming ZMQ endpoint (realtime audio processing)
+    #[serde(default = "ConnectionsConfig::default_rave_streaming")]
+    pub rave_streaming: String,
+
+    /// Orpheus ZMQ endpoint (MIDI generation service via hootpy)
+    #[serde(default = "ConnectionsConfig::default_orpheus")]
+    pub orpheus: String,
+
+    /// Beat-this ZMQ endpoint (beat/downbeat detection via hootpy)
+    #[serde(default = "ConnectionsConfig::default_beatthis")]
+    pub beatthis: String,
 }
 
 impl ConnectionsConfig {
+    /// Get the IPC socket directory path.
+    fn socket_dir() -> String {
+        std::env::var("XDG_RUNTIME_DIR")
+            .map(|dir| format!("{}/hootenanny", dir))
+            .unwrap_or_else(|_| {
+                directories::BaseDirs::new()
+                    .map(|base| {
+                        base.home_dir()
+                            .join(".hootenanny/run")
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                    .unwrap_or_else(|| "/tmp/hootenanny".to_string())
+            })
+    }
+
     fn default_chaosgarden() -> String {
         "local".to_string()
     }
@@ -51,8 +83,19 @@ impl ConnectionsConfig {
     }
 
     fn default_rave() -> String {
-        // Empty string means disabled (RAVE is optional)
-        String::new()
+        format!("ipc://{}/rave.sock", Self::socket_dir())
+    }
+
+    fn default_rave_streaming() -> String {
+        format!("ipc://{}/rave-stream.sock", Self::socket_dir())
+    }
+
+    fn default_orpheus() -> String {
+        format!("ipc://{}/orpheus.sock", Self::socket_dir())
+    }
+
+    fn default_beatthis() -> String {
+        format!("ipc://{}/beatthis.sock", Self::socket_dir())
     }
 }
 
@@ -62,6 +105,9 @@ impl Default for ConnectionsConfig {
             chaosgarden: Self::default_chaosgarden(),
             vibeweaver: Self::default_vibeweaver(),
             rave: Self::default_rave(),
+            rave_streaming: Self::default_rave_streaming(),
+            orpheus: Self::default_orpheus(),
+            beatthis: Self::default_beatthis(),
         }
     }
 }

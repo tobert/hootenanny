@@ -20,6 +20,9 @@ from .service import ModelService, ServiceConfig, SingleJobGuard
 from .client import HootClient, ClientConfig, request
 from .protocol import encode_tool_request, decode_envelope
 from . import cas
+from . import tmidix
+from . import orpheus_tokenizer
+from . import orpheus_models
 
 __version__ = "0.1.0"
 
@@ -51,4 +54,8 @@ __all__ = [
     "decode_envelope",
     # CAS
     "cas",
+    # MIDI / Orpheus utilities
+    "tmidix",
+    "orpheus_tokenizer",
+    "orpheus_models",
 ]

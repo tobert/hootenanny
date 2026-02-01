@@ -1989,79 +1989,92 @@ impl EventDualityServer {
     ) -> Result<hooteproto::responses::OrpheusGeneratedResponse, ToolError> {
         use crate::artifact_store::{Artifact, ArtifactStore};
         use crate::types::{ArtifactId, ContentHash, VariationSetId};
+        use hooteproto::{Payload, ToolRequest, request::OrpheusGenerateRequest, responses::ToolResponse};
 
-        let client = reqwest::Client::new();
-        let response = client
-            .post("http://localhost:2000/predict")
-            .json(&serde_json::json!({
-                "max_tokens": max_tokens.unwrap_or(512),
-                "num_variations": num_variations.unwrap_or(1),
-                "temperature": temperature.unwrap_or(1.0),
-                "top_p": top_p.unwrap_or(0.95),
-                "model": model,
-            }))
-            .send()
-            .await
-            .map_err(|e| ToolError::service("orpheus", "request_failed", e.to_string()))?;
+        // Get the orpheus client
+        let orpheus = self.orpheus.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Orpheus service not configured. Check orpheus_endpoint in config.",
+            )
+        })?;
 
-        if !response.status().is_success() {
-            return Err(ToolError::service(
-                "orpheus",
-                "generate_failed",
-                format!("HTTP {}", response.status()),
-            ));
-        }
-
-        let result: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| ToolError::service("orpheus", "parse_failed", e.to_string()))?;
-
-        // Parse variations array from response
-        let variations = result
-            .get("variations")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| ToolError::service("orpheus", "invalid_response", "Missing variations array"))?;
+        let variations_count = num_variations.unwrap_or(1) as usize;
 
         // Generate variation set ID if multiple variations
-        let var_set_id = if variations.len() > 1 {
+        let var_set_id = if variations_count > 1 {
             variation_set_id.clone().or_else(|| Some(VariationSetId::new(uuid::Uuid::new_v4().to_string()).as_str().to_string()))
         } else {
             variation_set_id.clone()
         };
 
-        // Store each variation as artifact
         let mut output_hashes = Vec::new();
         let mut artifact_ids = Vec::new();
         let mut tokens_per_variation = Vec::new();
         let mut total_tokens: u64 = 0;
         let creator_str = creator.clone().unwrap_or_else(|| "orpheus".to_string());
 
-        for (idx, variation) in variations.iter().enumerate() {
-            // Decode base64 MIDI
-            let midi_base64 = variation
-                .get("midi_base64")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| ToolError::service("orpheus", "invalid_response", "Missing midi_base64"))?;
+        // Generate each variation (Python service generates one at a time)
+        for idx in 0..variations_count {
+            // Create the request
+            let request = OrpheusGenerateRequest {
+                max_tokens,
+                num_variations: Some(1), // Always 1 per call
+                temperature,
+                top_p,
+                model: model.clone(),
+                tags: tags.clone(),
+                creator: creator.clone(),
+                parent_id: parent_id.clone(),
+                variation_set_id: var_set_id.clone(),
+            };
 
-            use base64::Engine;
-            let midi_bytes = base64::engine::general_purpose::STANDARD
-                .decode(midi_base64)
-                .map_err(|e| ToolError::service("orpheus", "decode_failed", e.to_string()))?;
+            let payload = Payload::ToolRequest(ToolRequest::OrpheusGenerate(request));
 
-            let num_tokens = variation
-                .get("num_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+            // Call the service
+            let response = orpheus
+                .request(payload)
+                .await
+                .map_err(|e| ToolError::service("orpheus", "request_failed", e.to_string()))?;
+
+            // Parse the response
+            let (content_hash, num_tokens) = match response {
+                Payload::TypedResponse(envelope) => {
+                    match envelope {
+                        hooteproto::ResponseEnvelope::Success { response } => {
+                            match response {
+                                ToolResponse::OrpheusGenerated(resp) => {
+                                    let hash = resp.output_hashes.first()
+                                        .ok_or_else(|| ToolError::service("orpheus", "invalid_response", "No output hash"))?
+                                        .clone();
+                                    let tokens = resp.tokens_per_variation.first().copied().unwrap_or(0);
+                                    (hash, tokens)
+                                }
+                                _ => return Err(ToolError::service("orpheus", "invalid_response", "Unexpected response type")),
+                            }
+                        }
+                        hooteproto::ResponseEnvelope::Error(err) => {
+                            return Err(ToolError::service("orpheus", err.code(), err.message()));
+                        }
+                        hooteproto::ResponseEnvelope::JobStarted { .. } => {
+                            return Err(ToolError::service("orpheus", "unexpected_async", "Got async response for sync operation"));
+                        }
+                        hooteproto::ResponseEnvelope::Ack { .. } => {
+                            return Err(ToolError::service("orpheus", "unexpected_ack", "Got ack response for generate operation"));
+                        }
+                    }
+                }
+                _ => return Err(ToolError::service("orpheus", "invalid_response", "Unexpected payload type")),
+            };
+
             tokens_per_variation.push(num_tokens);
             total_tokens += num_tokens;
 
-            // Store in CAS
-            let cas_result = self.cas_store_typed(&midi_bytes, "audio/midi").await?;
-            let content_hash = ContentHash::new(&cas_result.hash);
-            let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+            // Content is already in CAS (Python service stores it)
+            let hash = ContentHash::new(&content_hash);
+            let artifact_id = ArtifactId::from_hash_prefix(&hash);
 
-            output_hashes.push(cas_result.hash.clone());
+            output_hashes.push(content_hash.clone());
             artifact_ids.push(artifact_id.as_str().to_string());
 
             // Create artifact
@@ -2078,7 +2091,7 @@ impl EventDualityServer {
 
             let mut artifact = Artifact::new(
                 artifact_id.clone(),
-                content_hash,
+                hash,
                 &creator_str,
                 metadata,
             ).with_tags(artifact_tags);
@@ -2129,31 +2142,91 @@ impl EventDualityServer {
         parent_id: Option<String>,
         variation_set_id: Option<String>,
     ) -> Result<hooteproto::responses::OrpheusGeneratedResponse, ToolError> {
-        // Get seed MIDI from CAS
-        let seed_cas = self
+        use crate::artifact_store::{Artifact, ArtifactStore};
+        use crate::types::{ArtifactId, ContentHash, VariationSetId};
+        use hooteproto::{Payload, ToolRequest, request::OrpheusGenerateSeededRequest, responses::ToolResponse};
+
+        // Get the orpheus client
+        let orpheus = self.orpheus.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Orpheus service not configured. Check orpheus_endpoint in config.",
+            )
+        })?;
+
+        // Verify seed exists in CAS
+        let _ = self
             .local_models
             .inspect_cas_content(seed_hash)
             .await
             .map_err(|e| ToolError::not_found("seed_midi", e.to_string()))?;
 
-        let seed_path = seed_cas
-            .local_path
-            .ok_or_else(|| ToolError::not_found("seed_midi", seed_hash))?;
+        let variations_count = num_variations.unwrap_or(1) as usize;
+        let var_set_id = if variations_count > 1 {
+            variation_set_id.clone().or_else(|| Some(VariationSetId::new(uuid::Uuid::new_v4().to_string()).as_str().to_string()))
+        } else {
+            variation_set_id.clone()
+        };
 
-        // Generate from seed
-        self.call_orpheus_generate_service(
-            "generate_seeded",
-            &seed_path,
-            max_tokens,
-            num_variations,
-            temperature,
-            top_p,
-            model,
-            tags,
-            creator,
-            parent_id.or(Some(seed_hash.to_string())),
-            variation_set_id,
-        ).await
+        let mut output_hashes = Vec::new();
+        let mut artifact_ids = Vec::new();
+        let mut tokens_per_variation = Vec::new();
+        let mut total_tokens: u64 = 0;
+        let creator_str = creator.clone().unwrap_or_else(|| "orpheus".to_string());
+        let actual_parent_id = parent_id.clone().or_else(|| Some(seed_hash.to_string()));
+
+        for idx in 0..variations_count {
+            let request = OrpheusGenerateSeededRequest {
+                seed_hash: seed_hash.to_string(),
+                max_tokens,
+                num_variations: Some(1),
+                temperature,
+                top_p,
+                model: model.clone(),
+                tags: tags.clone(),
+                creator: creator.clone(),
+                parent_id: actual_parent_id.clone(),
+                variation_set_id: var_set_id.clone(),
+            };
+
+            let payload = Payload::ToolRequest(ToolRequest::OrpheusGenerateSeeded(request));
+
+            let response = orpheus
+                .request(payload)
+                .await
+                .map_err(|e| ToolError::service("orpheus", "request_failed", e.to_string()))?;
+
+            let (content_hash, num_tokens) = self.parse_orpheus_response(response)?;
+
+            tokens_per_variation.push(num_tokens);
+            total_tokens += num_tokens;
+
+            let hash = ContentHash::new(&content_hash);
+            let artifact_id = ArtifactId::from_hash_prefix(&hash);
+
+            output_hashes.push(content_hash.clone());
+            artifact_ids.push(artifact_id.as_str().to_string());
+
+            self.create_orpheus_artifact(
+                artifact_id, hash, &creator_str, &tags,
+                "orpheus_generate_seeded", idx, num_tokens,
+                actual_parent_id.as_deref(), var_set_id.as_deref(),
+            )?;
+        }
+
+        let summary = format!(
+            "Generated {} MIDI variation(s) from seed, {} total tokens",
+            artifact_ids.len(), total_tokens
+        );
+
+        Ok(hooteproto::responses::OrpheusGeneratedResponse {
+            output_hashes,
+            artifact_ids,
+            tokens_per_variation,
+            total_tokens,
+            variation_set_id: var_set_id,
+            summary,
+        })
     }
 
     /// Continue existing MIDI using Orpheus - typed response
@@ -2170,31 +2243,91 @@ impl EventDualityServer {
         parent_id: Option<String>,
         variation_set_id: Option<String>,
     ) -> Result<hooteproto::responses::OrpheusGeneratedResponse, ToolError> {
-        // Get input MIDI from CAS
-        let input_cas = self
+        use crate::artifact_store::{Artifact, ArtifactStore};
+        use crate::types::{ArtifactId, ContentHash, VariationSetId};
+        use hooteproto::{Payload, ToolRequest, request::OrpheusContinueRequest, responses::ToolResponse};
+
+        // Get the orpheus client
+        let orpheus = self.orpheus.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Orpheus service not configured. Check orpheus_endpoint in config.",
+            )
+        })?;
+
+        // Verify input exists in CAS
+        let _ = self
             .local_models
             .inspect_cas_content(input_hash)
             .await
             .map_err(|e| ToolError::not_found("input_midi", e.to_string()))?;
 
-        let input_path = input_cas
-            .local_path
-            .ok_or_else(|| ToolError::not_found("input_midi", input_hash))?;
+        let variations_count = num_variations.unwrap_or(1) as usize;
+        let var_set_id = if variations_count > 1 {
+            variation_set_id.clone().or_else(|| Some(VariationSetId::new(uuid::Uuid::new_v4().to_string()).as_str().to_string()))
+        } else {
+            variation_set_id.clone()
+        };
 
-        // Continue from input
-        self.call_orpheus_generate_service(
-            "continue",
-            &input_path,
-            max_tokens,
-            num_variations,
-            temperature,
-            top_p,
-            model,
-            tags,
-            creator,
-            parent_id.or(Some(input_hash.to_string())),
-            variation_set_id,
-        ).await
+        let mut output_hashes = Vec::new();
+        let mut artifact_ids = Vec::new();
+        let mut tokens_per_variation = Vec::new();
+        let mut total_tokens: u64 = 0;
+        let creator_str = creator.clone().unwrap_or_else(|| "orpheus".to_string());
+        let actual_parent_id = parent_id.clone().or_else(|| Some(input_hash.to_string()));
+
+        for idx in 0..variations_count {
+            let request = OrpheusContinueRequest {
+                input_hash: input_hash.to_string(),
+                max_tokens,
+                num_variations: Some(1),
+                temperature,
+                top_p,
+                model: model.clone(),
+                tags: tags.clone(),
+                creator: creator.clone(),
+                parent_id: actual_parent_id.clone(),
+                variation_set_id: var_set_id.clone(),
+            };
+
+            let payload = Payload::ToolRequest(ToolRequest::OrpheusContinue(request));
+
+            let response = orpheus
+                .request(payload)
+                .await
+                .map_err(|e| ToolError::service("orpheus", "request_failed", e.to_string()))?;
+
+            let (content_hash, num_tokens) = self.parse_orpheus_response(response)?;
+
+            tokens_per_variation.push(num_tokens);
+            total_tokens += num_tokens;
+
+            let hash = ContentHash::new(&content_hash);
+            let artifact_id = ArtifactId::from_hash_prefix(&hash);
+
+            output_hashes.push(content_hash.clone());
+            artifact_ids.push(artifact_id.as_str().to_string());
+
+            self.create_orpheus_artifact(
+                artifact_id, hash, &creator_str, &tags,
+                "orpheus_continue", idx, num_tokens,
+                actual_parent_id.as_deref(), var_set_id.as_deref(),
+            )?;
+        }
+
+        let summary = format!(
+            "Continued MIDI with {} variation(s), {} total tokens",
+            artifact_ids.len(), total_tokens
+        );
+
+        Ok(hooteproto::responses::OrpheusGeneratedResponse {
+            output_hashes,
+            artifact_ids,
+            tokens_per_variation,
+            total_tokens,
+            variation_set_id: var_set_id,
+            summary,
+        })
     }
 
     /// Generate bridge between sections using Orpheus - typed response
@@ -2205,153 +2338,80 @@ impl EventDualityServer {
         max_tokens: Option<u32>,
         temperature: Option<f32>,
         top_p: Option<f32>,
-        _model: Option<String>,
+        model: Option<String>,
         tags: Vec<String>,
         creator: Option<String>,
         parent_id: Option<String>,
         variation_set_id: Option<String>,
     ) -> Result<hooteproto::responses::OrpheusGeneratedResponse, ToolError> {
-        use crate::artifact_store::{Artifact, ArtifactStore};
-        use crate::types::{ArtifactId, ContentHash, VariationSetId};
-        use base64::Engine;
+        use crate::types::{ArtifactId, ContentHash};
+        use hooteproto::{Payload, ToolRequest, request::OrpheusBridgeRequest};
 
-        // Get section A from CAS and encode as base64
-        let section_a_cas = self
+        // Get the orpheus client
+        let orpheus = self.orpheus.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Orpheus service not configured. Check orpheus_endpoint in config.",
+            )
+        })?;
+
+        // Verify section A exists in CAS
+        let _ = self
             .local_models
             .inspect_cas_content(section_a_hash)
             .await
             .map_err(|e| ToolError::not_found("section_a", e.to_string()))?;
 
-        let section_a_path = section_a_cas
-            .local_path
-            .ok_or_else(|| ToolError::not_found("section_a", section_a_hash))?;
-
-        let section_a_bytes = std::fs::read(&section_a_path)
-            .map_err(|e| ToolError::internal(format!("Failed to read section_a: {}", e)))?;
-        let section_a_base64 = base64::engine::general_purpose::STANDARD.encode(&section_a_bytes);
-
-        // Get section B if provided
-        let section_b_base64 = if let Some(ref hash) = section_b_hash {
-            let cas = self.local_models.inspect_cas_content(hash).await
+        // Verify section B if provided
+        if let Some(ref hash) = section_b_hash {
+            let _ = self
+                .local_models
+                .inspect_cas_content(hash)
+                .await
                 .map_err(|e| ToolError::not_found("section_b", e.to_string()))?;
-            if let Some(path) = cas.local_path {
-                let bytes = std::fs::read(&path)
-                    .map_err(|e| ToolError::internal(format!("Failed to read section_b: {}", e)))?;
-                Some(base64::engine::general_purpose::STANDARD.encode(&bytes))
-            } else {
-                None
-            }
-        } else {
-            None
+        }
+
+        let creator_str = creator.clone().unwrap_or_else(|| "orpheus_bridge".to_string());
+
+        // Bridge generates single output
+        let request = OrpheusBridgeRequest {
+            section_a_hash: section_a_hash.to_string(),
+            section_b_hash: section_b_hash.clone(),
+            max_tokens,
+            temperature,
+            top_p,
+            model,
+            tags: tags.clone(),
+            creator: creator.clone(),
+            parent_id: parent_id.clone(),
+            variation_set_id: variation_set_id.clone(),
         };
 
-        // Call bridge service with base64 data
-        let client = reqwest::Client::new();
-        let response = client
-            .post("http://localhost:2002/predict")
-            .json(&serde_json::json!({
-                "section_a": section_a_base64,
-                "section_b": section_b_base64,
-                "max_tokens": max_tokens.unwrap_or(256),
-                "temperature": temperature.unwrap_or(1.0),
-                "top_p": top_p.unwrap_or(0.95),
-            }))
-            .send()
+        let payload = Payload::ToolRequest(ToolRequest::OrpheusBridge(request));
+
+        let response = orpheus
+            .request(payload)
             .await
-            .map_err(|e| ToolError::service("orpheus_bridge", "request_failed", e.to_string()))?;
+            .map_err(|e| ToolError::service("orpheus", "request_failed", e.to_string()))?;
 
-        if !response.status().is_success() {
-            return Err(ToolError::service(
-                "orpheus_bridge",
-                "bridge_failed",
-                format!("HTTP {}", response.status()),
-            ));
-        }
+        let (content_hash, num_tokens) = self.parse_orpheus_response(response)?;
 
-        let result: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| ToolError::service("orpheus_bridge", "parse_failed", e.to_string()))?;
+        let hash = ContentHash::new(&content_hash);
+        let artifact_id = ArtifactId::from_hash_prefix(&hash);
 
-        // Parse variations array
-        let variations = result
-            .get("variations")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| ToolError::service("orpheus_bridge", "invalid_response", "Missing variations array"))?;
+        self.create_orpheus_artifact(
+            artifact_id.clone(), hash, &creator_str, &tags,
+            "orpheus_bridge", 0, num_tokens,
+            parent_id.as_deref(), variation_set_id.as_deref(),
+        )?;
 
-        let mut output_hashes = Vec::new();
-        let mut artifact_ids = Vec::new();
-        let mut tokens_per_variation = Vec::new();
-        let mut total_tokens: u64 = 0;
-        let creator_str = creator.unwrap_or_else(|| "orpheus_bridge".to_string());
-
-        for (idx, variation) in variations.iter().enumerate() {
-            let midi_base64 = variation
-                .get("midi_base64")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| ToolError::service("orpheus_bridge", "invalid_response", "Missing midi_base64"))?;
-
-            let midi_bytes = base64::engine::general_purpose::STANDARD
-                .decode(midi_base64)
-                .map_err(|e| ToolError::service("orpheus_bridge", "decode_failed", e.to_string()))?;
-
-            let num_tokens = variation
-                .get("num_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            tokens_per_variation.push(num_tokens);
-            total_tokens += num_tokens;
-
-            let cas_result = self.cas_store_typed(&midi_bytes, "audio/midi").await?;
-            let content_hash = ContentHash::new(&cas_result.hash);
-            let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
-
-            output_hashes.push(cas_result.hash.clone());
-            artifact_ids.push(artifact_id.as_str().to_string());
-
-            let mut artifact_tags = tags.clone();
-            artifact_tags.push("type:midi".to_string());
-            artifact_tags.push("source:orpheus_bridge".to_string());
-
-            let metadata = serde_json::json!({
-                "mime_type": "audio/midi",
-                "source": "orpheus_bridge",
-                "section_a_hash": section_a_hash,
-                "section_b_hash": section_b_hash,
-                "tokens": num_tokens,
-                "variation_index": idx,
-            });
-
-            let mut artifact = Artifact::new(
-                artifact_id.clone(),
-                content_hash,
-                &creator_str,
-                metadata,
-            ).with_tags(artifact_tags);
-
-            if let Some(ref parent) = parent_id {
-                artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
-            }
-            if let Some(ref var_set) = variation_set_id {
-                artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
-                artifact.variation_index = Some(idx as u32);
-            }
-
-            let mut store = self.artifact_store.write().map_err(|e| {
-                ToolError::internal(format!("Failed to lock artifact store: {}", e))
-            })?;
-            store.put(artifact).map_err(|e| {
-                ToolError::internal(format!("Failed to store artifact: {}", e))
-            })?;
-        }
-
-        let summary = format!("Generated {} bridge variation(s), {} total tokens", artifact_ids.len(), total_tokens);
+        let summary = format!("Generated bridge, {} tokens", num_tokens);
 
         Ok(hooteproto::responses::OrpheusGeneratedResponse {
-            output_hashes,
-            artifact_ids,
-            tokens_per_variation,
-            total_tokens,
+            output_hashes: vec![content_hash],
+            artifact_ids: vec![artifact_id.as_str().to_string()],
+            tokens_per_variation: vec![num_tokens],
+            total_tokens: num_tokens,
             variation_set_id,
             summary,
         })
@@ -2370,136 +2430,81 @@ impl EventDualityServer {
         parent_id: Option<String>,
         variation_set_id: Option<String>,
     ) -> Result<hooteproto::responses::OrpheusGeneratedResponse, ToolError> {
-        use crate::artifact_store::{Artifact, ArtifactStore};
         use crate::types::{ArtifactId, ContentHash, VariationSetId};
-        use base64::Engine;
+        use hooteproto::{Payload, ToolRequest, request::OrpheusLoopsRequest};
 
-        // Get seed MIDI and encode as base64 if provided
-        let seed_base64 = if let Some(ref hash) = seed_hash {
-            let cas = self.local_models.inspect_cas_content(hash).await
+        // Get the orpheus client
+        let orpheus = self.orpheus.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Orpheus service not configured. Check orpheus_endpoint in config.",
+            )
+        })?;
+
+        // Verify seed exists in CAS if provided
+        if let Some(ref hash) = seed_hash {
+            let _ = self
+                .local_models
+                .inspect_cas_content(hash)
+                .await
                 .map_err(|e| ToolError::not_found("seed", e.to_string()))?;
-            if let Some(path) = cas.local_path {
-                let bytes = std::fs::read(&path)
-                    .map_err(|e| ToolError::internal(format!("Failed to read seed: {}", e)))?;
-                Some(base64::engine::general_purpose::STANDARD.encode(&bytes))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        // Call loops service with base64 data
-        let client = reqwest::Client::new();
-        let response = client
-            .post("http://localhost:2003/predict")
-            .json(&serde_json::json!({
-                "seed_midi": seed_base64,
-                "max_tokens": max_tokens.unwrap_or(512),
-                "num_variations": num_variations.unwrap_or(1),
-                "temperature": temperature.unwrap_or(1.0),
-                "top_p": top_p.unwrap_or(0.95),
-            }))
-            .send()
-            .await
-            .map_err(|e| ToolError::service("orpheus_loops", "request_failed", e.to_string()))?;
-
-        if !response.status().is_success() {
-            return Err(ToolError::service(
-                "orpheus_loops",
-                "loops_failed",
-                format!("HTTP {}", response.status()),
-            ));
         }
 
-        let result: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| ToolError::service("orpheus_loops", "parse_failed", e.to_string()))?;
-
-        // Parse variations array
-        let variations = result
-            .get("variations")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| ToolError::service("orpheus_loops", "invalid_response", "Missing variations array"))?;
-
-        // Generate variation set ID if multiple variations
-        let var_set_id = if variations.len() > 1 {
+        let variations_count = num_variations.unwrap_or(1) as usize;
+        let var_set_id = if variations_count > 1 {
             variation_set_id.clone().or_else(|| Some(VariationSetId::new(uuid::Uuid::new_v4().to_string()).as_str().to_string()))
         } else {
             variation_set_id.clone()
         };
 
-        // Store each variation as artifact
         let mut output_hashes = Vec::new();
         let mut artifact_ids = Vec::new();
         let mut tokens_per_variation = Vec::new();
         let mut total_tokens: u64 = 0;
         let creator_str = creator.clone().unwrap_or_else(|| "orpheus_loops".to_string());
+        let actual_parent_id = parent_id.clone().or_else(|| seed_hash.clone());
 
-        for (idx, variation) in variations.iter().enumerate() {
-            let midi_base64 = variation
-                .get("midi_base64")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| ToolError::service("orpheus_loops", "invalid_response", "Missing midi_base64"))?;
+        for idx in 0..variations_count {
+            let request = OrpheusLoopsRequest {
+                seed_hash: seed_hash.clone(),
+                max_tokens,
+                num_variations: Some(1),
+                temperature,
+                top_p,
+                tags: tags.clone(),
+                creator: creator.clone(),
+                parent_id: actual_parent_id.clone(),
+                variation_set_id: var_set_id.clone(),
+            };
 
-            let midi_bytes = base64::engine::general_purpose::STANDARD
-                .decode(midi_base64)
-                .map_err(|e| ToolError::service("orpheus_loops", "decode_failed", e.to_string()))?;
+            let payload = Payload::ToolRequest(ToolRequest::OrpheusLoops(request));
 
-            let num_tokens = variation
-                .get("num_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+            let response = orpheus
+                .request(payload)
+                .await
+                .map_err(|e| ToolError::service("orpheus", "request_failed", e.to_string()))?;
+
+            let (content_hash, num_tokens) = self.parse_orpheus_response(response)?;
+
             tokens_per_variation.push(num_tokens);
             total_tokens += num_tokens;
 
-            let cas_result = self.cas_store_typed(&midi_bytes, "audio/midi").await?;
-            let content_hash = ContentHash::new(&cas_result.hash);
-            let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+            let hash = ContentHash::new(&content_hash);
+            let artifact_id = ArtifactId::from_hash_prefix(&hash);
 
-            output_hashes.push(cas_result.hash.clone());
+            output_hashes.push(content_hash.clone());
             artifact_ids.push(artifact_id.as_str().to_string());
 
-            let mut artifact_tags = tags.clone();
-            artifact_tags.push("type:midi".to_string());
-            artifact_tags.push("source:orpheus_loops".to_string());
-            artifact_tags.push("loopable:true".to_string());
-
-            let metadata = serde_json::json!({
-                "mime_type": "audio/midi",
-                "source": "orpheus_loops",
-                "variation_index": idx,
-                "tokens": num_tokens,
-            });
-
-            let mut artifact = Artifact::new(
-                artifact_id.clone(),
-                content_hash,
-                &creator_str,
-                metadata,
-            ).with_tags(artifact_tags);
-
-            if let Some(ref parent) = parent_id.clone().or(seed_hash.clone()) {
-                artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
-            }
-            if let Some(ref var_set) = var_set_id {
-                artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
-                artifact.variation_index = Some(idx as u32);
-            }
-
-            let mut store = self.artifact_store.write().map_err(|e| {
-                ToolError::internal(format!("Failed to lock artifact store: {}", e))
-            })?;
-            store.put(artifact).map_err(|e| {
-                ToolError::internal(format!("Failed to store artifact: {}", e))
-            })?;
+            self.create_orpheus_artifact(
+                artifact_id, hash, &creator_str, &tags,
+                "orpheus_loops", idx, num_tokens,
+                actual_parent_id.as_deref(), var_set_id.as_deref(),
+            )?;
         }
 
         let summary = format!(
             "Generated {} loopable MIDI variation(s), {} total tokens",
-            artifact_ids.len(),
-            total_tokens
+            artifact_ids.len(), total_tokens
         );
 
         Ok(hooteproto::responses::OrpheusGeneratedResponse {
@@ -2512,152 +2517,97 @@ impl EventDualityServer {
         })
     }
 
-    // Helper for seeded/continue generation
-    /// Helper for seeded/continue generation - uses task and midi_input (base64)
-    async fn call_orpheus_generate_service(
+    // ============================================================
+    // Orpheus ZMQ Helpers
+    // ============================================================
+
+    /// Parse an Orpheus ZMQ response to extract content_hash and num_tokens
+    fn parse_orpheus_response(
         &self,
-        task: &str,  // "generate_seeded" or "continue"
-        midi_input_path: &str,  // Path to read MIDI from
-        max_tokens: Option<u32>,
-        num_variations: Option<u32>,
-        temperature: Option<f32>,
-        top_p: Option<f32>,
-        _model: Option<String>,  // Not used by service currently
-        tags: Vec<String>,
-        creator: Option<String>,
-        parent_id: Option<String>,
-        variation_set_id: Option<String>,
-    ) -> Result<hooteproto::responses::OrpheusGeneratedResponse, ToolError> {
+        response: hooteproto::Payload,
+    ) -> Result<(String, u64), ToolError> {
+        use hooteproto::responses::ToolResponse;
+
+        match response {
+            hooteproto::Payload::TypedResponse(envelope) => {
+                match envelope {
+                    hooteproto::ResponseEnvelope::Success { response } => {
+                        match response {
+                            ToolResponse::OrpheusGenerated(resp) => {
+                                let hash = resp.output_hashes.first()
+                                    .ok_or_else(|| ToolError::service("orpheus", "invalid_response", "No output hash"))?
+                                    .clone();
+                                let tokens = resp.tokens_per_variation.first().copied().unwrap_or(0);
+                                Ok((hash, tokens))
+                            }
+                            _ => Err(ToolError::service("orpheus", "invalid_response", "Unexpected response type")),
+                        }
+                    }
+                    hooteproto::ResponseEnvelope::Error(err) => {
+                        Err(ToolError::service("orpheus", err.code(), err.message()))
+                    }
+                    hooteproto::ResponseEnvelope::JobStarted { .. } => {
+                        Err(ToolError::service("orpheus", "unexpected_async", "Got async response for sync operation"))
+                    }
+                    hooteproto::ResponseEnvelope::Ack { .. } => {
+                        Err(ToolError::service("orpheus", "unexpected_ack", "Got ack response for generate operation"))
+                    }
+                }
+            }
+            _ => Err(ToolError::service("orpheus", "invalid_response", "Unexpected payload type")),
+        }
+    }
+
+    /// Create an artifact for generated Orpheus MIDI
+    fn create_orpheus_artifact(
+        &self,
+        artifact_id: crate::types::ArtifactId,
+        content_hash: crate::types::ContentHash,
+        creator: &str,
+        tags: &[String],
+        source: &str,
+        variation_index: usize,
+        num_tokens: u64,
+        parent_id: Option<&str>,
+        variation_set_id: Option<&str>,
+    ) -> Result<(), ToolError> {
         use crate::artifact_store::{Artifact, ArtifactStore};
-        use crate::types::{ArtifactId, ContentHash, VariationSetId};
-        use base64::Engine;
+        use crate::types::{ArtifactId, VariationSetId};
 
-        // Read and encode the input MIDI
-        let midi_bytes = std::fs::read(midi_input_path)
-            .map_err(|e| ToolError::internal(format!("Failed to read input MIDI: {}", e)))?;
-        let midi_base64 = base64::engine::general_purpose::STANDARD.encode(&midi_bytes);
+        let mut artifact_tags = tags.to_vec();
+        artifact_tags.push("type:midi".to_string());
+        artifact_tags.push("source:orpheus".to_string());
 
-        let client = reqwest::Client::new();
-        let request_body = serde_json::json!({
-            "task": task,
-            "midi_input": midi_base64,
-            "max_tokens": max_tokens.unwrap_or(512),
-            "num_variations": num_variations.unwrap_or(1),
-            "temperature": temperature.unwrap_or(1.0),
-            "top_p": top_p.unwrap_or(0.95),
+        let metadata = serde_json::json!({
+            "mime_type": "audio/midi",
+            "source": source,
+            "variation_index": variation_index,
+            "tokens": num_tokens,
         });
 
-        let response = client
-            .post("http://localhost:2000/predict")
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|e| ToolError::service("orpheus", "request_failed", e.to_string()))?;
+        let mut artifact = Artifact::new(
+            artifact_id,
+            content_hash,
+            creator,
+            metadata,
+        ).with_tags(artifact_tags);
 
-        if !response.status().is_success() {
-            return Err(ToolError::service(
-                "orpheus",
-                "generate_failed",
-                format!("HTTP {}", response.status()),
-            ));
+        if let Some(parent) = parent_id {
+            artifact = artifact.with_parent(ArtifactId::new(parent.to_string()));
+        }
+        if let Some(var_set) = variation_set_id {
+            artifact.variation_set_id = Some(VariationSetId::new(var_set.to_string()));
+            artifact.variation_index = Some(variation_index as u32);
         }
 
-        let result: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| ToolError::service("orpheus", "parse_failed", e.to_string()))?;
+        let mut store = self.artifact_store.write().map_err(|e| {
+            ToolError::internal(format!("Failed to lock artifact store: {}", e))
+        })?;
+        store.put(artifact).map_err(|e| {
+            ToolError::internal(format!("Failed to store artifact: {}", e))
+        })?;
 
-        // Parse variations array
-        let variations = result
-            .get("variations")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| ToolError::service("orpheus", "invalid_response", "Missing variations array"))?;
-
-        let var_set_id = if variations.len() > 1 {
-            variation_set_id.clone().or_else(|| Some(VariationSetId::new(uuid::Uuid::new_v4().to_string()).as_str().to_string()))
-        } else {
-            variation_set_id.clone()
-        };
-
-        let mut output_hashes = Vec::new();
-        let mut artifact_ids = Vec::new();
-        let mut tokens_per_variation = Vec::new();
-        let mut total_tokens: u64 = 0;
-        let creator_str = creator.clone().unwrap_or_else(|| "orpheus".to_string());
-
-        for (idx, variation) in variations.iter().enumerate() {
-            // Decode base64 MIDI
-            let midi_base64 = variation
-                .get("midi_base64")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| ToolError::service("orpheus", "invalid_response", "Missing midi_base64"))?;
-
-            let midi_bytes = base64::engine::general_purpose::STANDARD
-                .decode(midi_base64)
-                .map_err(|e| ToolError::service("orpheus", "decode_failed", e.to_string()))?;
-
-            let num_tokens = variation
-                .get("num_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            tokens_per_variation.push(num_tokens);
-            total_tokens += num_tokens;
-
-            let cas_result = self.cas_store_typed(&midi_bytes, "audio/midi").await?;
-            let content_hash = ContentHash::new(&cas_result.hash);
-            let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
-
-            output_hashes.push(cas_result.hash.clone());
-            artifact_ids.push(artifact_id.as_str().to_string());
-
-            let mut artifact_tags = tags.clone();
-            artifact_tags.push("type:midi".to_string());
-            artifact_tags.push("source:orpheus".to_string());
-
-            let metadata = serde_json::json!({
-                "mime_type": "audio/midi",
-                "source": format!("orpheus_{}", task),
-                "variation_index": idx,
-                "tokens": num_tokens,
-            });
-
-            let mut artifact = Artifact::new(
-                artifact_id.clone(),
-                content_hash,
-                &creator_str,
-                metadata,
-            ).with_tags(artifact_tags);
-
-            if let Some(ref parent) = parent_id {
-                artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
-            }
-            if let Some(ref var_set) = var_set_id {
-                artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
-                artifact.variation_index = Some(idx as u32);
-            }
-
-            let mut store = self.artifact_store.write().map_err(|e| {
-                ToolError::internal(format!("Failed to lock artifact store: {}", e))
-            })?;
-            store.put(artifact).map_err(|e| {
-                ToolError::internal(format!("Failed to store artifact: {}", e))
-            })?;
-        }
-
-        let summary = format!(
-            "Generated {} MIDI variation(s), {} total tokens",
-            artifact_ids.len(),
-            total_tokens
-        );
-
-        Ok(hooteproto::responses::OrpheusGeneratedResponse {
-            output_hashes,
-            artifact_ids,
-            tokens_per_variation,
-            total_tokens,
-            variation_set_id: var_set_id,
-            summary,
-        })
+        Ok(())
     }
 
     // ============================================================
@@ -2920,15 +2870,23 @@ impl EventDualityServer {
         audio_path: Option<String>,
         _include_frames: bool,
     ) -> Result<hooteproto::responses::JobStartedResponse, ToolError> {
-        use crate::api::schema::BeatThisServiceRequest;
         use crate::api::tools::beat_this::prepare_audio_for_beatthis;
+        use hooteproto::{Payload, ToolRequest, request::BeatthisAnalyzeRequest, responses::ToolResponse};
+
+        // Get the beatthis client
+        let beatthis = self.beatthis.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Beat-this service not configured. Check beatthis_endpoint in config.",
+            )
+        })?;
 
         let job_id = self.job_store.create_job("beatthis_analyze".to_string());
         let _ = self.job_store.mark_running(&job_id);
 
-        let local_models = Arc::clone(&self.local_models);
         let job_store = self.job_store.clone();
         let job_id_clone = job_id.clone();
+        let beatthis_client = Arc::clone(beatthis);
 
         // Get audio bytes - need to do this before spawn since we need async local_models
         let audio_bytes = if let Some(ref hash) = audio_hash {
@@ -2958,53 +2916,50 @@ impl EventDualityServer {
             ));
         }
 
+        // Store prepared audio in CAS
+        let prepared_audio = prepare_audio_for_beatthis(&audio_bytes)
+            .map_err(|e| ToolError::internal(format!("Audio preparation failed: {}", e.message())))?;
+        let cas_result = self.cas_store_typed(&prepared_audio, "audio/wav").await?;
+        let audio_hash_for_service = cas_result.hash.clone();
+
         let handle = tokio::spawn(async move {
             let result: anyhow::Result<hooteproto::responses::ToolResponse> = (async {
-                // Prepare audio for BeatThis (mono 22050 Hz)
-                let prepared_audio = prepare_audio_for_beatthis(&audio_bytes)
-                    .map_err(|e| anyhow::anyhow!("Audio preparation failed: {}", e.message()))?;
-
-                // Encode as base64
-                use base64::Engine;
-                let audio_base64 = base64::engine::general_purpose::STANDARD.encode(&prepared_audio);
-
-                let service_request = BeatThisServiceRequest {
-                    audio: audio_base64,
-                    client_job_id: Some(job_id_clone.as_str().to_string()),
+                let request = BeatthisAnalyzeRequest {
+                    audio_hash: Some(audio_hash_for_service),
+                    audio_path: None,
+                    include_frames: false,
                 };
 
-                let response = reqwest::Client::new()
-                    .post("http://127.0.0.1:2012/predict")
-                    .json(&service_request)
-                    .timeout(std::time::Duration::from_secs(120))
-                    .send()
-                    .await?;
+                let payload = Payload::ToolRequest(ToolRequest::BeatthisAnalyze(request));
 
-                if !response.status().is_success() {
-                    let status = response.status();
-                    let error = response.text().await.unwrap_or_default();
-                    anyhow::bail!("BeatThis error {}: {}", status, error);
+                let response = beatthis_client
+                    .request(payload)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Beat-this request failed: {}", e))?;
+
+                // Parse response
+                match response {
+                    Payload::TypedResponse(envelope) => {
+                        match envelope {
+                            hooteproto::ResponseEnvelope::Success { response } => {
+                                match response {
+                                    ToolResponse::BeatsAnalyzed(resp) => Ok(ToolResponse::BeatsAnalyzed(resp)),
+                                    _ => anyhow::bail!("Unexpected response type"),
+                                }
+                            }
+                            hooteproto::ResponseEnvelope::Error(err) => {
+                                anyhow::bail!("Beat-this error: {}", err.message())
+                            }
+                            hooteproto::ResponseEnvelope::JobStarted { .. } => {
+                                anyhow::bail!("Unexpected async response")
+                            }
+                            hooteproto::ResponseEnvelope::Ack { .. } => {
+                                anyhow::bail!("Unexpected ack response")
+                            }
+                        }
+                    }
+                    _ => anyhow::bail!("Unexpected payload type"),
                 }
-
-                let beat_response: crate::api::schema::BeatThisServiceResponse = response.json().await?;
-
-                // Compute confidence from detection ratio (heuristic)
-                let confidence = if beat_response.duration > 0.0 {
-                    let expected_beats = beat_response.duration * beat_response.bpm / 60.0;
-                    let ratio = beat_response.num_beats as f64 / expected_beats;
-                    (1.0 - (ratio - 1.0).abs().min(1.0)) as f32
-                } else {
-                    0.5
-                };
-
-                Ok(hooteproto::responses::ToolResponse::BeatsAnalyzed(
-                    hooteproto::responses::BeatsAnalyzedResponse {
-                        beats: beat_response.beats,
-                        downbeats: beat_response.downbeats,
-                        estimated_bpm: beat_response.bpm,
-                        confidence,
-                    },
-                ))
             })
             .await;
 
