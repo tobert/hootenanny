@@ -14,10 +14,16 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.20",
 ]
 
+[project.scripts]
+hoot-cli = "hootpy.cli:main"
+
 [project.optional-dependencies]
 orpheus = [
+    # torch provided by system (python-pytorch-rocm or python-pytorch-cuda)
     "x-transformers>=1.0",
-    "torch>=2.0",
+]
+cli = [
+    "hootpy[orpheus]",
 ]
 dev = [
     "pytest>=8.0",

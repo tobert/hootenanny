@@ -23,10 +23,19 @@ from hootpy.orpheus_models import load_single_model, MODEL_PATHS
 
 log = logging.getLogger(__name__)
 
-# Default models directory
-MODELS_DIR = Path(
-    os.environ.get("ORPHEUS_MODELS_DIR", os.path.expanduser("~/halfremembered/models"))
-)
+# Default models directory - check env, then legacy paths, then default
+def _get_models_dir() -> Path:
+    env_val = os.environ.get("ORPHEUS_MODELS_DIR")
+    if env_val:
+        return Path(env_val)
+    # Legacy paths (first existing wins)
+    for legacy in ["/tank/ml/music-models/models"]:
+        p = Path(legacy)
+        if p.exists():
+            return p
+    return Path.home() / "halfremembered" / "models"
+
+MODELS_DIR = _get_models_dir()
 
 # Default endpoint (IPC socket)
 DEFAULT_ENDPOINT = f"ipc://{os.environ.get('XDG_RUNTIME_DIR', os.path.expanduser('~/.hootenanny/run'))}/hootenanny/orpheus.sock"
