@@ -8,6 +8,8 @@
 //! - `stdio`: MCP stdio transport for Claude Code
 //! - `client`: ZMQ client utilities
 //! - `subscriber`: ZMQ subscriber for broadcasts
+//! - `resources`: MCP Resources (entry points into Trustfall graph)
+//! - `prompts`: MCP Prompts (query templates)
 
 pub mod backend;
 pub mod client;
@@ -16,6 +18,8 @@ pub mod dispatch;
 pub mod handler;
 pub mod help;
 pub mod manual_schemas;
+pub mod prompts;
+pub mod resources;
 pub mod serve;
 pub mod stdio;
 pub mod subscriber;

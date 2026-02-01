@@ -3,14 +3,18 @@
 //! Implements rmcp::ServerHandler to bridge MCP protocol to ZMQ backends.
 //! Tools are dynamically discovered from backends and calls are routed based on prefix.
 //! Tool lists are cached and refreshed when backends recover from failures.
+//!
+//! Now also supports MCP Resources and Prompts for richer agent interactions.
 
 use hooteproto::{Payload, ToolInfo};
 use rmcp::{
     ErrorData as McpError,
     ServerHandler,
     model::{
-        CallToolRequestParam, CallToolResult, Content, Implementation,
-        ListToolsResult, PaginatedRequestParam, ServerCapabilities, ServerInfo, Tool,
+        CallToolRequestParam, CallToolResult, Content, GetPromptRequestParam, GetPromptResult,
+        Implementation, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+        ListToolsResult, PaginatedRequestParam, ReadResourceRequestParam, ReadResourceResult,
+        ResourceContents, ServerCapabilities, ServerInfo, Tool,
     },
     service::RequestContext,
     RoleServer,
@@ -21,6 +25,8 @@ use tracing::{debug, info, warn};
 
 use crate::backend::BackendPool;
 use crate::dispatch;
+use crate::prompts::{self, PromptRegistry};
+use crate::resources::ResourceRegistry;
 
 /// Shared tool cache for dynamic refresh across handler instances.
 ///
@@ -63,6 +69,8 @@ pub const DAW_TOOLS: &[&str] = &[
 ///
 /// Maintains a cached list of tools that can be refreshed dynamically
 /// when backends recover from failure (Dead → Ready transition).
+///
+/// Also handles MCP Resources and Prompts for richer agent interactions.
 #[derive(Clone)]
 pub struct ZmqHandler {
     backends: Arc<RwLock<BackendPool>>,
@@ -72,16 +80,20 @@ pub struct ZmqHandler {
     daw_only: bool,
     /// Base URL for artifact access (e.g., "http://localhost:8082")
     artifact_base_url: Option<String>,
+    /// Resource registry for MCP Resources
+    resources: Arc<ResourceRegistry>,
 }
 
 impl ZmqHandler {
     /// Create a new handler with the given backend pool and a new cache.
     pub fn new(backends: Arc<RwLock<BackendPool>>) -> Self {
+        let resources = Arc::new(ResourceRegistry::new(Arc::clone(&backends)));
         Self {
             backends,
             cached_tools: new_tool_cache(),
             daw_only: false,
             artifact_base_url: None,
+            resources,
         }
     }
 
@@ -95,11 +107,13 @@ impl ZmqHandler {
         daw_only: bool,
         artifact_base_url: Option<String>,
     ) -> Self {
+        let resources = Arc::new(ResourceRegistry::new(Arc::clone(&backends)));
         Self {
             backends,
             cached_tools: cache,
             daw_only,
             artifact_base_url,
+            resources,
         }
     }
 
@@ -122,9 +136,88 @@ impl ServerHandler for ZmqHandler {
             protocol_version: Default::default(),
             capabilities: ServerCapabilities::builder()
                 .enable_tools()
+                .enable_resources()
+                .enable_prompts()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("Holler MCP gateway - forwards tool calls to hootenanny ZMQ backends".to_string()),
+            instructions: Some(
+                "Holler MCP gateway - forwards tool calls to hootenanny ZMQ backends. \
+                 Use resources to explore session context, artifacts, and soundfonts. \
+                 Use prompts for Trustfall query templates."
+                    .to_string(),
+            ),
+        }
+    }
+
+    fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
+        async move {
+            Ok(ListResourcesResult {
+                resources: ResourceRegistry::list_resources(),
+                next_cursor: None,
+                meta: None,
+            })
+        }
+    }
+
+    fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListResourceTemplatesResult, McpError>> + Send + '_
+    {
+        async move {
+            Ok(ListResourceTemplatesResult {
+                resource_templates: ResourceRegistry::list_resource_templates(),
+                next_cursor: None,
+                meta: None,
+            })
+        }
+    }
+
+    fn read_resource(
+        &self,
+        request: ReadResourceRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
+        async move {
+            let uri = &request.uri;
+            debug!(uri = %uri, "Reading resource");
+
+            match self.resources.read(uri).await {
+                Ok(content) => Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(content, uri.clone())],
+                }),
+                Err(e) => Err(McpError::resource_not_found(e.to_string(), None)),
+            }
+        }
+    }
+
+    fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
+        async move {
+            Ok(ListPromptsResult {
+                prompts: PromptRegistry::list(),
+                next_cursor: None,
+                meta: None,
+            })
+        }
+    }
+
+    fn get_prompt(
+        &self,
+        request: GetPromptRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
+        async move {
+            let args = prompts::args_to_hashmap(request.arguments.as_ref());
+            PromptRegistry::get(&request.name, &args)
         }
     }
 
