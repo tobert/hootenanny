@@ -275,6 +275,26 @@ async fn main() -> Result<()> {
         None
     };
 
+    // --- MusicGen Connection (lazy - ZMQ connects when peer available) ---
+    let musicgen_endpoint = &config.bootstrap.connections.musicgen;
+    let musicgen_client: Option<Arc<zmq::MusicgenClient>> = if !musicgen_endpoint.is_empty() {
+        info!("🎵 Connecting to MusicGen at {}...", musicgen_endpoint);
+        let musicgen_config = zmq::musicgen_config(musicgen_endpoint, zmq::DEFAULT_MUSICGEN_TIMEOUT_MS);
+        Some(zmq::MusicgenClient::new(musicgen_config).await)
+    } else {
+        None
+    };
+
+    // --- CLAP Connection (lazy - ZMQ connects when peer available) ---
+    let clap_endpoint = &config.bootstrap.connections.clap;
+    let clap_client: Option<Arc<zmq::ClapClient>> = if !clap_endpoint.is_empty() {
+        info!("🔍 Connecting to CLAP at {}...", clap_endpoint);
+        let clap_config = zmq::clap_config(clap_endpoint, zmq::DEFAULT_CLAP_TIMEOUT_MS);
+        Some(zmq::ClapClient::new(clap_config).await)
+    } else {
+        None
+    };
+
     let http_addr = config.infra.bind.http_bind_addr();
     let zmq_router = &config.infra.bind.zmq_router;
     let zmq_pub = &config.infra.bind.zmq_pub;
@@ -345,6 +365,8 @@ async fn main() -> Result<()> {
         .with_rave(rave_client.clone())
         .with_orpheus(orpheus_client.clone())
         .with_beatthis(beatthis_client.clone())
+        .with_musicgen(musicgen_client.clone())
+        .with_clap(clap_client.clone())
         .with_broadcaster(Some(broadcast_publisher))
         .with_stream_manager(Some(stream_manager.clone()))
         .with_session_manager(Some(session_manager.clone()))

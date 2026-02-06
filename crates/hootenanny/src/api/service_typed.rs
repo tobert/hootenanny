@@ -2614,7 +2614,7 @@ impl EventDualityServer {
     // AsyncLong Tools - Background job spawning
     // ============================================================
 
-    /// Generate audio with MusicGen - spawns background job
+    /// Generate audio with MusicGen - spawns background job via ZMQ
     pub async fn musicgen_generate_typed(
         &self,
         prompt: Option<String>,
@@ -2631,95 +2631,117 @@ impl EventDualityServer {
     ) -> Result<hooteproto::responses::JobStartedResponse, ToolError> {
         use crate::artifact_store::{Artifact, ArtifactStore};
         use crate::types::{ArtifactId, ContentHash, VariationSetId};
+        use hooteproto::{Payload, ToolRequest, request::MusicgenGenerateRequest, responses::ToolResponse};
+
+        let musicgen = self.musicgen.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "MusicGen service not configured. Check musicgen endpoint in config.",
+            )
+        })?;
 
         let job_id = self.job_store.create_job("musicgen_generate".to_string());
         let _ = self.job_store.mark_running(&job_id);
 
-        let local_models = Arc::clone(&self.local_models);
         let artifact_store = Arc::clone(&self.artifact_store);
         let job_store = self.job_store.clone();
         let job_id_clone = job_id.clone();
+        let musicgen_client = Arc::clone(musicgen);
 
-        let prompt_str = prompt.unwrap_or_else(|| "ambient electronic music".to_string());
-        let duration_val = duration.unwrap_or(8.0);
-        let temperature_val = temperature.unwrap_or(1.0);
-        let top_k_val = top_k.unwrap_or(250);
-        let top_p_val = top_p.unwrap_or(0.0);
-        let guidance_scale_val = guidance_scale.unwrap_or(3.0);
-        let do_sample_val = do_sample.unwrap_or(true);
+        let prompt_str = prompt.clone().unwrap_or_else(|| "ambient electronic music".to_string());
 
         let handle = tokio::spawn(async move {
             let result: anyhow::Result<hooteproto::responses::ToolResponse> = (async {
-                let response = local_models
-                    .run_musicgen_generate(
-                        prompt_str.clone(),
-                        duration_val,
-                        temperature_val,
-                        top_k_val,
-                        top_p_val,
-                        guidance_scale_val,
-                        do_sample_val,
-                        Some(job_id_clone.as_str().to_string()),
-                    )
-                    .await?;
+                let request = MusicgenGenerateRequest {
+                    prompt,
+                    duration,
+                    temperature,
+                    top_k,
+                    top_p,
+                    guidance_scale,
+                    do_sample,
+                    tags: tags.clone(),
+                    creator: creator.clone(),
+                    parent_id: parent_id.clone(),
+                    variation_set_id: variation_set_id.clone(),
+                };
 
-                // Decode audio_base64 from response
-                use base64::Engine;
-                let audio_base64 = response
-                    .get("audio_base64")
-                    .and_then(|p| p.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("No audio_base64 in MusicGen response"))?;
+                let payload = Payload::ToolRequest(ToolRequest::MusicgenGenerate(request));
 
-                let audio_bytes = base64::engine::general_purpose::STANDARD
-                    .decode(audio_base64)
-                    .map_err(|e| anyhow::anyhow!("Failed to decode audio_base64: {}", e))?;
+                let response = musicgen_client
+                    .request(payload)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("MusicGen request failed: {}", e))?;
 
-                let sample_rate = response.get("sample_rate").and_then(|s| s.as_u64()).unwrap_or(32000) as u32;
-                let duration_seconds = response.get("duration").and_then(|d| d.as_f64()).unwrap_or(duration_val as f64);
-                let hash = local_models.store_cas_content(&audio_bytes, "audio/wav").await?;
-                let content_hash = ContentHash::new(&hash);
-                let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+                // Parse the ZMQ response
+                match response {
+                    Payload::TypedResponse(envelope) => {
+                        match envelope {
+                            hooteproto::ResponseEnvelope::Success { response } => {
+                                let (content_hash_str, duration_seconds, sample_rate) = match &response {
+                                    ToolResponse::AudioGenerated(r) => {
+                                        (r.content_hash.clone(), r.duration_seconds, r.sample_rate)
+                                    }
+                                    _ => anyhow::bail!("Unexpected response type from MusicGen"),
+                                };
 
-                let creator_str = creator.unwrap_or_else(|| "musicgen".to_string());
-                let mut artifact_tags = tags;
-                artifact_tags.push("type:audio".to_string());
-                artifact_tags.push("source:musicgen".to_string());
+                                let content_hash = ContentHash::new(&content_hash_str);
+                                let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
 
-                let metadata = serde_json::json!({
-                    "mime_type": "audio/wav",
-                    "source": "musicgen",
-                    "prompt": prompt_str,
-                    "duration_seconds": duration_seconds,
-                    "sample_rate": sample_rate,
-                });
+                                let creator_str = creator.unwrap_or_else(|| "musicgen".to_string());
+                                let mut artifact_tags = tags;
+                                artifact_tags.push("type:audio".to_string());
+                                artifact_tags.push("source:musicgen".to_string());
 
-                let mut artifact = Artifact::new(
-                    artifact_id.clone(),
-                    content_hash,
-                    &creator_str,
-                    metadata,
-                ).with_tags(artifact_tags);
+                                let metadata = serde_json::json!({
+                                    "mime_type": "audio/wav",
+                                    "source": "musicgen",
+                                    "prompt": prompt_str,
+                                    "duration_seconds": duration_seconds,
+                                    "sample_rate": sample_rate,
+                                });
 
-                if let Some(ref parent) = parent_id {
-                    artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
+                                let mut artifact = Artifact::new(
+                                    artifact_id.clone(),
+                                    content_hash,
+                                    &creator_str,
+                                    metadata,
+                                ).with_tags(artifact_tags);
+
+                                if let Some(ref parent) = parent_id {
+                                    artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
+                                }
+                                if let Some(ref var_set) = variation_set_id {
+                                    artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
+                                }
+
+                                let mut store = artifact_store.write().map_err(|_| anyhow::anyhow!("Artifact store lock poisoned"))?;
+                                store.put(artifact)?;
+
+                                Ok(ToolResponse::AudioGenerated(
+                                    hooteproto::responses::AudioGeneratedResponse {
+                                        artifact_id: artifact_id.as_str().to_string(),
+                                        content_hash: content_hash_str,
+                                        duration_seconds,
+                                        sample_rate,
+                                        format: hooteproto::responses::AudioFormat::Wav,
+                                        genre: None,
+                                    },
+                                ))
+                            }
+                            hooteproto::ResponseEnvelope::Error(err) => {
+                                anyhow::bail!("MusicGen error: {}", err.message())
+                            }
+                            hooteproto::ResponseEnvelope::JobStarted { .. } => {
+                                anyhow::bail!("Unexpected async response")
+                            }
+                            hooteproto::ResponseEnvelope::Ack { .. } => {
+                                anyhow::bail!("Unexpected ack response")
+                            }
+                        }
+                    }
+                    _ => anyhow::bail!("Unexpected payload type"),
                 }
-                if let Some(ref var_set) = variation_set_id {
-                    artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
-                }
-
-                let mut store = artifact_store.write().map_err(|_| anyhow::anyhow!("Artifact store lock poisoned"))?;
-                store.put(artifact)?;
-
-                Ok(hooteproto::responses::ToolResponse::AudioGenerated(
-                    hooteproto::responses::AudioGeneratedResponse {
-                        artifact_id: artifact_id.as_str().to_string(),
-                        content_hash: hash,
-                        duration_seconds,
-                        sample_rate,
-                        format: hooteproto::responses::AudioFormat::Wav,
-                        genre: None,
-                    },
-                ))
             })
             .await;
 
@@ -2981,96 +3003,72 @@ impl EventDualityServer {
         })
     }
 
-    /// Analyze audio with CLAP - spawns background job
+    /// Analyze audio with CLAP - spawns background job via ZMQ
     pub async fn clap_analyze_typed(
         &self,
         audio_hash: String,
         audio_b_hash: Option<String>,
         tasks: Vec<String>,
         text_candidates: Vec<String>,
-        _creator: Option<String>,
-        _parent_id: Option<String>,
+        creator: Option<String>,
+        parent_id: Option<String>,
     ) -> Result<hooteproto::responses::JobStartedResponse, ToolError> {
-        use base64::Engine;
+        use hooteproto::{Payload, ToolRequest, request::ClapAnalyzeRequest, responses::ToolResponse};
+
+        let clap = self.clap.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "CLAP service not configured. Check clap endpoint in config.",
+            )
+        })?;
 
         let job_id = self.job_store.create_job("clap_analyze".to_string());
         let _ = self.job_store.mark_running(&job_id);
 
-        let local_models = Arc::clone(&self.local_models);
         let job_store = self.job_store.clone();
         let job_id_clone = job_id.clone();
-
-        // Get audio content and encode as base64 before spawn
-        let content = self.local_models
-            .inspect_cas_content(&audio_hash)
-            .await
-            .map_err(|e| ToolError::not_found("audio", e.to_string()))?;
-        let path = content.local_path.ok_or_else(|| ToolError::not_found("audio", audio_hash.clone()))?;
-        let audio_bytes = std::fs::read(&path).map_err(|e| ToolError::internal(format!("Failed to read audio: {}", e)))?;
-        let audio_base64 = base64::engine::general_purpose::STANDARD.encode(&audio_bytes);
-
-        // Optionally get audio_b content
-        let audio_b_base64 = if let Some(ref hash) = audio_b_hash {
-            let content_b = self.local_models
-                .inspect_cas_content(hash)
-                .await
-                .map_err(|e| ToolError::not_found("audio_b", e.to_string()))?;
-            if let Some(path_b) = content_b.local_path {
-                let bytes_b = std::fs::read(&path_b).map_err(|e| ToolError::internal(format!("Failed to read audio_b: {}", e)))?;
-                Some(base64::engine::general_purpose::STANDARD.encode(&bytes_b))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        let text_cands = if text_candidates.is_empty() { None } else { Some(text_candidates) };
+        let clap_client = Arc::clone(clap);
 
         let handle = tokio::spawn(async move {
             let result: anyhow::Result<hooteproto::responses::ToolResponse> = (async {
-                let response = local_models
-                    .run_clap_analyze(
-                        audio_base64,
-                        tasks,
-                        audio_b_base64,
-                        text_cands,
-                        Some(job_id_clone.as_str().to_string()),
-                    )
-                    .await?;
+                let request = ClapAnalyzeRequest {
+                    audio_hash,
+                    audio_b_hash,
+                    tasks,
+                    text_candidates,
+                    creator,
+                    parent_id,
+                };
 
-                // Parse CLAP response
-                let embeddings = response
-                    .get("embeddings")
-                    .and_then(|e| e.as_array())
-                    .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect());
+                let payload = Payload::ToolRequest(ToolRequest::ClapAnalyze(request));
 
-                let genre = response
-                    .get("genre")
-                    .and_then(|g| serde_json::from_value(g.clone()).ok());
+                let response = clap_client
+                    .request(payload)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("CLAP request failed: {}", e))?;
 
-                let mood = response
-                    .get("mood")
-                    .and_then(|m| serde_json::from_value(m.clone()).ok());
-
-                let zero_shot = response
-                    .get("zero_shot")
-                    .and_then(|z| serde_json::from_value(z.clone()).ok());
-
-                let similarity = response
-                    .get("similarity")
-                    .and_then(|s| s.as_f64())
-                    .map(|f| f as f32);
-
-                Ok(hooteproto::responses::ToolResponse::ClapAnalyzed(
-                    hooteproto::responses::ClapAnalyzedResponse {
-                        embeddings,
-                        genre,
-                        mood,
-                        zero_shot,
-                        similarity,
-                    },
-                ))
+                match response {
+                    Payload::TypedResponse(envelope) => {
+                        match envelope {
+                            hooteproto::ResponseEnvelope::Success { response } => {
+                                match response {
+                                    ToolResponse::ClapAnalyzed(resp) => Ok(ToolResponse::ClapAnalyzed(resp)),
+                                    _ => anyhow::bail!("Unexpected response type from CLAP"),
+                                }
+                            }
+                            hooteproto::ResponseEnvelope::Error(err) => {
+                                anyhow::bail!("CLAP error: {}", err.message())
+                            }
+                            hooteproto::ResponseEnvelope::JobStarted { .. } => {
+                                anyhow::bail!("Unexpected async response")
+                            }
+                            hooteproto::ResponseEnvelope::Ack { .. } => {
+                                anyhow::bail!("Unexpected ack response")
+                            }
+                        }
+                    }
+                    _ => anyhow::bail!("Unexpected payload type"),
+                }
             })
             .await;
 

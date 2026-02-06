@@ -55,6 +55,14 @@ pub struct ConnectionsConfig {
     /// Beat-this ZMQ endpoint (beat/downbeat detection via hootpy)
     #[serde(default = "ConnectionsConfig::default_beatthis")]
     pub beatthis: String,
+
+    /// MusicGen ZMQ endpoint (text-to-music generation via hootpy)
+    #[serde(default = "ConnectionsConfig::default_musicgen")]
+    pub musicgen: String,
+
+    /// CLAP ZMQ endpoint (audio analysis via hootpy)
+    #[serde(default = "ConnectionsConfig::default_clap")]
+    pub clap: String,
 }
 
 impl ConnectionsConfig {
@@ -97,6 +105,14 @@ impl ConnectionsConfig {
     fn default_beatthis() -> String {
         format!("ipc://{}/beatthis.sock", Self::socket_dir())
     }
+
+    fn default_musicgen() -> String {
+        format!("ipc://{}/musicgen.sock", Self::socket_dir())
+    }
+
+    fn default_clap() -> String {
+        format!("ipc://{}/clap.sock", Self::socket_dir())
+    }
 }
 
 impl Default for ConnectionsConfig {
@@ -108,6 +124,8 @@ impl Default for ConnectionsConfig {
             rave_streaming: Self::default_rave_streaming(),
             orpheus: Self::default_orpheus(),
             beatthis: Self::default_beatthis(),
+            musicgen: Self::default_musicgen(),
+            clap: Self::default_clap(),
         }
     }
 }
@@ -240,6 +258,13 @@ mod tests {
         assert_eq!(models.get("orpheus"), Some(&"http://127.0.0.1:2000".to_string()));
         assert_eq!(models.get("beatthis"), Some(&"http://127.0.0.1:2012".to_string()));
         assert_eq!(models.len(), 9);
+    }
+
+    #[test]
+    fn test_connections_musicgen_clap() {
+        let conn = ConnectionsConfig::default();
+        assert!(conn.musicgen.contains("musicgen.sock"));
+        assert!(conn.clap.contains("clap.sock"));
     }
 
     #[test]

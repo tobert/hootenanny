@@ -5,7 +5,7 @@ use crate::job_system::JobStore;
 use crate::mcp_tools::local_models::LocalModels;
 use crate::sessions::SessionManager;
 use crate::streams::{SlicingEngine, StreamManager};
-use crate::zmq::{BeatthisClient, BroadcastPublisher, GardenManager, OrpheusClient, RaveClient, VibeweaverClient};
+use crate::zmq::{BeatthisClient, BroadcastPublisher, ClapClient, GardenManager, MusicgenClient, OrpheusClient, RaveClient, VibeweaverClient};
 use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use std::sync::{Arc, RwLock};
 
@@ -26,6 +26,10 @@ pub struct EventDualityServer {
     pub orpheus: Option<Arc<OrpheusClient>>,
     /// Optional beat-this client for beat detection service
     pub beatthis: Option<Arc<BeatthisClient>>,
+    /// Optional MusicGen client for text-to-music generation
+    pub musicgen: Option<Arc<MusicgenClient>>,
+    /// Optional CLAP client for audio analysis
+    pub clap: Option<Arc<ClapClient>>,
     /// Optional broadcast publisher for SSE events via holler
     pub broadcaster: Option<BroadcastPublisher>,
     /// Stream manager for capture sessions
@@ -67,6 +71,8 @@ impl EventDualityServer {
             rave: None,
             orpheus: None,
             beatthis: None,
+            musicgen: None,
+            clap: None,
             broadcaster: None,
             stream_manager: None,
             session_manager: None,
@@ -102,6 +108,18 @@ impl EventDualityServer {
     /// Create with beat-this client for beat detection service
     pub fn with_beatthis(mut self, beatthis: Option<Arc<BeatthisClient>>) -> Self {
         self.beatthis = beatthis;
+        self
+    }
+
+    /// Create with MusicGen client for text-to-music generation
+    pub fn with_musicgen(mut self, musicgen: Option<Arc<MusicgenClient>>) -> Self {
+        self.musicgen = musicgen;
+        self
+    }
+
+    /// Create with CLAP client for audio analysis
+    pub fn with_clap(mut self, clap: Option<Arc<ClapClient>>) -> Self {
+        self.clap = clap;
         self
     }
 
