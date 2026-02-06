@@ -348,6 +348,74 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             })))
         }
 
+        // === AudioLDM2 Tools ===
+        "audioldm2_generate" => {
+            let p: Audioldm2GenerateArgs = serde_json::from_value(args).context("Invalid audioldm2_generate arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::Audioldm2Generate(request::Audioldm2GenerateRequest {
+                prompt: p.prompt,
+                negative_prompt: p.negative_prompt,
+                duration: p.duration,
+                num_inference_steps: p.num_inference_steps,
+                guidance_scale: p.guidance_scale,
+                seed: p.seed,
+                tags: p.tags.unwrap_or_default(),
+                creator: p.creator,
+                parent_id: p.parent_id,
+                variation_set_id: p.variation_set_id,
+            })))
+        }
+
+        // === Anticipatory Music Transformer Tools ===
+        "anticipatory_generate" => {
+            let p: AnticipatoryGenerateArgs = serde_json::from_value(args).context("Invalid anticipatory_generate arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::AnticipatoryGenerate(request::AnticipatoryGenerateRequest {
+                length_seconds: p.length_seconds,
+                top_p: p.top_p,
+                model_size: p.model_size,
+                tags: p.tags.unwrap_or_default(),
+                creator: p.creator,
+                parent_id: p.parent_id,
+                variation_set_id: p.variation_set_id,
+            })))
+        }
+        "anticipatory_continue" => {
+            let p: AnticipatoryContinueArgs = serde_json::from_value(args).context("Invalid anticipatory_continue arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::AnticipatoryContinue(request::AnticipatoryContinueRequest {
+                input_hash: p.input_hash,
+                length_seconds: p.length_seconds,
+                prime_seconds: p.prime_seconds,
+                top_p: p.top_p,
+                model_size: p.model_size,
+                tags: p.tags.unwrap_or_default(),
+                creator: p.creator,
+                parent_id: p.parent_id,
+                variation_set_id: p.variation_set_id,
+            })))
+        }
+        "anticipatory_embed" => {
+            let p: AnticipatoryEmbedArgs = serde_json::from_value(args).context("Invalid anticipatory_embed arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::AnticipatoryEmbed(request::AnticipatoryEmbedRequest {
+                input_hash: p.input_hash,
+                model_size: p.model_size,
+                embed_layer: p.embed_layer,
+            })))
+        }
+
+        // === Demucs Tools ===
+        "demucs_separate" => {
+            let p: DemucsSeparateArgs = serde_json::from_value(args).context("Invalid demucs_separate arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::DemucsSeparate(request::DemucsSeparateRequest {
+                audio_hash: p.audio_hash,
+                model: p.model,
+                stems: p.stems.unwrap_or_default(),
+                two_stems: p.two_stems,
+                tags: p.tags.unwrap_or_default(),
+                creator: p.creator,
+                parent_id: p.parent_id,
+                variation_set_id: p.variation_set_id,
+            })))
+        }
+
         // === Artifact Tools ===
         "artifact_upload" => {
             let p: ArtifactUploadArgs = serde_json::from_value(args).context("Invalid artifact_upload arguments")?;
@@ -1021,4 +1089,67 @@ struct MidiPlayArgs {
 #[derive(Debug, Deserialize)]
 struct MidiStopArgs {
     region_id: String,
+}
+
+// === AudioLDM2 Args ===
+
+#[derive(Debug, Default, Deserialize)]
+struct Audioldm2GenerateArgs {
+    prompt: Option<String>,
+    negative_prompt: Option<String>,
+    duration: Option<f32>,
+    num_inference_steps: Option<u32>,
+    guidance_scale: Option<f32>,
+    seed: Option<u64>,
+    tags: Option<Vec<String>>,
+    creator: Option<String>,
+    parent_id: Option<String>,
+    variation_set_id: Option<String>,
+}
+
+// === Anticipatory Music Transformer Args ===
+
+#[derive(Debug, Default, Deserialize)]
+struct AnticipatoryGenerateArgs {
+    length_seconds: Option<f32>,
+    top_p: Option<f32>,
+    model_size: Option<String>,
+    tags: Option<Vec<String>>,
+    creator: Option<String>,
+    parent_id: Option<String>,
+    variation_set_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnticipatoryContinueArgs {
+    input_hash: String,
+    length_seconds: Option<f32>,
+    prime_seconds: Option<f32>,
+    top_p: Option<f32>,
+    model_size: Option<String>,
+    tags: Option<Vec<String>>,
+    creator: Option<String>,
+    parent_id: Option<String>,
+    variation_set_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnticipatoryEmbedArgs {
+    input_hash: String,
+    model_size: Option<String>,
+    embed_layer: Option<i32>,
+}
+
+// === Demucs Args ===
+
+#[derive(Debug, Deserialize)]
+struct DemucsSeparateArgs {
+    audio_hash: String,
+    model: Option<String>,
+    stems: Option<Vec<String>>,
+    two_stems: Option<String>,
+    tags: Option<Vec<String>>,
+    creator: Option<String>,
+    parent_id: Option<String>,
+    variation_set_id: Option<String>,
 }

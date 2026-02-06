@@ -240,6 +240,28 @@ pub enum ToolRequest {
     Ping,
 
     // ==========================================================================
+    // AudioLDM2
+    // ==========================================================================
+    /// Generate audio from text prompt using AudioLDM2
+    Audioldm2Generate(Audioldm2GenerateRequest),
+
+    // ==========================================================================
+    // Anticipatory Music Transformer
+    // ==========================================================================
+    /// Generate MIDI from scratch using Anticipatory Music Transformer
+    AnticipatoryGenerate(AnticipatoryGenerateRequest),
+    /// Continue existing MIDI using Anticipatory Music Transformer
+    AnticipatoryContinue(AnticipatoryContinueRequest),
+    /// Extract embeddings from MIDI using Anticipatory Music Transformer
+    AnticipatoryEmbed(AnticipatoryEmbedRequest),
+
+    // ==========================================================================
+    // Demucs
+    // ==========================================================================
+    /// Separate audio into stems using Demucs
+    DemucsSeparate(DemucsSeparateRequest),
+
+    // ==========================================================================
     // RAVE Audio Codec
     // ==========================================================================
     /// Encode audio to latent codes
@@ -310,6 +332,11 @@ impl ToolRequest {
             Self::YueGenerate(_) => ToolTiming::AsyncLong,
             Self::ClapAnalyze(_) => ToolTiming::AsyncLong,
             Self::BeatthisAnalyze(_) => ToolTiming::AsyncLong,
+            Self::Audioldm2Generate(_) => ToolTiming::AsyncLong,
+            Self::AnticipatoryGenerate(_) => ToolTiming::AsyncLong,
+            Self::AnticipatoryContinue(_) => ToolTiming::AsyncLong,
+            Self::AnticipatoryEmbed(_) => ToolTiming::AsyncLong,
+            Self::DemucsSeparate(_) => ToolTiming::AsyncLong,
 
             // FireAndForget - control commands
             Self::GardenPlay
@@ -417,6 +444,11 @@ impl ToolRequest {
             Self::Complete(_) => "complete",
             Self::SampleLlm(_) => "sample_llm",
             Self::Ping => "ping",
+            Self::Audioldm2Generate(_) => "audioldm2_generate",
+            Self::AnticipatoryGenerate(_) => "anticipatory_generate",
+            Self::AnticipatoryContinue(_) => "anticipatory_continue",
+            Self::AnticipatoryEmbed(_) => "anticipatory_embed",
+            Self::DemucsSeparate(_) => "demucs_separate",
             Self::RaveEncode(_) => "rave_encode",
             Self::RaveDecode(_) => "rave_decode",
             Self::RaveReconstruct(_) => "rave_reconstruct",
@@ -1090,6 +1122,80 @@ pub struct MidiStopRequest {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct GetToolHelpRequest {
     pub topic: Option<String>,
+}
+
+// =============================================================================
+// AudioLDM2 Request Types
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Audioldm2GenerateRequest {
+    pub prompt: Option<String>,
+    pub negative_prompt: Option<String>,
+    pub duration: Option<f32>,
+    pub num_inference_steps: Option<u32>,
+    pub guidance_scale: Option<f32>,
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub creator: Option<String>,
+    pub parent_id: Option<String>,
+    pub variation_set_id: Option<String>,
+}
+
+// =============================================================================
+// Anticipatory Music Transformer Request Types
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnticipatoryGenerateRequest {
+    pub length_seconds: Option<f32>,
+    pub top_p: Option<f32>,
+    pub model_size: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub creator: Option<String>,
+    pub parent_id: Option<String>,
+    pub variation_set_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnticipatoryContinueRequest {
+    pub input_hash: String,
+    pub length_seconds: Option<f32>,
+    pub prime_seconds: Option<f32>,
+    pub top_p: Option<f32>,
+    pub model_size: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub creator: Option<String>,
+    pub parent_id: Option<String>,
+    pub variation_set_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnticipatoryEmbedRequest {
+    pub input_hash: String,
+    pub model_size: Option<String>,
+    pub embed_layer: Option<i32>,
+}
+
+// =============================================================================
+// Demucs Request Types
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DemucsSeparateRequest {
+    pub audio_hash: String,
+    pub model: Option<String>,
+    #[serde(default)]
+    pub stems: Vec<String>,
+    pub two_stems: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub creator: Option<String>,
+    pub parent_id: Option<String>,
+    pub variation_set_id: Option<String>,
 }
 
 // =============================================================================

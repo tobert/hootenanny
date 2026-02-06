@@ -782,6 +782,36 @@ impl TypedDispatcher {
                     "AsyncLong tools should be routed via dispatch_async_return_job_id"
                 )
             }
+            ToolRequest::Audioldm2Generate(req) => {
+                match self.server.audioldm2_generate_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::JobStarted(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::AnticipatoryGenerate(req) => {
+                match self.server.anticipatory_generate_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::JobStarted(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::AnticipatoryContinue(req) => {
+                match self.server.anticipatory_continue_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::JobStarted(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::AnticipatoryEmbed(req) => {
+                match self.server.anticipatory_embed_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::JobStarted(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::DemucsSeparate(req) => {
+                match self.server.demucs_separate_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::JobStarted(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
         }
     }
 

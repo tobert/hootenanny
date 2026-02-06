@@ -1,0 +1,19 @@
+[project]
+name = "anticipatory-service"
+version = "0.1.0"
+description = "Anticipatory Music Transformer service for hootenanny"
+requires-python = ">=3.12"
+dependencies = [
+    # torch provided by system (python-pytorch-rocm or python-pytorch-cuda)
+    "hootpy",
+    "numpy>=1.26",
+    "transformers>=4.40",
+    "anticipation",
+    "mido",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+hootpy = { workspace = true }

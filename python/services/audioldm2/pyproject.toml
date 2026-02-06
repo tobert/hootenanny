@@ -1,0 +1,20 @@
+[project]
+name = "audioldm2-service"
+version = "0.1.0"
+description = "AudioLDM2 text-to-audio diffusion service for hootenanny"
+requires-python = ">=3.12"
+dependencies = [
+    # torch provided by system (python-pytorch-rocm or python-pytorch-cuda)
+    "hootpy",
+    "numpy>=1.26",
+    "transformers>=4.40",
+    "diffusers>=0.30.0",
+    "accelerate",
+    "safetensors",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+hootpy = { workspace = true }

@@ -63,6 +63,18 @@ pub struct ConnectionsConfig {
     /// CLAP ZMQ endpoint (audio analysis via hootpy)
     #[serde(default = "ConnectionsConfig::default_clap")]
     pub clap: String,
+
+    /// AudioLDM2 ZMQ endpoint (text-to-audio diffusion via hootpy)
+    #[serde(default = "ConnectionsConfig::default_audioldm2")]
+    pub audioldm2: String,
+
+    /// Anticipatory Music Transformer ZMQ endpoint (MIDI generation via hootpy)
+    #[serde(default = "ConnectionsConfig::default_anticipatory")]
+    pub anticipatory: String,
+
+    /// Demucs ZMQ endpoint (audio separation via hootpy)
+    #[serde(default = "ConnectionsConfig::default_demucs")]
+    pub demucs: String,
 }
 
 impl ConnectionsConfig {
@@ -113,6 +125,18 @@ impl ConnectionsConfig {
     fn default_clap() -> String {
         format!("ipc://{}/clap.sock", Self::socket_dir())
     }
+
+    fn default_audioldm2() -> String {
+        format!("ipc://{}/audioldm2.sock", Self::socket_dir())
+    }
+
+    fn default_anticipatory() -> String {
+        format!("ipc://{}/anticipatory.sock", Self::socket_dir())
+    }
+
+    fn default_demucs() -> String {
+        format!("ipc://{}/demucs.sock", Self::socket_dir())
+    }
 }
 
 impl Default for ConnectionsConfig {
@@ -126,6 +150,9 @@ impl Default for ConnectionsConfig {
             beatthis: Self::default_beatthis(),
             musicgen: Self::default_musicgen(),
             clap: Self::default_clap(),
+            audioldm2: Self::default_audioldm2(),
+            anticipatory: Self::default_anticipatory(),
+            demucs: Self::default_demucs(),
         }
     }
 }

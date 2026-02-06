@@ -480,6 +480,56 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
         ToolRequest::RaveStreamStatus(req) => {
             builder.reborrow().init_rave_stream_status().set_stream_id(&req.stream_id);
         }
+
+        // AudioLDM2
+        ToolRequest::Audioldm2Generate(req) => {
+            let mut a = builder.reborrow().init_audioldm2_generate();
+            a.set_prompt(req.prompt.as_deref().unwrap_or(""));
+            a.set_negative_prompt(req.negative_prompt.as_deref().unwrap_or(""));
+            a.set_duration(req.duration.unwrap_or(5.0));
+            a.set_num_inference_steps(req.num_inference_steps.unwrap_or(200));
+            a.set_guidance_scale(req.guidance_scale.unwrap_or(3.5));
+            a.set_seed(req.seed.unwrap_or(0));
+            set_artifact_metadata(&mut a.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
+        }
+
+        // Anticipatory Music Transformer
+        ToolRequest::AnticipatoryGenerate(req) => {
+            let mut a = builder.reborrow().init_anticipatory_generate();
+            a.set_length_seconds(req.length_seconds.unwrap_or(30.0));
+            a.set_top_p(req.top_p.unwrap_or(0.95));
+            a.set_model_size(req.model_size.as_deref().unwrap_or("small"));
+            set_artifact_metadata(&mut a.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
+        }
+        ToolRequest::AnticipatoryContinue(req) => {
+            let mut a = builder.reborrow().init_anticipatory_continue();
+            a.set_input_hash(&req.input_hash);
+            a.set_length_seconds(req.length_seconds.unwrap_or(30.0));
+            a.set_prime_seconds(req.prime_seconds.unwrap_or(5.0));
+            a.set_top_p(req.top_p.unwrap_or(0.95));
+            a.set_model_size(req.model_size.as_deref().unwrap_or("small"));
+            set_artifact_metadata(&mut a.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
+        }
+        ToolRequest::AnticipatoryEmbed(req) => {
+            let mut a = builder.reborrow().init_anticipatory_embed();
+            a.set_input_hash(&req.input_hash);
+            a.set_model_size(req.model_size.as_deref().unwrap_or("small"));
+            a.set_embed_layer(req.embed_layer.unwrap_or(-3));
+        }
+
+        // Demucs
+        ToolRequest::DemucsSeparate(req) => {
+            let mut d = builder.reborrow().init_demucs_separate();
+            d.set_audio_hash(&req.audio_hash);
+            d.set_model(req.model.as_deref().unwrap_or("htdemucs"));
+            d.set_two_stems(req.two_stems.as_deref().unwrap_or(""));
+            {
+                let mut stems = d.reborrow().init_stems(req.stems.len() as u32);
+                for (i, s) in req.stems.iter().enumerate() { stems.set(i as u32, s); }
+            }
+            set_artifact_metadata(&mut d.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
+        }
+
         ToolRequest::ArtifactUpload(req) => {
             let mut a = builder.reborrow().init_artifact_upload();
             a.set_file_path(&req.file_path);
@@ -1305,6 +1355,74 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
             }))
         }
         tools_capnp::tool_request::MidiStatus(()) => Ok(ToolRequest::MidiStatus),
+
+        // AudioLDM2
+        tools_capnp::tool_request::Audioldm2Generate(a) => {
+            let a = a?; let m = a.get_metadata()?;
+            Ok(ToolRequest::Audioldm2Generate(Audioldm2GenerateRequest {
+                prompt: capnp_optional_string(a.get_prompt()?),
+                negative_prompt: capnp_optional_string(a.get_negative_prompt()?),
+                duration: Some(a.get_duration()),
+                num_inference_steps: Some(a.get_num_inference_steps()),
+                guidance_scale: Some(a.get_guidance_scale()),
+                seed: if a.get_seed() == 0 { None } else { Some(a.get_seed()) },
+                tags: capnp_string_list(m.get_tags()?),
+                creator: capnp_optional_string(m.get_creator()?),
+                parent_id: capnp_optional_string(m.get_parent_id()?),
+                variation_set_id: capnp_optional_string(m.get_variation_set_id()?),
+            }))
+        }
+
+        // Anticipatory Music Transformer
+        tools_capnp::tool_request::AnticipatoryGenerate(a) => {
+            let a = a?; let m = a.get_metadata()?;
+            Ok(ToolRequest::AnticipatoryGenerate(AnticipatoryGenerateRequest {
+                length_seconds: Some(a.get_length_seconds()),
+                top_p: Some(a.get_top_p()),
+                model_size: capnp_optional_string(a.get_model_size()?),
+                tags: capnp_string_list(m.get_tags()?),
+                creator: capnp_optional_string(m.get_creator()?),
+                parent_id: capnp_optional_string(m.get_parent_id()?),
+                variation_set_id: capnp_optional_string(m.get_variation_set_id()?),
+            }))
+        }
+        tools_capnp::tool_request::AnticipatoryContinue(a) => {
+            let a = a?; let m = a.get_metadata()?;
+            Ok(ToolRequest::AnticipatoryContinue(AnticipatoryContinueRequest {
+                input_hash: a.get_input_hash()?.to_str()?.to_string(),
+                length_seconds: Some(a.get_length_seconds()),
+                prime_seconds: Some(a.get_prime_seconds()),
+                top_p: Some(a.get_top_p()),
+                model_size: capnp_optional_string(a.get_model_size()?),
+                tags: capnp_string_list(m.get_tags()?),
+                creator: capnp_optional_string(m.get_creator()?),
+                parent_id: capnp_optional_string(m.get_parent_id()?),
+                variation_set_id: capnp_optional_string(m.get_variation_set_id()?),
+            }))
+        }
+        tools_capnp::tool_request::AnticipatoryEmbed(a) => {
+            let a = a?;
+            Ok(ToolRequest::AnticipatoryEmbed(AnticipatoryEmbedRequest {
+                input_hash: a.get_input_hash()?.to_str()?.to_string(),
+                model_size: capnp_optional_string(a.get_model_size()?),
+                embed_layer: Some(a.get_embed_layer()),
+            }))
+        }
+
+        // Demucs
+        tools_capnp::tool_request::DemucsSeparate(d) => {
+            let d = d?; let m = d.get_metadata()?;
+            Ok(ToolRequest::DemucsSeparate(DemucsSeparateRequest {
+                audio_hash: d.get_audio_hash()?.to_str()?.to_string(),
+                model: capnp_optional_string(d.get_model()?),
+                stems: capnp_string_list(d.get_stems()?),
+                two_stems: capnp_optional_string(d.get_two_stems()?),
+                tags: capnp_string_list(m.get_tags()?),
+                creator: capnp_optional_string(m.get_creator()?),
+                parent_id: capnp_optional_string(m.get_parent_id()?),
+                variation_set_id: capnp_optional_string(m.get_variation_set_id()?),
+            }))
+        }
 
         _ => Err(capnp::Error::failed("Unsupported ToolRequest variant".to_string())),
     }
@@ -2160,6 +2278,50 @@ fn response_to_capnp_tool_response(
                 c.set_messages(conn.messages);
             }
         }
+        // AudioLDM2
+        ToolResponse::Audioldm2Generated(r) => {
+            let mut b = builder.reborrow().init_audioldm2_generated();
+            b.set_artifact_id(&r.artifact_id);
+            b.set_content_hash(&r.content_hash);
+            b.set_duration_seconds(r.duration_seconds);
+            b.set_sample_rate(r.sample_rate);
+            b.set_prompt(&r.prompt);
+        }
+
+        // Anticipatory Music Transformer
+        ToolResponse::AnticipatoryGenerated(r) => {
+            let mut b = builder.reborrow().init_anticipatory_generated();
+            b.set_artifact_id(&r.artifact_id);
+            b.set_content_hash(&r.content_hash);
+            b.set_duration_seconds(r.duration_seconds);
+            b.set_model_size(&r.model_size);
+        }
+        ToolResponse::AnticipatoryEmbedded(r) => {
+            let mut b = builder.reborrow().init_anticipatory_embedded();
+            {
+                let mut embs = b.reborrow().init_embeddings(r.embeddings.len() as u32);
+                for (i, &v) in r.embeddings.iter().enumerate() { embs.set(i as u32, v); }
+            }
+            b.set_embed_dim(r.embed_dim);
+            b.set_model_size(&r.model_size);
+        }
+
+        // Demucs
+        ToolResponse::DemucsSeparated(r) => {
+            let mut b = builder.reborrow().init_demucs_separated();
+            {
+                let mut stems = b.reborrow().init_stems(r.stems.len() as u32);
+                for (i, stem) in r.stems.iter().enumerate() {
+                    let mut s = stems.reborrow().get(i as u32);
+                    s.set_name(&stem.name);
+                    s.set_content_hash(&stem.content_hash);
+                    s.set_duration_seconds(stem.duration_seconds);
+                }
+            }
+            b.set_model(&r.model);
+            b.set_duration_seconds(r.duration_seconds);
+        }
+
         // MidiPlayStarted and MidiPlayStopped are returned via JSON from garden shell
         // They don't go through Cap'n Proto serialization
         ToolResponse::MidiPlayStarted(_) | ToolResponse::MidiPlayStopped(_) => {
@@ -3232,6 +3394,58 @@ fn capnp_tool_response_to_response(
                 audio_input,
                 monitor,
                 midi: MidiStatusResponse { inputs, outputs },
+            }))
+        }
+
+        // AudioLDM2
+        Which::Audioldm2Generated(r) => {
+            let r = r?;
+            Ok(ToolResponse::Audioldm2Generated(Audioldm2GeneratedResponse {
+                artifact_id: r.get_artifact_id()?.to_string()?,
+                content_hash: r.get_content_hash()?.to_string()?,
+                duration_seconds: r.get_duration_seconds(),
+                sample_rate: r.get_sample_rate(),
+                prompt: r.get_prompt()?.to_string()?,
+            }))
+        }
+
+        // Anticipatory Music Transformer
+        Which::AnticipatoryGenerated(r) => {
+            let r = r?;
+            Ok(ToolResponse::AnticipatoryGenerated(AnticipatoryGeneratedResponse {
+                artifact_id: r.get_artifact_id()?.to_string()?,
+                content_hash: r.get_content_hash()?.to_string()?,
+                duration_seconds: r.get_duration_seconds(),
+                model_size: r.get_model_size()?.to_string()?,
+            }))
+        }
+        Which::AnticipatoryEmbedded(r) => {
+            let r = r?;
+            let embeddings: Vec<f32> = r.get_embeddings()?.iter().collect();
+            Ok(ToolResponse::AnticipatoryEmbedded(AnticipatoryEmbeddedResponse {
+                embeddings,
+                embed_dim: r.get_embed_dim(),
+                model_size: r.get_model_size()?.to_string()?,
+            }))
+        }
+
+        // Demucs
+        Which::DemucsSeparated(r) => {
+            let r = r?;
+            let stems = r.get_stems()?
+                .iter()
+                .map(|s| {
+                    Ok(DemucsStems {
+                        name: s.get_name()?.to_string()?,
+                        content_hash: s.get_content_hash()?.to_string()?,
+                        duration_seconds: s.get_duration_seconds(),
+                    })
+                })
+                .collect::<capnp::Result<Vec<_>>>()?;
+            Ok(ToolResponse::DemucsSeparated(DemucsSeparatedResponse {
+                stems,
+                model: r.get_model()?.to_string()?,
+                duration_seconds: r.get_duration_seconds(),
             }))
         }
     }

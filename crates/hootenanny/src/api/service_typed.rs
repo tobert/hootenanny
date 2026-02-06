@@ -3090,6 +3090,489 @@ impl EventDualityServer {
         })
     }
 
+    /// Generate audio with AudioLDM2 - spawns background job via ZMQ
+    pub async fn audioldm2_generate_typed(
+        &self,
+        req: hooteproto::request::Audioldm2GenerateRequest,
+    ) -> Result<hooteproto::responses::JobStartedResponse, ToolError> {
+        use crate::artifact_store::{Artifact, ArtifactStore};
+        use crate::types::{ArtifactId, ContentHash, VariationSetId};
+        use hooteproto::{Payload, ToolRequest, responses::ToolResponse};
+
+        let audioldm2 = self.audioldm2.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "AudioLDM2 service not configured. Check audioldm2 endpoint in config.",
+            )
+        })?;
+
+        let job_id = self.job_store.create_job("audioldm2_generate".to_string());
+        let _ = self.job_store.mark_running(&job_id);
+
+        let artifact_store = Arc::clone(&self.artifact_store);
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
+        let client = Arc::clone(audioldm2);
+
+        let prompt_str = req.prompt.clone().unwrap_or_default();
+        let tags = req.tags.clone();
+        let creator = req.creator.clone();
+        let parent_id = req.parent_id.clone();
+        let variation_set_id = req.variation_set_id.clone();
+
+        let handle = tokio::spawn(async move {
+            let result: anyhow::Result<ToolResponse> = (async {
+                let payload = Payload::ToolRequest(ToolRequest::Audioldm2Generate(req));
+
+                let response = client
+                    .request(payload)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("AudioLDM2 request failed: {}", e))?;
+
+                match response {
+                    Payload::TypedResponse(envelope) => {
+                        match envelope {
+                            hooteproto::ResponseEnvelope::Success { response } => {
+                                let (content_hash_str, duration_seconds, sample_rate) = match &response {
+                                    ToolResponse::Audioldm2Generated(r) => {
+                                        (r.content_hash.clone(), r.duration_seconds, r.sample_rate)
+                                    }
+                                    ToolResponse::AudioGenerated(r) => {
+                                        (r.content_hash.clone(), r.duration_seconds, r.sample_rate)
+                                    }
+                                    _ => anyhow::bail!("Unexpected response type from AudioLDM2"),
+                                };
+
+                                let content_hash = ContentHash::new(&content_hash_str);
+                                let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+
+                                let creator_str = creator.unwrap_or_else(|| "audioldm2".to_string());
+                                let mut artifact_tags = tags;
+                                artifact_tags.push("type:audio".to_string());
+                                artifact_tags.push("source:audioldm2".to_string());
+
+                                let metadata = serde_json::json!({
+                                    "mime_type": "audio/wav",
+                                    "source": "audioldm2",
+                                    "prompt": prompt_str,
+                                    "duration_seconds": duration_seconds,
+                                    "sample_rate": sample_rate,
+                                });
+
+                                let mut artifact = Artifact::new(
+                                    artifact_id.clone(),
+                                    content_hash,
+                                    &creator_str,
+                                    metadata,
+                                ).with_tags(artifact_tags);
+
+                                if let Some(ref parent) = parent_id {
+                                    artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
+                                }
+                                if let Some(ref var_set) = variation_set_id {
+                                    artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
+                                }
+
+                                let mut store = artifact_store.write().map_err(|_| anyhow::anyhow!("Artifact store lock poisoned"))?;
+                                store.put(artifact)?;
+
+                                Ok(ToolResponse::AudioGenerated(
+                                    hooteproto::responses::AudioGeneratedResponse {
+                                        artifact_id: artifact_id.as_str().to_string(),
+                                        content_hash: content_hash_str,
+                                        duration_seconds,
+                                        sample_rate,
+                                        format: hooteproto::responses::AudioFormat::Wav,
+                                        genre: None,
+                                    },
+                                ))
+                            }
+                            hooteproto::ResponseEnvelope::Error(err) => {
+                                anyhow::bail!("AudioLDM2 error: {}", err.message())
+                            }
+                            _ => anyhow::bail!("Unexpected response envelope"),
+                        }
+                    }
+                    _ => anyhow::bail!("Unexpected payload type"),
+                }
+            })
+            .await;
+
+            match result {
+                Ok(response) => { let _ = job_store.mark_complete(&job_id_clone, response); }
+                Err(e) => {
+                    tracing::error!(error = %e, "AudioLDM2 generation failed");
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
+        });
+        self.job_store.store_handle(&job_id, handle);
+
+        Ok(hooteproto::responses::JobStartedResponse {
+            job_id: job_id.as_str().to_string(),
+            tool: "audioldm2_generate".to_string(),
+        })
+    }
+
+    /// Generate MIDI with Anticipatory Music Transformer - spawns background job via ZMQ
+    pub async fn anticipatory_generate_typed(
+        &self,
+        req: hooteproto::request::AnticipatoryGenerateRequest,
+    ) -> Result<hooteproto::responses::JobStartedResponse, ToolError> {
+        use crate::artifact_store::{Artifact, ArtifactStore};
+        use crate::types::{ArtifactId, ContentHash, VariationSetId};
+        use hooteproto::{Payload, ToolRequest, responses::ToolResponse};
+
+        let anticipatory = self.anticipatory.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Anticipatory service not configured. Check anticipatory endpoint in config.",
+            )
+        })?;
+
+        let job_id = self.job_store.create_job("anticipatory_generate".to_string());
+        let _ = self.job_store.mark_running(&job_id);
+
+        let artifact_store = Arc::clone(&self.artifact_store);
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
+        let client = Arc::clone(anticipatory);
+
+        let tags = req.tags.clone();
+        let creator = req.creator.clone();
+        let parent_id = req.parent_id.clone();
+        let variation_set_id = req.variation_set_id.clone();
+
+        let handle = tokio::spawn(async move {
+            let result: anyhow::Result<ToolResponse> = (async {
+                let payload = Payload::ToolRequest(ToolRequest::AnticipatoryGenerate(req));
+
+                let response = client
+                    .request(payload)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Anticipatory request failed: {}", e))?;
+
+                match response {
+                    Payload::TypedResponse(envelope) => {
+                        match envelope {
+                            hooteproto::ResponseEnvelope::Success { response } => {
+                                match response {
+                                    ToolResponse::AnticipatoryGenerated(r) => {
+                                        // Create artifact for the generated MIDI
+                                        let content_hash = ContentHash::new(&r.content_hash);
+                                        let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+
+                                        let creator_str = creator.unwrap_or_else(|| "anticipatory".to_string());
+                                        let mut artifact_tags = tags;
+                                        artifact_tags.push("type:midi".to_string());
+                                        artifact_tags.push("source:anticipatory".to_string());
+
+                                        let metadata = serde_json::json!({
+                                            "mime_type": "audio/midi",
+                                            "source": "anticipatory",
+                                            "model_size": r.model_size,
+                                            "duration_seconds": r.duration_seconds,
+                                        });
+
+                                        let mut artifact = Artifact::new(
+                                            artifact_id.clone(),
+                                            content_hash,
+                                            &creator_str,
+                                            metadata,
+                                        ).with_tags(artifact_tags);
+
+                                        if let Some(ref parent) = parent_id {
+                                            artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
+                                        }
+                                        if let Some(ref var_set) = variation_set_id {
+                                            artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
+                                        }
+
+                                        let mut store = artifact_store.write().map_err(|_| anyhow::anyhow!("Artifact store lock poisoned"))?;
+                                        store.put(artifact)?;
+
+                                        Ok(ToolResponse::AnticipatoryGenerated(
+                                            hooteproto::responses::AnticipatoryGeneratedResponse {
+                                                artifact_id: artifact_id.as_str().to_string(),
+                                                ..r
+                                            },
+                                        ))
+                                    }
+                                    _ => anyhow::bail!("Unexpected response type from Anticipatory"),
+                                }
+                            }
+                            hooteproto::ResponseEnvelope::Error(err) => {
+                                anyhow::bail!("Anticipatory error: {}", err.message())
+                            }
+                            _ => anyhow::bail!("Unexpected response envelope"),
+                        }
+                    }
+                    _ => anyhow::bail!("Unexpected payload type"),
+                }
+            })
+            .await;
+
+            match result {
+                Ok(response) => { let _ = job_store.mark_complete(&job_id_clone, response); }
+                Err(e) => {
+                    tracing::error!(error = %e, "Anticipatory generation failed");
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
+        });
+        self.job_store.store_handle(&job_id, handle);
+
+        Ok(hooteproto::responses::JobStartedResponse {
+            job_id: job_id.as_str().to_string(),
+            tool: "anticipatory_generate".to_string(),
+        })
+    }
+
+    /// Continue MIDI with Anticipatory Music Transformer - spawns background job via ZMQ
+    pub async fn anticipatory_continue_typed(
+        &self,
+        req: hooteproto::request::AnticipatoryContinueRequest,
+    ) -> Result<hooteproto::responses::JobStartedResponse, ToolError> {
+        use crate::artifact_store::{Artifact, ArtifactStore};
+        use crate::types::{ArtifactId, ContentHash, VariationSetId};
+        use hooteproto::{Payload, ToolRequest, responses::ToolResponse};
+
+        let anticipatory = self.anticipatory.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Anticipatory service not configured. Check anticipatory endpoint in config.",
+            )
+        })?;
+
+        let job_id = self.job_store.create_job("anticipatory_continue".to_string());
+        let _ = self.job_store.mark_running(&job_id);
+
+        let artifact_store = Arc::clone(&self.artifact_store);
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
+        let client = Arc::clone(anticipatory);
+
+        let tags = req.tags.clone();
+        let creator = req.creator.clone();
+        let parent_id = req.parent_id.clone();
+        let variation_set_id = req.variation_set_id.clone();
+
+        let handle = tokio::spawn(async move {
+            let result: anyhow::Result<ToolResponse> = (async {
+                let payload = Payload::ToolRequest(ToolRequest::AnticipatoryContinue(req));
+
+                let response = client
+                    .request(payload)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Anticipatory continue request failed: {}", e))?;
+
+                match response {
+                    Payload::TypedResponse(envelope) => {
+                        match envelope {
+                            hooteproto::ResponseEnvelope::Success { response } => {
+                                match response {
+                                    ToolResponse::AnticipatoryGenerated(r) => {
+                                        let content_hash = ContentHash::new(&r.content_hash);
+                                        let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+
+                                        let creator_str = creator.unwrap_or_else(|| "anticipatory".to_string());
+                                        let mut artifact_tags = tags;
+                                        artifact_tags.push("type:midi".to_string());
+                                        artifact_tags.push("source:anticipatory".to_string());
+
+                                        let metadata = serde_json::json!({
+                                            "mime_type": "audio/midi",
+                                            "source": "anticipatory",
+                                            "model_size": r.model_size,
+                                            "duration_seconds": r.duration_seconds,
+                                        });
+
+                                        let mut artifact = Artifact::new(
+                                            artifact_id.clone(),
+                                            content_hash,
+                                            &creator_str,
+                                            metadata,
+                                        ).with_tags(artifact_tags);
+
+                                        if let Some(ref parent) = parent_id {
+                                            artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
+                                        }
+                                        if let Some(ref var_set) = variation_set_id {
+                                            artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
+                                        }
+
+                                        let mut store = artifact_store.write().map_err(|_| anyhow::anyhow!("Artifact store lock poisoned"))?;
+                                        store.put(artifact)?;
+
+                                        Ok(ToolResponse::AnticipatoryGenerated(
+                                            hooteproto::responses::AnticipatoryGeneratedResponse {
+                                                artifact_id: artifact_id.as_str().to_string(),
+                                                ..r
+                                            },
+                                        ))
+                                    }
+                                    _ => anyhow::bail!("Unexpected response type from Anticipatory"),
+                                }
+                            }
+                            hooteproto::ResponseEnvelope::Error(err) => {
+                                anyhow::bail!("Anticipatory continue error: {}", err.message())
+                            }
+                            _ => anyhow::bail!("Unexpected response envelope"),
+                        }
+                    }
+                    _ => anyhow::bail!("Unexpected payload type"),
+                }
+            })
+            .await;
+
+            match result {
+                Ok(response) => { let _ = job_store.mark_complete(&job_id_clone, response); }
+                Err(e) => {
+                    tracing::error!(error = %e, "Anticipatory continue failed");
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
+        });
+        self.job_store.store_handle(&job_id, handle);
+
+        Ok(hooteproto::responses::JobStartedResponse {
+            job_id: job_id.as_str().to_string(),
+            tool: "anticipatory_continue".to_string(),
+        })
+    }
+
+    /// Extract MIDI embeddings with Anticipatory - spawns background job via ZMQ
+    pub async fn anticipatory_embed_typed(
+        &self,
+        req: hooteproto::request::AnticipatoryEmbedRequest,
+    ) -> Result<hooteproto::responses::JobStartedResponse, ToolError> {
+        use hooteproto::{Payload, ToolRequest, responses::ToolResponse};
+
+        let anticipatory = self.anticipatory.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Anticipatory service not configured. Check anticipatory endpoint in config.",
+            )
+        })?;
+
+        let job_id = self.job_store.create_job("anticipatory_embed".to_string());
+        let _ = self.job_store.mark_running(&job_id);
+
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
+        let client = Arc::clone(anticipatory);
+
+        let handle = tokio::spawn(async move {
+            let result: anyhow::Result<ToolResponse> = (async {
+                let payload = Payload::ToolRequest(ToolRequest::AnticipatoryEmbed(req));
+
+                let response = client
+                    .request(payload)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Anticipatory embed request failed: {}", e))?;
+
+                match response {
+                    Payload::TypedResponse(envelope) => {
+                        match envelope {
+                            hooteproto::ResponseEnvelope::Success { response } => {
+                                match response {
+                                    ToolResponse::AnticipatoryEmbedded(resp) => Ok(ToolResponse::AnticipatoryEmbedded(resp)),
+                                    _ => anyhow::bail!("Unexpected response type from Anticipatory embed"),
+                                }
+                            }
+                            hooteproto::ResponseEnvelope::Error(err) => {
+                                anyhow::bail!("Anticipatory embed error: {}", err.message())
+                            }
+                            _ => anyhow::bail!("Unexpected response envelope"),
+                        }
+                    }
+                    _ => anyhow::bail!("Unexpected payload type"),
+                }
+            })
+            .await;
+
+            match result {
+                Ok(response) => { let _ = job_store.mark_complete(&job_id_clone, response); }
+                Err(e) => {
+                    tracing::error!(error = %e, "Anticipatory embed failed");
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
+        });
+        self.job_store.store_handle(&job_id, handle);
+
+        Ok(hooteproto::responses::JobStartedResponse {
+            job_id: job_id.as_str().to_string(),
+            tool: "anticipatory_embed".to_string(),
+        })
+    }
+
+    /// Separate audio into stems with Demucs - spawns background job via ZMQ
+    pub async fn demucs_separate_typed(
+        &self,
+        req: hooteproto::request::DemucsSeparateRequest,
+    ) -> Result<hooteproto::responses::JobStartedResponse, ToolError> {
+        use hooteproto::{Payload, ToolRequest, responses::ToolResponse};
+
+        let demucs = self.demucs.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Demucs service not configured. Check demucs endpoint in config.",
+            )
+        })?;
+
+        let job_id = self.job_store.create_job("demucs_separate".to_string());
+        let _ = self.job_store.mark_running(&job_id);
+
+        let job_store = self.job_store.clone();
+        let job_id_clone = job_id.clone();
+        let client = Arc::clone(demucs);
+
+        let handle = tokio::spawn(async move {
+            let result: anyhow::Result<ToolResponse> = (async {
+                let payload = Payload::ToolRequest(ToolRequest::DemucsSeparate(req));
+
+                let response = client
+                    .request(payload)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Demucs request failed: {}", e))?;
+
+                match response {
+                    Payload::TypedResponse(envelope) => {
+                        match envelope {
+                            hooteproto::ResponseEnvelope::Success { response } => {
+                                match response {
+                                    ToolResponse::DemucsSeparated(resp) => Ok(ToolResponse::DemucsSeparated(resp)),
+                                    _ => anyhow::bail!("Unexpected response type from Demucs"),
+                                }
+                            }
+                            hooteproto::ResponseEnvelope::Error(err) => {
+                                anyhow::bail!("Demucs error: {}", err.message())
+                            }
+                            _ => anyhow::bail!("Unexpected response envelope"),
+                        }
+                    }
+                    _ => anyhow::bail!("Unexpected payload type"),
+                }
+            })
+            .await;
+
+            match result {
+                Ok(response) => { let _ = job_store.mark_complete(&job_id_clone, response); }
+                Err(e) => {
+                    tracing::error!(error = %e, "Demucs separation failed");
+                    let _ = job_store.mark_failed(&job_id_clone, e.to_string());
+                }
+            }
+        });
+        self.job_store.store_handle(&job_id, handle);
+
+        Ok(hooteproto::responses::JobStartedResponse {
+            job_id: job_id.as_str().to_string(),
+            tool: "demucs_separate".to_string(),
+        })
+    }
+
     /// Extract MIDI file information (tempo, time signature, duration, etc.)
     pub async fn midi_info_typed(
         &self,

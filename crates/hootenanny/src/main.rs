@@ -295,6 +295,36 @@ async fn main() -> Result<()> {
         None
     };
 
+    // --- AudioLDM2 Connection (lazy - ZMQ connects when peer available) ---
+    let audioldm2_endpoint = &config.bootstrap.connections.audioldm2;
+    let audioldm2_client: Option<Arc<zmq::Audioldm2Client>> = if !audioldm2_endpoint.is_empty() {
+        info!("🎶 Connecting to AudioLDM2 at {}...", audioldm2_endpoint);
+        let audioldm2_config = zmq::audioldm2_config(audioldm2_endpoint, zmq::DEFAULT_AUDIOLDM2_TIMEOUT_MS);
+        Some(zmq::Audioldm2Client::new(audioldm2_config).await)
+    } else {
+        None
+    };
+
+    // --- Anticipatory Connection (lazy - ZMQ connects when peer available) ---
+    let anticipatory_endpoint = &config.bootstrap.connections.anticipatory;
+    let anticipatory_client: Option<Arc<zmq::AnticipatoryClient>> = if !anticipatory_endpoint.is_empty() {
+        info!("🎹 Connecting to Anticipatory at {}...", anticipatory_endpoint);
+        let anticipatory_config = zmq::anticipatory_config(anticipatory_endpoint, zmq::DEFAULT_ANTICIPATORY_TIMEOUT_MS);
+        Some(zmq::AnticipatoryClient::new(anticipatory_config).await)
+    } else {
+        None
+    };
+
+    // --- Demucs Connection (lazy - ZMQ connects when peer available) ---
+    let demucs_endpoint = &config.bootstrap.connections.demucs;
+    let demucs_client: Option<Arc<zmq::DemucsClient>> = if !demucs_endpoint.is_empty() {
+        info!("🎚️ Connecting to Demucs at {}...", demucs_endpoint);
+        let demucs_config = zmq::demucs_config(demucs_endpoint, zmq::DEFAULT_DEMUCS_TIMEOUT_MS);
+        Some(zmq::DemucsClient::new(demucs_config).await)
+    } else {
+        None
+    };
+
     let http_addr = config.infra.bind.http_bind_addr();
     let zmq_router = &config.infra.bind.zmq_router;
     let zmq_pub = &config.infra.bind.zmq_pub;
@@ -367,6 +397,9 @@ async fn main() -> Result<()> {
         .with_beatthis(beatthis_client.clone())
         .with_musicgen(musicgen_client.clone())
         .with_clap(clap_client.clone())
+        .with_audioldm2(audioldm2_client.clone())
+        .with_anticipatory(anticipatory_client.clone())
+        .with_demucs(demucs_client.clone())
         .with_broadcaster(Some(broadcast_publisher))
         .with_stream_manager(Some(stream_manager.clone()))
         .with_session_manager(Some(session_manager.clone()))

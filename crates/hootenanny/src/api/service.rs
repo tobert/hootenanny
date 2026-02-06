@@ -5,7 +5,7 @@ use crate::job_system::JobStore;
 use crate::mcp_tools::local_models::LocalModels;
 use crate::sessions::SessionManager;
 use crate::streams::{SlicingEngine, StreamManager};
-use crate::zmq::{BeatthisClient, BroadcastPublisher, ClapClient, GardenManager, MusicgenClient, OrpheusClient, RaveClient, VibeweaverClient};
+use crate::zmq::{AnticipatoryClient, Audioldm2Client, BeatthisClient, BroadcastPublisher, ClapClient, DemucsClient, GardenManager, MusicgenClient, OrpheusClient, RaveClient, VibeweaverClient};
 use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use std::sync::{Arc, RwLock};
 
@@ -30,6 +30,12 @@ pub struct EventDualityServer {
     pub musicgen: Option<Arc<MusicgenClient>>,
     /// Optional CLAP client for audio analysis
     pub clap: Option<Arc<ClapClient>>,
+    /// Optional AudioLDM2 client for text-to-audio diffusion
+    pub audioldm2: Option<Arc<Audioldm2Client>>,
+    /// Optional Anticipatory client for MIDI generation
+    pub anticipatory: Option<Arc<AnticipatoryClient>>,
+    /// Optional Demucs client for audio separation
+    pub demucs: Option<Arc<DemucsClient>>,
     /// Optional broadcast publisher for SSE events via holler
     pub broadcaster: Option<BroadcastPublisher>,
     /// Stream manager for capture sessions
@@ -73,6 +79,9 @@ impl EventDualityServer {
             beatthis: None,
             musicgen: None,
             clap: None,
+            audioldm2: None,
+            anticipatory: None,
+            demucs: None,
             broadcaster: None,
             stream_manager: None,
             session_manager: None,
@@ -120,6 +129,24 @@ impl EventDualityServer {
     /// Create with CLAP client for audio analysis
     pub fn with_clap(mut self, clap: Option<Arc<ClapClient>>) -> Self {
         self.clap = clap;
+        self
+    }
+
+    /// Create with AudioLDM2 client for text-to-audio diffusion
+    pub fn with_audioldm2(mut self, audioldm2: Option<Arc<Audioldm2Client>>) -> Self {
+        self.audioldm2 = audioldm2;
+        self
+    }
+
+    /// Create with Anticipatory client for MIDI generation
+    pub fn with_anticipatory(mut self, anticipatory: Option<Arc<AnticipatoryClient>>) -> Self {
+        self.anticipatory = anticipatory;
+        self
+    }
+
+    /// Create with Demucs client for audio separation
+    pub fn with_demucs(mut self, demucs: Option<Arc<DemucsClient>>) -> Self {
+        self.demucs = demucs;
         self
     }
 

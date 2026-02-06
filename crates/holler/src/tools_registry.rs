@@ -586,6 +586,95 @@ pub fn list_tools() -> Vec<ToolInfo> {
         },
 
         // ==========================================================================
+        // AudioLDM2 Tools
+        // ==========================================================================
+        ToolInfo {
+            name: "audioldm2_generate".to_string(),
+            description: "Generate audio from text prompt using AudioLDM2".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "prompt": { "type": "string", "description": "Text prompt for generation" },
+                    "negative_prompt": { "type": "string", "description": "Negative prompt (what to avoid)" },
+                    "duration": { "type": "number", "description": "Duration in seconds" },
+                    "num_inference_steps": { "type": "integer", "description": "Number of diffusion steps (default 200)" },
+                    "guidance_scale": { "type": "number", "description": "Classifier-free guidance scale" },
+                    "seed": { "type": "integer", "description": "Random seed for reproducibility" },
+                    "creator": { "type": "string" },
+                    "tags": { "type": "array", "items": { "type": "string" } }
+                }
+            }),
+        },
+
+        // ==========================================================================
+        // Anticipatory Music Transformer Tools
+        // ==========================================================================
+        ToolInfo {
+            name: "anticipatory_generate".to_string(),
+            description: "Generate polyphonic MIDI using Anticipatory Music Transformer".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "length_seconds": { "type": "number", "description": "Duration in seconds (default 20)" },
+                    "top_p": { "type": "number", "description": "Nucleus sampling threshold (default 0.95)" },
+                    "model_size": { "type": "string", "description": "Model size: small, medium, or large" },
+                    "creator": { "type": "string" },
+                    "tags": { "type": "array", "items": { "type": "string" } }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "anticipatory_continue".to_string(),
+            description: "Continue existing MIDI using Anticipatory Music Transformer".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["input_hash"],
+                "properties": {
+                    "input_hash": { "type": "string", "description": "CAS hash of input MIDI" },
+                    "length_seconds": { "type": "number", "description": "Total output length in seconds" },
+                    "prime_seconds": { "type": "number", "description": "Seconds of input to use as context" },
+                    "top_p": { "type": "number" },
+                    "model_size": { "type": "string" },
+                    "creator": { "type": "string" },
+                    "tags": { "type": "array", "items": { "type": "string" } }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "anticipatory_embed".to_string(),
+            description: "Extract hidden-state embeddings from MIDI".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["input_hash"],
+                "properties": {
+                    "input_hash": { "type": "string", "description": "CAS hash of input MIDI" },
+                    "model_size": { "type": "string", "description": "Model size: small, medium, or large" },
+                    "embed_layer": { "type": "integer", "description": "Transformer layer for embeddings (default -3)" }
+                }
+            }),
+        },
+
+        // ==========================================================================
+        // Demucs Tools (Audio Source Separation)
+        // ==========================================================================
+        ToolInfo {
+            name: "demucs_separate".to_string(),
+            description: "Separate audio into stems (drums, bass, vocals, other) using Demucs".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["audio_hash"],
+                "properties": {
+                    "audio_hash": { "type": "string", "description": "CAS hash of input audio" },
+                    "model": { "type": "string", "description": "Model: htdemucs, htdemucs_ft, htdemucs_6s" },
+                    "stems": { "type": "array", "items": { "type": "string" }, "description": "Filter to specific stems" },
+                    "two_stems": { "type": "string", "description": "Karaoke mode: isolate one stem vs rest" },
+                    "creator": { "type": "string" },
+                    "tags": { "type": "array", "items": { "type": "string" } }
+                }
+            }),
+        },
+
+        // ==========================================================================
         // RAVE Tools (Realtime Audio Variational autoEncoder)
         // ==========================================================================
         ToolInfo {

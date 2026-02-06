@@ -128,6 +128,16 @@ pub enum ToolResponse {
     /// Response from project tool (format conversion)
     ProjectResult(ProjectResultResponse),
 
+    // === AudioLDM2 ===
+    Audioldm2Generated(Audioldm2GeneratedResponse),
+
+    // === Anticipatory Music Transformer ===
+    AnticipatoryGenerated(AnticipatoryGeneratedResponse),
+    AnticipatoryEmbedded(AnticipatoryEmbeddedResponse),
+
+    // === Demucs ===
+    DemucsSeparated(DemucsSeparatedResponse),
+
     // === RAVE Audio Codec ===
     RaveEncoded(RaveEncodedResponse),
     RaveDecoded(RaveDecodedResponse),
@@ -1081,6 +1091,56 @@ pub struct ProjectResultResponse {
 }
 
 // =============================================================================
+// AudioLDM2 Responses
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Audioldm2GeneratedResponse {
+    pub artifact_id: String,
+    pub content_hash: String,
+    pub duration_seconds: f64,
+    pub sample_rate: u32,
+    pub prompt: String,
+}
+
+// =============================================================================
+// Anticipatory Music Transformer Responses
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnticipatoryGeneratedResponse {
+    pub artifact_id: String,
+    pub content_hash: String,
+    pub duration_seconds: f64,
+    pub model_size: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnticipatoryEmbeddedResponse {
+    pub embeddings: Vec<f32>,
+    pub embed_dim: u32,
+    pub model_size: String,
+}
+
+// =============================================================================
+// Demucs Responses
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DemucsSeparatedResponse {
+    pub stems: Vec<DemucsStems>,
+    pub model: String,
+    pub duration_seconds: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DemucsStems {
+    pub name: String,
+    pub content_hash: String,
+    pub duration_seconds: f64,
+}
+
+// =============================================================================
 // RAVE Responses
 // =============================================================================
 
@@ -1203,6 +1263,10 @@ impl ToolResponse {
             ToolResponse::ArtifactCreated(r) => Some(&r.artifact_id),
             ToolResponse::AbcToMidi(r) => Some(&r.artifact_id),
             ToolResponse::MidiToWav(r) => Some(&r.artifact_id),
+            // AudioLDM2
+            ToolResponse::Audioldm2Generated(r) => Some(&r.artifact_id),
+            // Anticipatory
+            ToolResponse::AnticipatoryGenerated(r) => Some(&r.artifact_id),
             // RAVE responses
             ToolResponse::RaveEncoded(r) => Some(&r.artifact_id),
             ToolResponse::RaveDecoded(r) => Some(&r.artifact_id),

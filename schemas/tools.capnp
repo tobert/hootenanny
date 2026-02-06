@@ -134,6 +134,17 @@ struct ToolRequest {
     midiOutputDetach @86 :MidiDetach;
     midiSend @87 :MidiSend;
     midiStatus @88 :Void;
+
+    # === AudioLDM2 ===
+    audioldm2Generate @90 :Audioldm2Generate;
+
+    # === Anticipatory Music Transformer ===
+    anticipatoryGenerate @91 :AnticipatoryGenerate;
+    anticipatoryContinue @92 :AnticipatoryContinue;
+    anticipatoryEmbed @93 :AnticipatoryEmbed;
+
+    # === Demucs ===
+    demucsSeparate @94 :DemucsSeparate;
   }
 }
 
@@ -507,4 +518,47 @@ struct AudioCapture {
   durationSeconds @0 :Float32;
   source @1 :Text;  # "monitor", "timeline", "mix"
   metadata @2 :Common.ArtifactMetadata;
+}
+
+# === AudioLDM2 Types ===
+struct Audioldm2Generate {
+  prompt @0 :Text;
+  negativePrompt @1 :Text;
+  duration @2 :Float32;
+  numInferenceSteps @3 :UInt32;
+  guidanceScale @4 :Float32;
+  seed @5 :UInt64;
+  metadata @6 :Common.ArtifactMetadata;
+}
+
+# === Anticipatory Music Transformer Types ===
+struct AnticipatoryGenerate {
+  lengthSeconds @0 :Float32;
+  topP @1 :Float32;
+  modelSize @2 :Text;          # "small", "medium", "large"
+  metadata @3 :Common.ArtifactMetadata;
+}
+
+struct AnticipatoryContinue {
+  inputHash @0 :Text;           # CAS hash of input MIDI
+  lengthSeconds @1 :Float32;
+  primeSeconds @2 :Float32;
+  topP @3 :Float32;
+  modelSize @4 :Text;
+  metadata @5 :Common.ArtifactMetadata;
+}
+
+struct AnticipatoryEmbed {
+  inputHash @0 :Text;           # CAS hash of input MIDI
+  modelSize @1 :Text;
+  embedLayer @2 :Int32;         # Which transformer layer (-3 default)
+}
+
+# === Demucs Types ===
+struct DemucsSeparate {
+  audioHash @0 :Text;           # CAS hash of input audio
+  model @1 :Text;               # "htdemucs", "htdemucs_ft", "htdemucs_6s"
+  stems @2 :List(Text);         # Filter to specific stems
+  twoStems @3 :Text;            # Karaoke mode: "vocals" or "drums" etc.
+  metadata @4 :Common.ArtifactMetadata;
 }

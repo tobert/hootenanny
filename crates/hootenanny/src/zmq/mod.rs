@@ -6,9 +6,12 @@
 //!
 //! Note: GardenPeer is now in hooteproto. Use `hooteproto::GardenPeer` directly.
 
+mod anticipatory_client;
+mod audioldm2_client;
 mod beatthis_client;
 mod clap_client;
 mod client_tracker;
+mod demucs_client;
 mod hooteproto_server;
 mod manager;
 mod musicgen_client;
@@ -17,8 +20,11 @@ mod publisher;
 mod rave_client;
 mod vibeweaver_client;
 
+pub use anticipatory_client::{anticipatory_config, AnticipatoryClient, DEFAULT_ANTICIPATORY_TIMEOUT_MS};
+pub use audioldm2_client::{audioldm2_config, Audioldm2Client, DEFAULT_AUDIOLDM2_TIMEOUT_MS};
 pub use beatthis_client::{beatthis_config, BeatthisClient, DEFAULT_BEATTHIS_TIMEOUT_MS};
 pub use clap_client::{clap_config, ClapClient, DEFAULT_CLAP_TIMEOUT_MS};
+pub use demucs_client::{demucs_config, DemucsClient, DEFAULT_DEMUCS_TIMEOUT_MS};
 pub use hooteproto::{GardenEndpoints, GardenPeer};
 pub use hooteproto_server::HooteprotoServer;
 pub use manager::GardenManager;

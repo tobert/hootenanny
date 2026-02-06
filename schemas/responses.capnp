@@ -127,6 +127,16 @@ struct ToolResponse {
 
     # Unified Status (combines transport, audio, MIDI)
     unifiedStatus @68 :UnifiedStatusResponse;
+
+    # AudioLDM2
+    audioldm2Generated @69 :Audioldm2GeneratedResponse;
+
+    # Anticipatory Music Transformer
+    anticipatoryGenerated @70 :AnticipatoryGeneratedResponse;
+    anticipatoryEmbedded @71 :AnticipatoryEmbeddedResponse;
+
+    # Demucs
+    demucsSeparated @72 :DemucsSeparatedResponse;
   }
 }
 
@@ -849,4 +859,49 @@ struct UnifiedStatusResponse {
   audioInput @2 :AudioInputStatus;
   monitor @3 :MonitorStatus;
   midi @4 :MidiStatusResponse;
+}
+
+# =============================================================================
+# AudioLDM2 Responses
+# =============================================================================
+
+struct Audioldm2GeneratedResponse {
+  artifactId @0 :Text;
+  contentHash @1 :Text;
+  durationSeconds @2 :Float64;
+  sampleRate @3 :UInt32;
+  prompt @4 :Text;
+}
+
+# =============================================================================
+# Anticipatory Music Transformer Responses
+# =============================================================================
+
+struct AnticipatoryGeneratedResponse {
+  artifactId @0 :Text;
+  contentHash @1 :Text;
+  durationSeconds @2 :Float64;
+  modelSize @3 :Text;
+}
+
+struct AnticipatoryEmbeddedResponse {
+  embeddings @0 :List(Float32);
+  embedDim @1 :UInt32;
+  modelSize @2 :Text;
+}
+
+# =============================================================================
+# Demucs Responses
+# =============================================================================
+
+struct DemucsSeparatedResponse {
+  stems @0 :List(DemucsStems);
+  model @1 :Text;
+  durationSeconds @2 :Float64;
+}
+
+struct DemucsStems {
+  name @0 :Text;               # "drums", "bass", "vocals", "other", etc.
+  contentHash @1 :Text;        # CAS hash of this stem's WAV
+  durationSeconds @2 :Float64;
 }
