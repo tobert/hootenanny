@@ -106,21 +106,8 @@ async fn main() -> Result<()> {
     let cas = FileStore::at_path(cas_dir)?;
     info!("   CAS ready at: {}", cas_dir.display());
 
-    // --- Local Models Initialization ---
-    info!("🤖 Initializing Local Models client...");
-    let orpheus_url = config
-        .bootstrap
-        .models
-        .get("orpheus")
-        .cloned()
-        .unwrap_or_else(|| "http://127.0.0.1:2000".to_string());
-    let orpheus_port: u16 = orpheus_url
-        .rsplit(':')
-        .next()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(2000);
-    let local_models = Arc::new(LocalModels::new(cas.clone(), orpheus_port));
-    info!("   Orpheus: {}", orpheus_url);
+    // --- CAS + HTTP Models ---
+    let local_models = Arc::new(LocalModels::new(cas.clone()));
 
     // --- Artifact Store Initialization ---
     info!("📚 Initializing Artifact Store...");
