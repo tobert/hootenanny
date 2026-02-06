@@ -19,6 +19,7 @@ from .errors import (
 from .service import ModelService, ServiceConfig, SingleJobGuard
 from .client import HootClient, ClientConfig, request
 from .protocol import encode_tool_request, decode_envelope
+from . import audio
 from . import cas
 from . import tmidix
 from . import orpheus_tokenizer
@@ -52,6 +53,8 @@ __all__ = [
     # Protocol
     "encode_tool_request",
     "decode_envelope",
+    # Audio utilities
+    "audio",
     # CAS
     "cas",
     # MIDI / Orpheus utilities

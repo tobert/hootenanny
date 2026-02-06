@@ -12,16 +12,15 @@ Audio requirements (validated by this service, conversion done by Rust):
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 import os
-import wave
 from typing import Any
 
 import numpy as np
 import torch
 
 from hootpy import ModelService, ServiceConfig, NotFoundError, ValidationError, cas
+from hootpy.audio import decode_wav
 
 log = logging.getLogger(__name__)
 
@@ -32,31 +31,6 @@ FRAME_RATE = 50  # fps for beat_this output
 
 # Default endpoint (IPC socket)
 DEFAULT_ENDPOINT = f"ipc://{os.environ.get('XDG_RUNTIME_DIR', os.path.expanduser('~/.hootenanny/run'))}/hootenanny/beatthis.sock"
-
-
-def decode_wav(data: bytes) -> tuple[np.ndarray, int]:
-    """Decode WAV bytes to numpy array and sample rate."""
-    buffer = io.BytesIO(data)
-    with wave.open(buffer, "rb") as wav:
-        sample_rate = wav.getframerate()
-        n_channels = wav.getnchannels()
-        sample_width = wav.getsampwidth()
-        n_frames = wav.getnframes()
-        audio_bytes = wav.readframes(n_frames)
-
-    # Convert to float32 based on sample width
-    if sample_width == 2:  # 16-bit
-        audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-    elif sample_width == 4:  # 32-bit
-        audio_np = np.frombuffer(audio_bytes, dtype=np.int32).astype(np.float32) / 2147483648.0
-    else:  # 8-bit or other
-        audio_np = np.frombuffer(audio_bytes, dtype=np.uint8).astype(np.float32) / 128.0 - 1.0
-
-    # Convert stereo to mono if needed
-    if n_channels > 1:
-        audio_np = audio_np.reshape(-1, n_channels).mean(axis=1)
-
-    return audio_np, sample_rate
 
 
 def pick_peaks(probs: np.ndarray, threshold: float = 0.5) -> np.ndarray:

@@ -6,7 +6,6 @@ Supports both batch processing (via tool calls) and realtime streaming.
 """
 
 import asyncio
-import io
 import logging
 import os
 import struct
@@ -23,6 +22,7 @@ import zmq
 import zmq.asyncio
 
 from hootpy import ModelService, ServiceConfig, NotFoundError, ValidationError, cas
+from hootpy.audio import decode_wav as _decode_wav_np, encode_wav
 
 log = logging.getLogger(__name__)
 
@@ -434,52 +434,13 @@ class RaveService(ModelService):
         }
 
     def _decode_audio(self, data: bytes) -> tuple[torch.Tensor, int]:
-        """Decode audio bytes (WAV format) to tensor using Python wave module"""
-        import wave
-
-        buffer = io.BytesIO(data)
-        with wave.open(buffer, 'rb') as wav:
-            sample_rate = wav.getframerate()
-            n_channels = wav.getnchannels()
-            sample_width = wav.getsampwidth()
-            n_frames = wav.getnframes()
-            audio_bytes = wav.readframes(n_frames)
-
-        # Convert to numpy based on sample width
-        if sample_width == 2:  # 16-bit
-            audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-        elif sample_width == 4:  # 32-bit
-            audio_np = np.frombuffer(audio_bytes, dtype=np.int32).astype(np.float32) / 2147483648.0
-        else:  # 8-bit or other
-            audio_np = np.frombuffer(audio_bytes, dtype=np.uint8).astype(np.float32) / 128.0 - 1.0
-
-        # Reshape for stereo and convert to mono if needed
-        if n_channels > 1:
-            audio_np = audio_np.reshape(-1, n_channels).mean(axis=1)
-
-        # Convert to torch tensor
-        audio = torch.from_numpy(audio_np)
-        return audio, sample_rate
+        """Decode audio bytes (WAV format) to tensor using shared audio utils"""
+        audio_np, sample_rate = _decode_wav_np(data)
+        return torch.from_numpy(audio_np), sample_rate
 
     def _encode_wav(self, audio: np.ndarray, sample_rate: int) -> bytes:
-        """Encode numpy array to WAV bytes using Python's wave module"""
-        import wave
-
-        buffer = io.BytesIO()
-        # Ensure audio is 1D
-        if audio.ndim > 1:
-            audio = audio.flatten()
-
-        # Convert float32 [-1, 1] to int16
-        audio_int16 = (audio * 32767).astype(np.int16)
-
-        with wave.open(buffer, 'wb') as wav:
-            wav.setnchannels(1)  # mono
-            wav.setsampwidth(2)  # 16-bit
-            wav.setframerate(sample_rate)
-            wav.writeframes(audio_int16.tobytes())
-
-        return buffer.getvalue()
+        """Encode numpy array to WAV bytes using shared audio utils"""
+        return encode_wav(audio, sample_rate)
 
     def _pack_latent(self, z: np.ndarray) -> bytes:
         """Pack latent codes to bytes with shape header"""
