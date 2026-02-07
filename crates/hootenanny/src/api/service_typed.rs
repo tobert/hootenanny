@@ -4168,17 +4168,9 @@ impl EventDualityServer {
             .map_err(|e| ToolError::internal(format!("RAVE service error: {}", e)))?;
 
         let duration_seconds = match rave_response {
-            Payload::TypedResponse(envelope) => {
-                match envelope {
-                    hooteproto::ResponseEnvelope::Success { response } => {
-                        match response {
-                            ToolResponse::RaveStreamStopped(resp) => resp.duration_seconds,
-                            _ => 0.0,
-                        }
-                    }
-                    _ => 0.0,
-                }
-            }
+            Payload::TypedResponse(hooteproto::ResponseEnvelope::Success {
+                response: ToolResponse::RaveStreamStopped(resp),
+            }) => resp.duration_seconds,
             _ => 0.0,
         };
 

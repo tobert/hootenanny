@@ -455,7 +455,7 @@ impl<'a> trustfall::provider::BasicAdapter<'a> for GardenStateAdapter {
                         Arc::new(ApprovalVertex {
                             region_id: a.region_id.clone(),
                             content_hash: a.content_hash.clone(),
-                            content_type: a.content_type.clone(),
+                            content_type: a.content_type,
                         })
                     })
                     .collect();
@@ -993,7 +993,7 @@ impl<'a> trustfall::provider::BasicAdapter<'a> for GardenStateAdapter {
         // No coercion needed for this simple schema - all types are concrete
         let target = coerce_to_type.to_string();
         Box::new(contexts.map(move |ctx| {
-            let can_coerce = ctx.active_vertex().map_or(false, |v| v.typename() == target);
+            let can_coerce = ctx.active_vertex().is_some_and(|v| v.typename() == target);
             (ctx, can_coerce)
         }))
     }
