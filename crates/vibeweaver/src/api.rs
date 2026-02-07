@@ -441,7 +441,7 @@ impl BeatDecorator {
             .write()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
-        let func_py: Py<PyAny> = func.clone_ref(py).into();
+        let func_py: Py<PyAny> = func.clone_ref(py);
         let callback_id = registry_guard.register_beat(self.divisor, func_py);
 
         debug!(
@@ -486,7 +486,7 @@ impl MarkerDecorator {
             .write()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
-        let func_py: Py<PyAny> = func.clone_ref(py).into();
+        let func_py: Py<PyAny> = func.clone_ref(py);
         registry_guard.register_marker(self.name.clone(), func_py);
 
         Ok(func)
@@ -518,7 +518,7 @@ impl ArtifactDecorator {
             .write()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
-        let func_py: Py<PyAny> = func.clone_ref(py).into();
+        let func_py: Py<PyAny> = func.clone_ref(py);
         registry_guard.register_artifact(self.tag.clone(), func_py);
 
         Ok(func)

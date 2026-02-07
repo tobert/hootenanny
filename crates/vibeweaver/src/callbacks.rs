@@ -111,7 +111,7 @@ impl CallbackRegistry {
         let mut result = Vec::new();
 
         for (divisor, callbacks) in &self.beat_callbacks {
-            if *divisor > 0 && beat_int % divisor == 0 {
+            if *divisor > 0 && beat_int.is_multiple_of(*divisor) {
                 // Also check we're near an integer beat (not mid-beat)
                 if (beat - beat.floor()).abs() < 0.1 {
                     result.extend(callbacks.iter());
