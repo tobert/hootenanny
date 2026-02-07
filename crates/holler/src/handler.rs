@@ -149,182 +149,167 @@ impl ServerHandler for ZmqHandler {
         }
     }
 
-    fn list_resources(
+    async fn list_resources(
         &self,
         _request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
-        async move {
-            Ok(ListResourcesResult {
-                resources: ResourceRegistry::list_resources(),
-                next_cursor: None,
-                meta: None,
-            })
-        }
+    ) -> Result<ListResourcesResult, McpError> {
+        Ok(ListResourcesResult {
+            resources: ResourceRegistry::list_resources(),
+            next_cursor: None,
+            meta: None,
+        })
     }
 
-    fn list_resource_templates(
+    async fn list_resource_templates(
         &self,
         _request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<ListResourceTemplatesResult, McpError>> + Send + '_
-    {
-        async move {
-            Ok(ListResourceTemplatesResult {
-                resource_templates: ResourceRegistry::list_resource_templates(),
-                next_cursor: None,
-                meta: None,
-            })
-        }
+    ) -> Result<ListResourceTemplatesResult, McpError> {
+        Ok(ListResourceTemplatesResult {
+            resource_templates: ResourceRegistry::list_resource_templates(),
+            next_cursor: None,
+            meta: None,
+        })
     }
 
-    fn read_resource(
+    async fn read_resource(
         &self,
         request: ReadResourceRequestParam,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
-        async move {
-            let uri = &request.uri;
-            debug!(uri = %uri, "Reading resource");
+    ) -> Result<ReadResourceResult, McpError> {
+        let uri = &request.uri;
+        debug!(uri = %uri, "Reading resource");
 
-            match self.resources.read(uri).await {
-                Ok(content) => Ok(ReadResourceResult {
-                    contents: vec![ResourceContents::text(content, uri.clone())],
-                }),
-                Err(e) => Err(McpError::resource_not_found(e.to_string(), None)),
-            }
+        match self.resources.read(uri).await {
+            Ok(content) => Ok(ReadResourceResult {
+                contents: vec![ResourceContents::text(content, uri.clone())],
+            }),
+            Err(e) => Err(McpError::resource_not_found(e.to_string(), None)),
         }
     }
 
-    fn list_prompts(
+    async fn list_prompts(
         &self,
         _request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
-        async move {
-            Ok(ListPromptsResult {
-                prompts: PromptRegistry::list(),
-                next_cursor: None,
-                meta: None,
-            })
-        }
+    ) -> Result<ListPromptsResult, McpError> {
+        Ok(ListPromptsResult {
+            prompts: PromptRegistry::list(),
+            next_cursor: None,
+            meta: None,
+        })
     }
 
-    fn get_prompt(
+    async fn get_prompt(
         &self,
         request: GetPromptRequestParam,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
-        async move {
-            let args = prompts::args_to_hashmap(request.arguments.as_ref());
-            PromptRegistry::get(&request.name, &args)
-        }
+    ) -> Result<GetPromptResult, McpError> {
+        let args = prompts::args_to_hashmap(request.arguments.as_ref());
+        PromptRegistry::get(&request.name, &args)
     }
 
-    fn list_tools(
+    async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
-        async move {
-            let mut tools = self.cached_tools.read().await.clone();
+    ) -> Result<ListToolsResult, McpError> {
+        let mut tools = self.cached_tools.read().await.clone();
 
-            // Filter to DAW tools only if requested
-            if self.daw_only {
-                tools.retain(|t| DAW_TOOLS.contains(&t.name.as_ref()));
-                debug!("DAW-only mode: exposing {} tools", tools.len());
-            }
-
-            Ok(ListToolsResult {
-                tools,
-                next_cursor: None,
-                meta: None,
-            })
+        // Filter to DAW tools only if requested
+        if self.daw_only {
+            tools.retain(|t| DAW_TOOLS.contains(&t.name.as_ref()));
+            debug!("DAW-only mode: exposing {} tools", tools.len());
         }
+
+        Ok(ListToolsResult {
+            tools,
+            next_cursor: None,
+            meta: None,
+        })
     }
 
-    fn call_tool(
+    async fn call_tool(
         &self,
         request: CallToolRequestParam,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
-        async move {
-            let name = &request.name;
-            let arguments = request.arguments
-                .map(serde_json::Value::Object)
-                .unwrap_or(serde_json::Value::Null);
+    ) -> Result<CallToolResult, McpError> {
+        let name = &request.name;
+        let arguments = request.arguments
+            .map(serde_json::Value::Object)
+            .unwrap_or(serde_json::Value::Null);
 
-            info!(tool = %name, args = ?arguments, "📥 Tool call received");
+        info!(tool = %name, args = ?arguments, "📥 Tool call received");
 
-            // Handle help tool locally (doesn't need backend)
-            if name == "help" {
-                let help_args: crate::help::HelpArgs = serde_json::from_value(arguments).unwrap_or_default();
-                let response = crate::help::help(help_args);
-                let text = serde_json::to_string_pretty(&response).unwrap_or_default();
-                return Ok(CallToolResult::success(vec![Content::text(text)]));
-            }
+        // Handle help tool locally (doesn't need backend)
+        if name == "help" {
+            let help_args: crate::help::HelpArgs = serde_json::from_value(arguments).unwrap_or_default();
+            let response = crate::help::help(help_args);
+            let text = serde_json::to_string_pretty(&response).unwrap_or_default();
+            return Ok(CallToolResult::success(vec![Content::text(text)]));
+        }
 
-            let backend = {
-                let backends_guard = self.backends.read().await;
-                match backends_guard.route_tool(name) {
-                    Some(b) => b,
-                    None => {
-                        return Err(McpError::invalid_params(
-                            format!("No backend available for tool: {}", name),
-                            None,
-                        ));
-                    }
-                }
-            };
-
-            // Convert JSON args to typed Payload (JSON boundary is here in holler)
-            let payload = match dispatch::json_to_payload(name, arguments) {
-                Ok(p) => {
-                    debug!("✅ JSON to Payload conversion succeeded for {}", name);
-                    p
-                }
-                Err(e) => {
-                    warn!("❌ JSON to Payload conversion failed for {}: {}", name, e);
+        let backend = {
+            let backends_guard = self.backends.read().await;
+            match backends_guard.route_tool(name) {
+                Some(b) => b,
+                None => {
                     return Err(McpError::invalid_params(
-                        format!("Failed to parse arguments for {}: {}", name, e),
+                        format!("No backend available for tool: {}", name),
                         None,
                     ));
                 }
-            };
-
-            debug!("📤 Sending {} to backend", name);
-            match backend.request(payload).await {
-                Ok(Payload::TypedResponse(envelope)) => {
-                    let mut result = envelope.to_json();
-                    // Augment response with artifact URLs if base URL is configured
-                    if let Some(ref base_url) = self.artifact_base_url {
-                        augment_artifact_urls(&mut result, base_url);
-                    }
-                    let text = serde_json::to_string_pretty(&result).unwrap_or_default();
-                    Ok(CallToolResult::success(vec![Content::text(text)]))
-                }
-                Ok(Payload::Error { code, message, details }) => {
-                    let error_text = if let Some(d) = details {
-                        format!(
-                            "{}: {}\n{}",
-                            code,
-                            message,
-                            serde_json::to_string_pretty(&d).unwrap_or_default()
-                        )
-                    } else {
-                        format!("{}: {}", code, message)
-                    };
-                    Ok(CallToolResult::error(vec![Content::text(error_text)]))
-                }
-                Ok(other) => Err(McpError::internal_error(
-                    format!("Unexpected response: {:?}", other),
-                    None,
-                )),
-                Err(e) => Err(McpError::internal_error(
-                    format!("Backend error: {}", e),
-                    None,
-                )),
             }
+        };
+
+        // Convert JSON args to typed Payload (JSON boundary is here in holler)
+        let payload = match dispatch::json_to_payload(name, arguments) {
+            Ok(p) => {
+                debug!("✅ JSON to Payload conversion succeeded for {}", name);
+                p
+            }
+            Err(e) => {
+                warn!("❌ JSON to Payload conversion failed for {}: {}", name, e);
+                return Err(McpError::invalid_params(
+                    format!("Failed to parse arguments for {}: {}", name, e),
+                    None,
+                ));
+            }
+        };
+
+        debug!("📤 Sending {} to backend", name);
+        match backend.request(payload).await {
+            Ok(Payload::TypedResponse(envelope)) => {
+                let mut result = envelope.to_json();
+                // Augment response with artifact URLs if base URL is configured
+                if let Some(ref base_url) = self.artifact_base_url {
+                    augment_artifact_urls(&mut result, base_url);
+                }
+                let text = serde_json::to_string_pretty(&result).unwrap_or_default();
+                Ok(CallToolResult::success(vec![Content::text(text)]))
+            }
+            Ok(Payload::Error { code, message, details }) => {
+                let error_text = if let Some(d) = details {
+                    format!(
+                        "{}: {}\n{}",
+                        code,
+                        message,
+                        serde_json::to_string_pretty(&d).unwrap_or_default()
+                    )
+                } else {
+                    format!("{}: {}", code, message)
+                };
+                Ok(CallToolResult::error(vec![Content::text(error_text)]))
+            }
+            Ok(other) => Err(McpError::internal_error(
+                format!("Unexpected response: {:?}", other),
+                None,
+            )),
+            Err(e) => Err(McpError::internal_error(
+                format!("Backend error: {}", e),
+                None,
+            )),
         }
     }
 }

@@ -77,9 +77,9 @@ pub async fn subscribe_to_backend(
 }
 
 /// Parse Cap'n Proto broadcast bytes into Broadcast enum
-fn parse_capnp_broadcast(bytes: &[u8]) -> Result<Broadcast> {
+fn parse_capnp_broadcast(mut bytes: &[u8]) -> Result<Broadcast> {
     let words = capnp::serialize::read_message_from_flat_slice(
-        &mut bytes.as_ref(),
+        &mut bytes,
         capnp::message::ReaderOptions::default(),
     )
     .context("Failed to read Cap'n Proto message")?;

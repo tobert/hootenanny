@@ -16,6 +16,10 @@ use uuid::Uuid;
 /// Boxed sink type for sending messages
 type BoxedSink = Pin<Box<dyn futures::Sink<Multipart, Error = tmq::TmqError> + Send>>;
 
+/// Boxed stream type for receiving messages
+type BoxedStream =
+    Pin<Box<dyn futures::Stream<Item = Result<Multipart, tmq::TmqError>> + Send + Unpin>>;
+
 /// Convert tmq Multipart to Vec<Bytes> for frame processing
 fn multipart_to_frames(mp: Multipart) -> Vec<Bytes> {
     mp.into_iter()
@@ -37,9 +41,7 @@ pub struct Client {
     #[allow(dead_code)]
     context: ZmqContext,
     socket_tx: Mutex<BoxedSink>,
-    socket_rx: Mutex<
-        Pin<Box<dyn futures::Stream<Item = Result<Multipart, tmq::TmqError>> + Send + Unpin>>,
-    >,
+    socket_rx: Mutex<BoxedStream>,
     timeout: Duration,
 }
 

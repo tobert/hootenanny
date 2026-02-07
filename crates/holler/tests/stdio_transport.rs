@@ -63,7 +63,9 @@ fn test_stdio_initialize() {
     assert!(response["result"]["capabilities"]["tools"].is_object(), "Missing tools capability");
     assert_eq!(
         response["result"]["instructions"],
-        "Holler MCP gateway - forwards tool calls to hootenanny ZMQ backends"
+        "Holler MCP gateway - forwards tool calls to hootenanny ZMQ backends. \
+         Use resources to explore session context, artifacts, and soundfonts. \
+         Use prompts for Trustfall query templates."
     );
 }
 
