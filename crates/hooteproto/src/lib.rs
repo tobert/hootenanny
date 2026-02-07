@@ -898,7 +898,7 @@ pub fn capnp_to_broadcast(
             let tags: Vec<String> = artifact
                 .get_tags()?
                 .iter()
-                .filter_map(|t| t.ok().map(|s| s.to_string().ok()).flatten())
+                .filter_map(|t| t.ok().and_then(|s| s.to_string().ok()))
                 .collect();
             let creator_str = artifact.get_creator()?.to_string()?;
             let creator = if creator_str.is_empty() {

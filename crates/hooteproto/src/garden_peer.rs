@@ -265,7 +265,7 @@ impl GardenPeer {
                     }
                     Ok(false) | Err(_) => {
                         let failures = health.record_failure(max_failures);
-                        if failures == 1 || failures % 5 == 0 {
+                        if failures == 1 || failures.is_multiple_of(5) {
                             debug!("Keepalive heartbeat failed (failures={})", failures);
                         }
                     }

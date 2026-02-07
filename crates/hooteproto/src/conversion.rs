@@ -273,7 +273,7 @@ pub fn payload_to_capnp_envelope(
                     ResponseEnvelope::Error(err) => {
                         let mut e = payload_builder.init_error();
                         e.set_code(err.code());
-                        e.set_message(&err.message());
+                        e.set_message(err.message());
                         e.set_details("");
                     }
                     ResponseEnvelope::JobStarted { job_id, tool, .. } => {
@@ -1970,7 +1970,7 @@ fn response_to_capnp_tool_response(
         }
         ToolResponse::GardenQueryResult(r) => {
             let mut b = builder.reborrow().init_garden_query_result();
-            b.set_results(&serde_json::to_string(&r.results).unwrap_or_default());
+            b.set_results(serde_json::to_string(&r.results).unwrap_or_default());
             b.set_count(r.count as u64);
         }
         ToolResponse::GardenAudioStatus(r) => {
@@ -2068,7 +2068,7 @@ fn response_to_capnp_tool_response(
         }
         ToolResponse::GraphQueryResult(r) => {
             let mut b = builder.reborrow().init_graph_query_result();
-            b.set_results(&serde_json::to_string(&r.results).unwrap_or_default());
+            b.set_results(serde_json::to_string(&r.results).unwrap_or_default());
             b.set_count(r.count as u64);
         }
         ToolResponse::GraphBind(r) => {
@@ -2095,7 +2095,7 @@ fn response_to_capnp_tool_response(
             let mut b = builder.reborrow().init_config_value();
             b.set_section(r.section.as_deref().unwrap_or(""));
             b.set_key(r.key.as_deref().unwrap_or(""));
-            b.set_value(&serde_json::to_string(&r.value).unwrap_or_default());
+            b.set_value(serde_json::to_string(&r.value).unwrap_or_default());
         }
 
         // Admin
@@ -2106,7 +2106,7 @@ fn response_to_capnp_tool_response(
                 let mut t = tools.reborrow().get(i as u32);
                 t.set_name(&tool.name);
                 t.set_description(&tool.description);
-                t.set_input_schema(&serde_json::to_string(&tool.input_schema).unwrap_or_default());
+                t.set_input_schema(serde_json::to_string(&tool.input_schema).unwrap_or_default());
             }
             b.set_count(r.count as u64);
         }
@@ -2168,7 +2168,7 @@ fn response_to_capnp_tool_response(
         ToolResponse::AnalyzeResult(r) => {
             let mut b = builder.reborrow().init_analyze_result();
             b.set_content_hash(&r.content_hash);
-            b.set_results(&serde_json::to_string(&r.results).unwrap_or_default());
+            b.set_results(serde_json::to_string(&r.results).unwrap_or_default());
             b.set_summary(&r.summary);
             b.set_artifact_id(r.artifact_id.as_deref().unwrap_or(""));
         }
