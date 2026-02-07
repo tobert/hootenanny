@@ -215,7 +215,7 @@ impl Default for TelemetryConfig {
 }
 
 /// TLS configuration for HTTPS support.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TlsConfig {
     /// Enable TLS. Default: false (opt-in)
     #[serde(default)]
@@ -251,15 +251,6 @@ impl TlsConfig {
     }
 }
 
-impl Default for TlsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            cert_path: None,
-            key_path: None,
-        }
-    }
-}
 
 /// Gateway (holler) configuration.
 ///
