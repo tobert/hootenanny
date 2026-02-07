@@ -125,7 +125,7 @@ fn convert_midly_message(channel: u8, message: MidlyMessage) -> Option<MidiMessa
         }
         MidlyMessage::PitchBend { bend } => {
             // midly's PitchBend is 14-bit centered at 8192
-            let value = bend.as_int() as i16 - 8192;
+            let value = bend.as_int() - 8192;
             Some(MidiMessage::PitchBend { channel, value })
         }
     }

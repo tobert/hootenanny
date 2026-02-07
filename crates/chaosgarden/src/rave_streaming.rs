@@ -374,7 +374,7 @@ fn run_streaming_loop(
                             stats.samples_processed.fetch_add(samples_per_chunk as u64, Ordering::Relaxed);
                         }
                     }
-                    Err(e) if e == zmq::Error::EAGAIN => {
+                    Err(zmq::Error::EAGAIN) => {
                         // No data available despite poll - unusual
                         debug!("Poll indicated data but recv would block");
                     }

@@ -590,7 +590,7 @@ fn shell_reply_to_payload(reply: hooteproto::garden::ShellReply) -> Payload {
             Payload::TypedResponse(ResponseEnvelope::success(
                 ToolResponse::GardenAudioSnapshot(hooteproto::responses::GardenAudioSnapshotResponse {
                     sample_rate,
-                    channels: channels as u16,
+                    channels,
                     format,
                     samples,
                 })

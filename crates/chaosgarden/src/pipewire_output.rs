@@ -350,6 +350,7 @@ impl Drop for PipeWireOutputStream {
 }
 
 /// Run the PipeWire main loop (called from thread)
+#[allow(clippy::too_many_arguments)]
 fn run_pipewire_loop(
     config: PipeWireOutputConfig,
     _ring_buffer: Arc<Mutex<RingBuffer>>, // Deprecated: kept for backwards compatibility
