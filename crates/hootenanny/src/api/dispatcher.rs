@@ -812,6 +812,26 @@ impl TypedDispatcher {
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
+
+            // === MIDI Analysis / Voice Separation ===
+            ToolRequest::MidiAnalyze(req) => {
+                match self.server.midi_analyze_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::MidiAnalyzed(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::MidiVoiceSeparate(req) => {
+                match self.server.midi_voice_separate_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::MidiVoiceSeparated(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::MidiStemsExport(req) => {
+                match self.server.midi_stems_export_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::MidiStemsExported(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
         }
     }
 

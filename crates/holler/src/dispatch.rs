@@ -416,6 +416,42 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             })))
         }
 
+        // === MIDI Analysis / Voice Separation ===
+        "midi_analyze" => {
+            let p: MidiAnalyzeArgs = serde_json::from_value(args).context("Invalid midi_analyze arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::MidiAnalyze(request::MidiAnalyzeRequest {
+                artifact_id: p.artifact_id,
+                hash: p.hash,
+                polyphony_threshold: p.polyphony_threshold,
+                density_window_beats: p.density_window_beats,
+            })))
+        }
+        "midi_voice_separate" => {
+            let p: MidiVoiceSeparateArgs = serde_json::from_value(args).context("Invalid midi_voice_separate arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::MidiVoiceSeparate(request::MidiVoiceSeparateRequest {
+                artifact_id: p.artifact_id,
+                hash: p.hash,
+                method: p.method,
+                max_pitch_jump: p.max_pitch_jump,
+                max_gap_beats: p.max_gap_beats,
+                max_voices: p.max_voices,
+                track_indices: p.track_indices.unwrap_or_default(),
+            })))
+        }
+        "midi_stems_export" => {
+            let p: MidiStemsExportArgs = serde_json::from_value(args).context("Invalid midi_stems_export arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::MidiStemsExport(request::MidiStemsExportRequest {
+                artifact_id: p.artifact_id,
+                hash: p.hash,
+                voice_data: p.voice_data,
+                combined_file: p.combined_file.unwrap_or(false),
+                tags: p.tags.unwrap_or_default(),
+                creator: p.creator,
+                parent_id: p.parent_id,
+                variation_set_id: p.variation_set_id,
+            })))
+        }
+
         // === Artifact Tools ===
         "artifact_upload" => {
             let p: ArtifactUploadArgs = serde_json::from_value(args).context("Invalid artifact_upload arguments")?;
@@ -1148,6 +1184,37 @@ struct DemucsSeparateArgs {
     model: Option<String>,
     stems: Option<Vec<String>>,
     two_stems: Option<String>,
+    tags: Option<Vec<String>>,
+    creator: Option<String>,
+    parent_id: Option<String>,
+    variation_set_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MidiAnalyzeArgs {
+    artifact_id: Option<String>,
+    hash: Option<String>,
+    polyphony_threshold: Option<f64>,
+    density_window_beats: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MidiVoiceSeparateArgs {
+    artifact_id: Option<String>,
+    hash: Option<String>,
+    method: Option<String>,
+    max_pitch_jump: Option<u8>,
+    max_gap_beats: Option<f64>,
+    max_voices: Option<u8>,
+    track_indices: Option<Vec<u16>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MidiStemsExportArgs {
+    artifact_id: Option<String>,
+    hash: Option<String>,
+    voice_data: String,
+    combined_file: Option<bool>,
     tags: Option<Vec<String>>,
     creator: Option<String>,
     parent_id: Option<String>,

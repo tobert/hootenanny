@@ -145,6 +145,11 @@ struct ToolRequest {
 
     # === Demucs ===
     demucsSeparate @94 :DemucsSeparate;
+
+    # === MIDI Analysis / Voice Separation ===
+    midiAnalyze @95 :MidiAnalyze;
+    midiVoiceSeparate @96 :MidiVoiceSeparate;
+    midiStemsExport @97 :MidiStemsExport;
   }
 }
 
@@ -560,5 +565,31 @@ struct DemucsSeparate {
   model @1 :Text;               # "htdemucs", "htdemucs_ft", "htdemucs_6s"
   stems @2 :List(Text);         # Filter to specific stems
   twoStems @3 :Text;            # Karaoke mode: "vocals" or "drums" etc.
+  metadata @4 :Common.ArtifactMetadata;
+}
+
+# === MIDI Analysis / Voice Separation Types ===
+struct MidiAnalyze {
+  artifactId @0 :Text;
+  hash @1 :Text;
+  polyphonyThreshold @2 :Float64;   # Default 0.3
+  densityWindowBeats @3 :Float64;   # Default 4.0
+}
+
+struct MidiVoiceSeparate {
+  artifactId @0 :Text;
+  hash @1 :Text;
+  method @2 :Text;                  # "auto", "channel_split", "pitch_contiguity", "skyline", "bassline"
+  maxPitchJump @3 :UInt8;           # Default 12 semitones
+  maxGapBeats @4 :Float64;          # Default 4.0
+  maxVoices @5 :UInt8;              # Default 8
+  trackIndices @6 :List(UInt16);    # Which tracks to separate (empty = all flagged)
+}
+
+struct MidiStemsExport {
+  artifactId @0 :Text;
+  hash @1 :Text;
+  voiceData @2 :Text;              # JSON-serialized voice separation results
+  combinedFile @3 :Bool;           # Also export combined multi-track file
   metadata @4 :Common.ArtifactMetadata;
 }

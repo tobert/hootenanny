@@ -9,6 +9,7 @@ members = [
     "crates/hooteproto",
     "crates/audio-graph-mcp",
     "crates/llmchat",
+    "crates/midi-analysis",
     "crates/vibeweaver",
 ]
 resolver = "2"

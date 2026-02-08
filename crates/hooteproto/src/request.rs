@@ -262,6 +262,16 @@ pub enum ToolRequest {
     DemucsSeparate(DemucsSeparateRequest),
 
     // ==========================================================================
+    // MIDI Analysis / Voice Separation
+    // ==========================================================================
+    /// Analyze MIDI structure and detect merged voices
+    MidiAnalyze(MidiAnalyzeRequest),
+    /// Separate merged voices in MIDI tracks
+    MidiVoiceSeparate(MidiVoiceSeparateRequest),
+    /// Export separated voices as individual MIDI files
+    MidiStemsExport(MidiStemsExportRequest),
+
+    // ==========================================================================
     // RAVE Audio Codec
     // ==========================================================================
     /// Encode audio to latent codes
@@ -298,6 +308,7 @@ impl ToolRequest {
             Self::CasInspect(_) => ToolTiming::AsyncShort,
             Self::MidiInfo(_) => ToolTiming::AsyncShort,
             Self::AudioInfo(_) => ToolTiming::AsyncShort,
+            Self::MidiAnalyze(_) | Self::MidiVoiceSeparate(_) | Self::MidiStemsExport(_) => ToolTiming::AsyncShort,
             Self::Ping | Self::ListResources => ToolTiming::AsyncShort,
             Self::ReadResource(_) => ToolTiming::AsyncShort,
             Self::CasStore(_) | Self::CasGet(_) | Self::CasUploadFile(_) | Self::CasStats => ToolTiming::AsyncShort,
@@ -449,6 +460,9 @@ impl ToolRequest {
             Self::AnticipatoryContinue(_) => "anticipatory_continue",
             Self::AnticipatoryEmbed(_) => "anticipatory_embed",
             Self::DemucsSeparate(_) => "demucs_separate",
+            Self::MidiAnalyze(_) => "midi_analyze",
+            Self::MidiVoiceSeparate(_) => "midi_voice_separate",
+            Self::MidiStemsExport(_) => "midi_stems_export",
             Self::RaveEncode(_) => "rave_encode",
             Self::RaveDecode(_) => "rave_decode",
             Self::RaveReconstruct(_) => "rave_reconstruct",
@@ -1288,4 +1302,54 @@ pub struct RaveStreamStopRequest {
 pub struct RaveStreamStatusRequest {
     /// ID of the streaming session
     pub stream_id: String,
+}
+
+// =============================================================================
+// MIDI Analysis / Voice Separation Request Types
+// =============================================================================
+
+/// Analyze MIDI structure: extract notes, profile tracks, detect merged voices
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiAnalyzeRequest {
+    pub artifact_id: Option<String>,
+    pub hash: Option<String>,
+    /// Polyphonic ratio threshold for flagging merged voices (default 0.3)
+    pub polyphony_threshold: Option<f64>,
+    /// Window size in beats for density analysis (default 4.0)
+    pub density_window_beats: Option<f64>,
+}
+
+/// Separate merged voices in MIDI tracks into individual lines
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiVoiceSeparateRequest {
+    pub artifact_id: Option<String>,
+    pub hash: Option<String>,
+    /// Separation method: "auto", "channel_split", "pitch_contiguity", "skyline", "bassline"
+    pub method: Option<String>,
+    /// Max pitch jump in semitones before starting a new voice (default 12)
+    pub max_pitch_jump: Option<u8>,
+    /// Max gap in beats before a voice is stale (default 4.0)
+    pub max_gap_beats: Option<f64>,
+    /// Maximum voices to extract per track (default 8)
+    pub max_voices: Option<u8>,
+    /// Which track indices to separate (empty = all flagged tracks)
+    #[serde(default)]
+    pub track_indices: Vec<u16>,
+}
+
+/// Export separated voices as individual MIDI files stored in CAS
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiStemsExportRequest {
+    pub artifact_id: Option<String>,
+    pub hash: Option<String>,
+    /// JSON-serialized voice separation results from midi_voice_separate
+    pub voice_data: String,
+    /// Also export a combined multi-track MIDI file
+    #[serde(default)]
+    pub combined_file: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub creator: Option<String>,
+    pub parent_id: Option<String>,
+    pub variation_set_id: Option<String>,
 }

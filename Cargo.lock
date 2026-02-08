@@ -1336,6 +1336,7 @@ dependencies = [
  "hooteconf",
  "hooteproto",
  "hound",
+ "midi-analysis",
  "midly",
  "opentelemetry",
  "opentelemetry-appender-tracing",
@@ -1933,6 +1934,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "midi-analysis"
+version = "0.1.0"
+dependencies = [
+ "midly",
+ "pretty_assertions",
+ "serde",
+ "thiserror 2.0.17",
 ]
 
 [[package]]

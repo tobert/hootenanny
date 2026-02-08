@@ -530,6 +530,36 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             set_artifact_metadata(&mut d.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
         }
 
+        // MIDI Analysis / Voice Separation
+        ToolRequest::MidiAnalyze(req) => {
+            let mut m = builder.reborrow().init_midi_analyze();
+            m.set_artifact_id(req.artifact_id.as_deref().unwrap_or(""));
+            m.set_hash(req.hash.as_deref().unwrap_or(""));
+            m.set_polyphony_threshold(req.polyphony_threshold.unwrap_or(0.3));
+            m.set_density_window_beats(req.density_window_beats.unwrap_or(4.0));
+        }
+        ToolRequest::MidiVoiceSeparate(req) => {
+            let mut m = builder.reborrow().init_midi_voice_separate();
+            m.set_artifact_id(req.artifact_id.as_deref().unwrap_or(""));
+            m.set_hash(req.hash.as_deref().unwrap_or(""));
+            m.set_method(req.method.as_deref().unwrap_or("auto"));
+            m.set_max_pitch_jump(req.max_pitch_jump.unwrap_or(12));
+            m.set_max_gap_beats(req.max_gap_beats.unwrap_or(4.0));
+            m.set_max_voices(req.max_voices.unwrap_or(8));
+            {
+                let mut indices = m.reborrow().init_track_indices(req.track_indices.len() as u32);
+                for (i, &idx) in req.track_indices.iter().enumerate() { indices.set(i as u32, idx); }
+            }
+        }
+        ToolRequest::MidiStemsExport(req) => {
+            let mut m = builder.reborrow().init_midi_stems_export();
+            m.set_artifact_id(req.artifact_id.as_deref().unwrap_or(""));
+            m.set_hash(req.hash.as_deref().unwrap_or(""));
+            m.set_voice_data(&req.voice_data);
+            m.set_combined_file(req.combined_file);
+            set_artifact_metadata(&mut m.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
+        }
+
         ToolRequest::ArtifactUpload(req) => {
             let mut a = builder.reborrow().init_artifact_upload();
             a.set_file_path(&req.file_path);
@@ -1421,6 +1451,46 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
                 creator: capnp_optional_string(m.get_creator()?),
                 parent_id: capnp_optional_string(m.get_parent_id()?),
                 variation_set_id: capnp_optional_string(m.get_variation_set_id()?),
+            }))
+        }
+
+        // MIDI Analysis / Voice Separation
+        tools_capnp::tool_request::MidiAnalyze(m) => {
+            let m = m?;
+            Ok(ToolRequest::MidiAnalyze(MidiAnalyzeRequest {
+                artifact_id: capnp_optional_string(m.get_artifact_id()?),
+                hash: capnp_optional_string(m.get_hash()?),
+                polyphony_threshold: Some(m.get_polyphony_threshold()),
+                density_window_beats: Some(m.get_density_window_beats()),
+            }))
+        }
+        tools_capnp::tool_request::MidiVoiceSeparate(m) => {
+            let m = m?;
+            let mut track_indices = Vec::new();
+            for idx in m.get_track_indices()? {
+                track_indices.push(idx);
+            }
+            Ok(ToolRequest::MidiVoiceSeparate(MidiVoiceSeparateRequest {
+                artifact_id: capnp_optional_string(m.get_artifact_id()?),
+                hash: capnp_optional_string(m.get_hash()?),
+                method: capnp_optional_string(m.get_method()?),
+                max_pitch_jump: Some(m.get_max_pitch_jump()),
+                max_gap_beats: Some(m.get_max_gap_beats()),
+                max_voices: Some(m.get_max_voices()),
+                track_indices,
+            }))
+        }
+        tools_capnp::tool_request::MidiStemsExport(m) => {
+            let m = m?; let meta = m.get_metadata()?;
+            Ok(ToolRequest::MidiStemsExport(MidiStemsExportRequest {
+                artifact_id: capnp_optional_string(m.get_artifact_id()?),
+                hash: capnp_optional_string(m.get_hash()?),
+                voice_data: m.get_voice_data()?.to_str()?.to_string(),
+                combined_file: m.get_combined_file(),
+                tags: capnp_string_list(meta.get_tags()?),
+                creator: capnp_optional_string(meta.get_creator()?),
+                parent_id: capnp_optional_string(meta.get_parent_id()?),
+                variation_set_id: capnp_optional_string(meta.get_variation_set_id()?),
             }))
         }
 
@@ -2320,6 +2390,44 @@ fn response_to_capnp_tool_response(
             }
             b.set_model(&r.model);
             b.set_duration_seconds(r.duration_seconds);
+        }
+
+        // MIDI Analysis / Voice Separation
+        ToolResponse::MidiAnalyzed(r) => {
+            let mut b = builder.reborrow().init_midi_analyzed();
+            b.set_analysis_json(&r.analysis_json);
+            b.set_track_count(r.track_count);
+            {
+                let mut indices = b.reborrow().init_tracks_needing_separation(r.tracks_needing_separation.len() as u32);
+                for (i, &idx) in r.tracks_needing_separation.iter().enumerate() {
+                    indices.set(i as u32, idx);
+                }
+            }
+            b.set_summary(&r.summary);
+        }
+        ToolResponse::MidiVoiceSeparated(r) => {
+            let mut b = builder.reborrow().init_midi_voice_separated();
+            b.set_voice_count(r.voice_count);
+            b.set_voices_json(&r.voices_json);
+            b.set_method(&r.method);
+            b.set_summary(&r.summary);
+        }
+        ToolResponse::MidiStemsExported(r) => {
+            let mut b = builder.reborrow().init_midi_stems_exported();
+            {
+                let mut stems = b.reborrow().init_stems(r.stems.len() as u32);
+                for (i, stem) in r.stems.iter().enumerate() {
+                    let mut s = stems.reborrow().get(i as u32);
+                    s.set_voice_index(stem.voice_index);
+                    s.set_artifact_id(&stem.artifact_id);
+                    s.set_content_hash(&stem.content_hash);
+                    s.set_note_count(stem.note_count);
+                    s.set_method(&stem.method);
+                }
+            }
+            b.set_combined_artifact_id(r.combined_artifact_id.as_deref().unwrap_or(""));
+            b.set_combined_hash(r.combined_hash.as_deref().unwrap_or(""));
+            b.set_summary(&r.summary);
         }
 
         // MidiPlayStarted and MidiPlayStopped are returned via JSON from garden shell
@@ -3446,6 +3554,50 @@ fn capnp_tool_response_to_response(
                 stems,
                 model: r.get_model()?.to_string()?,
                 duration_seconds: r.get_duration_seconds(),
+            }))
+        }
+
+        // MIDI Analysis / Voice Separation
+        Which::MidiAnalyzed(r) => {
+            let r = r?;
+            let tracks_needing: Vec<u16> = r.get_tracks_needing_separation()?
+                .iter()
+                .collect();
+            Ok(ToolResponse::MidiAnalyzed(MidiAnalyzedResponse {
+                analysis_json: r.get_analysis_json()?.to_string()?,
+                track_count: r.get_track_count(),
+                tracks_needing_separation: tracks_needing,
+                summary: r.get_summary()?.to_string()?,
+            }))
+        }
+        Which::MidiVoiceSeparated(r) => {
+            let r = r?;
+            Ok(ToolResponse::MidiVoiceSeparated(MidiVoiceSeparatedResponse {
+                voice_count: r.get_voice_count(),
+                voices_json: r.get_voices_json()?.to_string()?,
+                method: r.get_method()?.to_string()?,
+                summary: r.get_summary()?.to_string()?,
+            }))
+        }
+        Which::MidiStemsExported(r) => {
+            let r = r?;
+            let stems = r.get_stems()?
+                .iter()
+                .map(|s| {
+                    Ok(MidiStemInfo {
+                        voice_index: s.get_voice_index(),
+                        artifact_id: s.get_artifact_id()?.to_string()?,
+                        content_hash: s.get_content_hash()?.to_string()?,
+                        note_count: s.get_note_count(),
+                        method: s.get_method()?.to_string()?,
+                    })
+                })
+                .collect::<capnp::Result<Vec<_>>>()?;
+            Ok(ToolResponse::MidiStemsExported(MidiStemsExportedResponse {
+                stems,
+                combined_artifact_id: capnp_optional_string(r.get_combined_artifact_id()?),
+                combined_hash: capnp_optional_string(r.get_combined_hash()?),
+                summary: r.get_summary()?.to_string()?,
             }))
         }
     }

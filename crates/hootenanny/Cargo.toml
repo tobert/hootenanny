@@ -28,6 +28,7 @@ opentelemetry-appender-tracing = "0.28"
 
 # Add path dependency to our new crates
 abc = { path = "../abc" }
+midi-analysis = { path = "../midi-analysis" }
 cas = { path = "../cas" }
 chaosgarden = { path = "../chaosgarden" }
 audio-graph-mcp = { path = "../audio-graph-mcp" }

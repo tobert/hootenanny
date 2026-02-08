@@ -138,6 +138,11 @@ pub enum ToolResponse {
     // === Demucs ===
     DemucsSeparated(DemucsSeparatedResponse),
 
+    // === MIDI Analysis / Voice Separation ===
+    MidiAnalyzed(MidiAnalyzedResponse),
+    MidiVoiceSeparated(MidiVoiceSeparatedResponse),
+    MidiStemsExported(MidiStemsExportedResponse),
+
     // === RAVE Audio Codec ===
     RaveEncoded(RaveEncodedResponse),
     RaveDecoded(RaveDecodedResponse),
@@ -1138,6 +1143,45 @@ pub struct DemucsStems {
     pub name: String,
     pub content_hash: String,
     pub duration_seconds: f64,
+}
+
+// =============================================================================
+// MIDI Analysis / Voice Separation Responses
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiAnalyzedResponse {
+    /// Full analysis as JSON
+    pub analysis_json: String,
+    pub track_count: u16,
+    pub tracks_needing_separation: Vec<u16>,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiVoiceSeparatedResponse {
+    pub voice_count: u16,
+    /// Serialized voice data as JSON (for passing to midi_stems_export)
+    pub voices_json: String,
+    pub method: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiStemInfo {
+    pub voice_index: u16,
+    pub artifact_id: String,
+    pub content_hash: String,
+    pub note_count: u32,
+    pub method: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiStemsExportedResponse {
+    pub stems: Vec<MidiStemInfo>,
+    pub combined_artifact_id: Option<String>,
+    pub combined_hash: Option<String>,
+    pub summary: String,
 }
 
 // =============================================================================

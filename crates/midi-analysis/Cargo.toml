@@ -1,0 +1,13 @@
+[package]
+name = "midi-analysis"
+version = "0.1.0"
+edition = "2021"
+description = "MIDI voice separation and stem extraction"
+
+[dependencies]
+midly = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[dev-dependencies]
+pretty_assertions = "1"

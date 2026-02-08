@@ -675,6 +675,55 @@ pub fn list_tools() -> Vec<ToolInfo> {
         },
 
         // ==========================================================================
+        // MIDI Analysis / Voice Separation
+        // ==========================================================================
+        ToolInfo {
+            name: "midi_analyze".to_string(),
+            description: "Analyze MIDI structure: extract notes, profile tracks, detect merged voices needing separation".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "artifact_id": { "type": "string", "description": "Artifact ID of MIDI file" },
+                    "hash": { "type": "string", "description": "CAS hash of MIDI file (alternative to artifact_id)" },
+                    "polyphony_threshold": { "type": "number", "description": "Polyphonic ratio threshold for flagging merged voices (default 0.3)" },
+                    "density_window_beats": { "type": "number", "description": "Window size in beats for density analysis (default 4.0)" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "midi_voice_separate".to_string(),
+            description: "Separate merged voices in MIDI tracks into individual musical lines using pitch contiguity, channel split, skyline, or bassline algorithms".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "artifact_id": { "type": "string", "description": "Artifact ID of MIDI file" },
+                    "hash": { "type": "string", "description": "CAS hash of MIDI file (alternative to artifact_id)" },
+                    "method": { "type": "string", "description": "Separation method: auto (default), channel_split, pitch_contiguity, skyline, bassline" },
+                    "max_pitch_jump": { "type": "integer", "description": "Max pitch jump in semitones before new voice (default 12)" },
+                    "max_gap_beats": { "type": "number", "description": "Max gap in beats before voice is stale (default 4.0)" },
+                    "max_voices": { "type": "integer", "description": "Max voices to extract per track (default 8)" },
+                    "track_indices": { "type": "array", "items": { "type": "integer" }, "description": "Which tracks to separate (empty = all flagged)" }
+                }
+            }),
+        },
+        ToolInfo {
+            name: "midi_stems_export".to_string(),
+            description: "Export separated MIDI voices as individual MIDI files stored in CAS, one artifact per voice".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["voice_data"],
+                "properties": {
+                    "artifact_id": { "type": "string", "description": "Artifact ID of original MIDI (for context)" },
+                    "hash": { "type": "string", "description": "CAS hash of original MIDI (for context)" },
+                    "voice_data": { "type": "string", "description": "JSON voice separation data from midi_voice_separate" },
+                    "combined_file": { "type": "boolean", "description": "Also export combined multi-track MIDI (default false)" },
+                    "creator": { "type": "string" },
+                    "tags": { "type": "array", "items": { "type": "string" } }
+                }
+            }),
+        },
+
+        // ==========================================================================
         // RAVE Tools (Realtime Audio Variational autoEncoder)
         // ==========================================================================
         ToolInfo {

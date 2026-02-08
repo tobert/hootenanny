@@ -137,6 +137,11 @@ struct ToolResponse {
 
     # Demucs
     demucsSeparated @72 :DemucsSeparatedResponse;
+
+    # MIDI Analysis / Voice Separation
+    midiAnalyzed @73 :MidiAnalyzedResponse;
+    midiVoiceSeparated @74 :MidiVoiceSeparatedResponse;
+    midiStemsExported @75 :MidiStemsExportedResponse;
   }
 }
 
@@ -904,4 +909,37 @@ struct DemucsStems {
   name @0 :Text;               # "drums", "bass", "vocals", "other", etc.
   contentHash @1 :Text;        # CAS hash of this stem's WAV
   durationSeconds @2 :Float64;
+}
+
+# =============================================================================
+# MIDI Analysis / Voice Separation Responses
+# =============================================================================
+
+struct MidiAnalyzedResponse {
+  analysisJson @0 :Text;           # Full analysis as JSON
+  trackCount @1 :UInt16;
+  tracksNeedingSeparation @2 :List(UInt16);
+  summary @3 :Text;
+}
+
+struct MidiVoiceSeparatedResponse {
+  voiceCount @0 :UInt16;
+  voicesJson @1 :Text;             # Serialized voice data as JSON
+  method @2 :Text;                 # Primary method used
+  summary @3 :Text;
+}
+
+struct MidiStemInfo {
+  voiceIndex @0 :UInt16;
+  artifactId @1 :Text;
+  contentHash @2 :Text;
+  noteCount @3 :UInt32;
+  method @4 :Text;
+}
+
+struct MidiStemsExportedResponse {
+  stems @0 :List(MidiStemInfo);
+  combinedArtifactId @1 :Text;     # Empty if not requested
+  combinedHash @2 :Text;
+  summary @3 :Text;
 }

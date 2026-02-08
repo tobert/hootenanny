@@ -4426,5 +4426,297 @@ impl EventDualityServer {
 
         (peak_db, mean_db)
     }
+
+    // =========================================================================
+    // MIDI Analysis / Voice Separation
+    // =========================================================================
+
+    /// Analyze MIDI structure: extract notes, profile tracks, detect merged voices.
+    pub async fn midi_analyze_typed(
+        &self,
+        request: hooteproto::request::MidiAnalyzeRequest,
+    ) -> Result<hooteproto::responses::MidiAnalyzedResponse, ToolError> {
+        let hash = self.resolve_midi_hash(&request.artifact_id, &request.hash)?;
+        let midi_bytes = self.read_cas_bytes(&hash).await?;
+
+        let analysis = midi_analysis::analyze(&midi_bytes, request.polyphony_threshold)
+            .map_err(|e| ToolError::internal(format!("MIDI analysis failed: {}", e)))?;
+
+        let analysis_json = serde_json::to_string(&analysis)
+            .map_err(|e| ToolError::internal(format!("Failed to serialize analysis: {}", e)))?;
+
+        Ok(hooteproto::responses::MidiAnalyzedResponse {
+            analysis_json,
+            track_count: analysis.context.track_count as u16,
+            tracks_needing_separation: analysis.tracks_needing_separation.iter().map(|&i| i as u16).collect(),
+            summary: analysis.summary,
+        })
+    }
+
+    /// Separate merged voices in MIDI tracks into individual musical lines.
+    pub async fn midi_voice_separate_typed(
+        &self,
+        request: hooteproto::request::MidiVoiceSeparateRequest,
+    ) -> Result<hooteproto::responses::MidiVoiceSeparatedResponse, ToolError> {
+        let hash = self.resolve_midi_hash(&request.artifact_id, &request.hash)?;
+        let midi_bytes = self.read_cas_bytes(&hash).await?;
+
+        // First analyze to get notes and context
+        let analysis = midi_analysis::analyze(&midi_bytes, None)
+            .map_err(|e| ToolError::internal(format!("MIDI analysis failed: {}", e)))?;
+
+        let smf = midly::Smf::parse(&midi_bytes)
+            .map_err(|e| ToolError::internal(format!("MIDI parse failed: {}", e)))?;
+
+        let (all_notes, _context) = midi_analysis::analyze::extract_notes(&smf);
+
+        // Determine which tracks to separate
+        let track_indices: Vec<usize> = if request.track_indices.is_empty() {
+            analysis.tracks_needing_separation.to_vec()
+        } else {
+            request.track_indices.iter().map(|&i| i as usize).collect()
+        };
+
+        // Parse method
+        let method = request.method.as_deref().and_then(|m| match m {
+            "auto" | "" => None,
+            "channel_split" => Some(midi_analysis::SeparationMethod::ChannelSplit),
+            "pitch_contiguity" => Some(midi_analysis::SeparationMethod::PitchContiguity),
+            "skyline" => Some(midi_analysis::SeparationMethod::Skyline),
+            "bassline" => Some(midi_analysis::SeparationMethod::Bassline),
+            _ => None,
+        });
+
+        let params = midi_analysis::SeparationParams {
+            max_pitch_jump: request.max_pitch_jump,
+            max_gap_ticks: request.max_gap_beats.map(|b| (b * analysis.context.ppq as f64) as u64),
+            method,
+            max_voices: request.max_voices.map(|v| v as usize),
+        };
+
+        // Separate each flagged track
+        let mut all_voices: Vec<midi_analysis::SeparatedVoice> = Vec::new();
+        let mut primary_method = String::from("auto");
+
+        for &track_idx in &track_indices {
+            let track_notes: Vec<midi_analysis::TimedNote> = all_notes
+                .iter()
+                .filter(|n| n.track_index == track_idx)
+                .cloned()
+                .collect();
+
+            if track_notes.is_empty() {
+                continue;
+            }
+
+            let voices = midi_analysis::separate_voices(
+                &track_notes,
+                analysis.context.ppq,
+                &params,
+            );
+
+            if let Some(first) = voices.first() {
+                primary_method = format!("{:?}", first.method).to_lowercase();
+            }
+
+            all_voices.extend(voices);
+        }
+
+        // Re-index voices sequentially
+        for (i, voice) in all_voices.iter_mut().enumerate() {
+            voice.voice_index = i;
+        }
+
+        let voice_count = all_voices.len() as u16;
+        let voices_json = serde_json::to_string(&all_voices)
+            .map_err(|e| ToolError::internal(format!("Failed to serialize voices: {}", e)))?;
+
+        let summary = format!(
+            "Separated {} tracks into {} voices using {}",
+            track_indices.len(),
+            voice_count,
+            primary_method,
+        );
+
+        Ok(hooteproto::responses::MidiVoiceSeparatedResponse {
+            voice_count,
+            voices_json,
+            method: primary_method,
+            summary,
+        })
+    }
+
+    /// Export separated voices as individual MIDI files stored in CAS.
+    pub async fn midi_stems_export_typed(
+        &self,
+        request: hooteproto::request::MidiStemsExportRequest,
+    ) -> Result<hooteproto::responses::MidiStemsExportedResponse, ToolError> {
+        use crate::artifact_store::{Artifact, ArtifactStore};
+        use crate::types::{ArtifactId, ContentHash};
+
+        // Deserialize voices from JSON
+        let voices: Vec<midi_analysis::SeparatedVoice> =
+            serde_json::from_str(&request.voice_data)
+                .map_err(|e| ToolError::validation("invalid_voice_data", format!("Failed to parse voice_data JSON: {}", e)))?;
+
+        // Get original MIDI context for tempo map
+        let context = if request.artifact_id.is_some() || request.hash.is_some() {
+            let hash = self.resolve_midi_hash(&request.artifact_id, &request.hash)?;
+            let midi_bytes = self.read_cas_bytes(&hash).await?;
+            let analysis = midi_analysis::analyze(&midi_bytes, None)
+                .map_err(|e| ToolError::internal(format!("MIDI analysis failed: {}", e)))?;
+            analysis.context
+        } else {
+            midi_analysis::MidiFileContext {
+                ppq: 480,
+                format: 1,
+                track_count: 0,
+                tempo_changes: vec![midi_analysis::analyze::TempoChange {
+                    tick: 0,
+                    microseconds_per_beat: 500_000,
+                    bpm: 120.0,
+                }],
+                time_signatures: vec![midi_analysis::analyze::TimeSignature {
+                    tick: 0,
+                    numerator: 4,
+                    denominator: 4,
+                }],
+                total_ticks: 0,
+            }
+        };
+
+        let export_options = midi_analysis::ExportOptions::default();
+        let mut stem_infos = Vec::new();
+
+        for voice in &voices {
+            let midi_bytes = midi_analysis::voices_to_midi(
+                std::slice::from_ref(voice),
+                &context,
+                &export_options,
+            );
+
+            let cas_result = self.cas_store_typed(&midi_bytes, "audio/midi").await?;
+            let content_hash = ContentHash::new(&cas_result.hash);
+            let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+
+            let mut artifact_tags = request.tags.clone();
+            artifact_tags.push("type:midi".to_string());
+            artifact_tags.push("stem".to_string());
+            artifact_tags.push(format!("voice:{}", voice.voice_index));
+
+            let metadata = serde_json::json!({
+                "mime_type": "audio/midi",
+                "source": "midi_stems_export",
+                "voice_index": voice.voice_index,
+                "method": format!("{:?}", voice.method).to_lowercase(),
+                "note_count": voice.notes.len(),
+            });
+
+            let artifact = Artifact::new(
+                artifact_id.clone(),
+                content_hash.clone(),
+                request.creator.clone().unwrap_or_else(|| "midi_stems_export".to_string()),
+                metadata,
+            ).with_tags(artifact_tags);
+
+            {
+                let mut store = self.artifact_store.write().map_err(|e| {
+                    ToolError::internal(format!("Failed to lock artifact store: {}", e))
+                })?;
+                store.put(artifact).map_err(|e| {
+                    ToolError::internal(format!("Failed to store artifact: {}", e))
+                })?;
+            }
+
+            stem_infos.push(hooteproto::responses::MidiStemInfo {
+                voice_index: voice.voice_index as u16,
+                artifact_id: artifact_id.as_str().to_string(),
+                content_hash: content_hash.as_str().to_string(),
+                note_count: voice.notes.len() as u32,
+                method: format!("{:?}", voice.method).to_lowercase(),
+            });
+        }
+
+        // Optionally export combined multi-track file
+        let (combined_artifact_id, combined_hash) = if request.combined_file && !voices.is_empty() {
+            let combined_bytes = midi_analysis::voices_to_midi(&voices, &context, &export_options);
+            let cas_result = self.cas_store_typed(&combined_bytes, "audio/midi").await?;
+            let content_hash = ContentHash::new(&cas_result.hash);
+            let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+
+            let mut artifact_tags = request.tags.clone();
+            artifact_tags.push("type:midi".to_string());
+            artifact_tags.push("combined_stems".to_string());
+
+            let metadata = serde_json::json!({
+                "mime_type": "audio/midi",
+                "source": "midi_stems_export",
+                "voice_count": voices.len(),
+            });
+
+            let artifact = Artifact::new(
+                artifact_id.clone(),
+                content_hash.clone(),
+                request.creator.clone().unwrap_or_else(|| "midi_stems_export".to_string()),
+                metadata,
+            ).with_tags(artifact_tags);
+
+            {
+                let mut store = self.artifact_store.write().map_err(|e| {
+                    ToolError::internal(format!("Failed to lock artifact store: {}", e))
+                })?;
+                store.put(artifact).map_err(|e| {
+                    ToolError::internal(format!("Failed to store artifact: {}", e))
+                })?;
+            }
+
+            (Some(artifact_id.as_str().to_string()), Some(content_hash.as_str().to_string()))
+        } else {
+            (None, None)
+        };
+
+        let summary = format!(
+            "Exported {} voice stems as individual MIDI files{}",
+            stem_infos.len(),
+            if combined_artifact_id.is_some() { " + combined file" } else { "" },
+        );
+
+        Ok(hooteproto::responses::MidiStemsExportedResponse {
+            stems: stem_infos,
+            combined_artifact_id,
+            combined_hash,
+            summary,
+        })
+    }
+
+    /// Helper: resolve artifact_id or hash to a CAS hash
+    fn resolve_midi_hash(
+        &self,
+        artifact_id: &Option<String>,
+        hash: &Option<String>,
+    ) -> Result<String, ToolError> {
+        if let Some(ref artifact_id) = artifact_id {
+            let store = self.artifact_store.read()
+                .map_err(|_| ToolError::internal("Lock poisoned"))?;
+            let artifact = store.get(artifact_id)
+                .map_err(|e| ToolError::internal(e.to_string()))?
+                .ok_or_else(|| ToolError::not_found("artifact", artifact_id.clone()))?;
+            Ok(artifact.content_hash.as_str().to_string())
+        } else if let Some(ref h) = hash {
+            Ok(h.clone())
+        } else {
+            Err(ToolError::validation("missing_parameter", "Either artifact_id or hash must be provided"))
+        }
+    }
+
+    /// Helper: read bytes from CAS by hash
+    async fn read_cas_bytes(&self, hash: &str) -> Result<Vec<u8>, ToolError> {
+        let content = self.cas_lookup(hash)?;
+        let path = content.local_path
+            .ok_or_else(|| ToolError::not_found("content", hash.to_string()))?;
+        tokio::fs::read(&path)
+            .await
+            .map_err(|e| ToolError::internal(format!("Failed to read file: {}", e)))
+    }
 }
 
