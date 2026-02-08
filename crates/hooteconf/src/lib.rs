@@ -298,7 +298,7 @@ mod tests {
         assert!(toml.contains("[paths]"));
         assert!(toml.contains("[bind]"));
         assert!(toml.contains("[bootstrap.models]"));
-        assert!(toml.contains("orpheus"));
+        assert!(toml.contains("gpu_observer"));
     }
 
     #[test]

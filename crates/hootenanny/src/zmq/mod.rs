@@ -19,6 +19,7 @@ mod orpheus_client;
 mod publisher;
 mod rave_client;
 mod vibeweaver_client;
+mod yue_client;
 
 pub use anticipatory_client::{anticipatory_config, AnticipatoryClient, DEFAULT_ANTICIPATORY_TIMEOUT_MS};
 pub use audioldm2_client::{audioldm2_config, Audioldm2Client, DEFAULT_AUDIOLDM2_TIMEOUT_MS};
@@ -33,3 +34,4 @@ pub use orpheus_client::{orpheus_config, OrpheusClient, DEFAULT_ORPHEUS_TIMEOUT_
 pub use publisher::{BroadcastPublisher, PublisherServer};
 pub use rave_client::{rave_config, RaveClient, DEFAULT_RAVE_TIMEOUT_MS};
 pub use vibeweaver_client::{vibeweaver_config, VibeweaverClient};
+pub use yue_client::{yue_config, YueClient, DEFAULT_YUE_TIMEOUT_MS};

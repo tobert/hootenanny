@@ -381,10 +381,10 @@ class OrpheusService(ModelService):
         log.info(f"Classified: {'human' if is_human else 'AI'} ({confidence:.1%}), {len(tokens)} tokens")
 
         return {
-            "is_human": is_human,
-            "confidence": confidence,
-            "probabilities": {"human": prob, "ai": 1 - prob},
-            "num_tokens": len(tokens),
+            "classifications": [
+                {"label": "human", "confidence": float(prob)},
+                {"label": "ai", "confidence": float(1 - prob)},
+            ],
         }
 
     def _generate_tokens(

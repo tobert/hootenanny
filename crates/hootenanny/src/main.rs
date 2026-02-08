@@ -24,7 +24,6 @@ use audio_graph_mcp::{
 use cas::FileStore;
 use clap::Parser;
 use hooteconf::HootConfig;
-use mcp_tools::local_models::LocalModels;
 use sessions::SessionManager;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -105,9 +104,6 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(cas_dir)?;
     let cas = FileStore::at_path(cas_dir)?;
     info!("   CAS ready at: {}", cas_dir.display());
-
-    // --- CAS + HTTP Models ---
-    let local_models = Arc::new(LocalModels::new(cas.clone()));
 
     // --- Artifact Store Initialization ---
     info!("📚 Initializing Artifact Store...");
@@ -312,6 +308,16 @@ async fn main() -> Result<()> {
         None
     };
 
+    // --- YuE Connection (lazy - ZMQ connects when peer available) ---
+    let yue_endpoint = &config.bootstrap.connections.yue;
+    let yue_client: Option<Arc<zmq::YueClient>> = if !yue_endpoint.is_empty() {
+        info!("🎤 Connecting to YuE at {}...", yue_endpoint);
+        let yue_config = zmq::yue_config(yue_endpoint, zmq::DEFAULT_YUE_TIMEOUT_MS);
+        Some(zmq::YueClient::new(yue_config).await)
+    } else {
+        None
+    };
+
     let http_addr = config.infra.bind.http_bind_addr();
     let zmq_router = &config.infra.bind.zmq_router;
     let zmq_pub = &config.infra.bind.zmq_pub;
@@ -370,7 +376,7 @@ async fn main() -> Result<()> {
     // Create the EventDualityServer
     let event_duality_server = Arc::new(
         EventDualityServer::new(
-            local_models.clone(),
+            cas.clone(),
             artifact_store.clone(),
             job_store.clone(),
             audio_graph_db.clone(),
@@ -387,6 +393,7 @@ async fn main() -> Result<()> {
         .with_audioldm2(audioldm2_client.clone())
         .with_anticipatory(anticipatory_client.clone())
         .with_demucs(demucs_client.clone())
+        .with_yue(yue_client.clone())
         .with_broadcaster(Some(broadcast_publisher))
         .with_stream_manager(Some(stream_manager.clone()))
         .with_session_manager(Some(session_manager.clone()))

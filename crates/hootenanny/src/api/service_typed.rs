@@ -17,6 +17,26 @@ use hooteproto::{
 };
 
 impl EventDualityServer {
+    /// Look up a CAS object by hash string, returning the reference.
+    fn cas_lookup(&self, hash: &str) -> Result<cas::CasReference, ToolError> {
+        use cas::ContentStore;
+        let content_hash: cas::ContentHash = hash
+            .parse()
+            .map_err(|e| ToolError::internal(format!("Invalid hash: {}", e)))?;
+        self.cas
+            .inspect(&content_hash)?
+            .ok_or_else(|| ToolError::not_found("cas_content", hash))
+    }
+
+    /// Store bytes in CAS, returning the hash string.
+    fn cas_store(&self, data: &[u8], mime_type: &str) -> Result<String, ToolError> {
+        use cas::ContentStore;
+        self.cas
+            .store(data, mime_type)
+            .map(|h| h.into_inner())
+            .map_err(|e| ToolError::internal(format!("Failed to store in CAS: {}", e)))
+    }
+
     // =========================================================================
     // ABC Notation - Typed
     // =========================================================================
@@ -188,11 +208,7 @@ impl EventDualityServer {
     ) -> Result<SoundfontInfoResponse, ToolError> {
         use crate::mcp_tools::rustysynth::inspect_soundfont;
 
-        let cas_ref = self
-            .local_models
-            .inspect_cas_content(soundfont_hash)
-            .await
-            .map_err(|e| ToolError::internal(format!("Failed to get soundfont from CAS: {}", e)))?;
+        let cas_ref = self.cas_lookup(soundfont_hash)?;
 
         let local_path = cas_ref
             .local_path
@@ -232,11 +248,7 @@ impl EventDualityServer {
     ) -> Result<SoundfontPresetInfoResponse, ToolError> {
         use crate::mcp_tools::rustysynth::inspect_preset;
 
-        let cas_ref = self
-            .local_models
-            .inspect_cas_content(soundfont_hash)
-            .await
-            .map_err(|e| ToolError::internal(format!("Failed to get soundfont from CAS: {}", e)))?;
+        let cas_ref = self.cas_lookup(soundfont_hash)?;
 
         let local_path = cas_ref
             .local_path
@@ -896,11 +908,7 @@ impl EventDualityServer {
         data: &[u8],
         mime_type: &str,
     ) -> Result<hooteproto::responses::CasStoredResponse, ToolError> {
-        let hash = self
-            .local_models
-            .store_cas_content(data, mime_type)
-            .await
-            .map_err(|e| ToolError::internal(format!("Failed to store in CAS: {}", e)))?;
+        let hash = self.cas_store(data, mime_type)?;
 
         Ok(hooteproto::responses::CasStoredResponse {
             hash: hash.to_string(),
@@ -914,11 +922,7 @@ impl EventDualityServer {
         &self,
         hash: &str,
     ) -> Result<hooteproto::responses::CasContentResponse, ToolError> {
-        let cas_ref = self
-            .local_models
-            .inspect_cas_content(hash)
-            .await
-            .map_err(|e| ToolError::internal(format!("Failed to get CAS content: {}", e)))?;
+        let cas_ref = self.cas_lookup(hash)?;
 
         let local_path = cas_ref
             .local_path
@@ -940,11 +944,7 @@ impl EventDualityServer {
         &self,
         hash: &str,
     ) -> Result<hooteproto::responses::CasInspectedResponse, ToolError> {
-        let cas_ref = self
-            .local_models
-            .inspect_cas_content(hash)
-            .await
-            .map_err(|e| ToolError::internal(format!("Failed to inspect CAS: {}", e)))?;
+        let cas_ref = self.cas_lookup(hash)?;
 
         Ok(hooteproto::responses::CasInspectedResponse {
             hash: cas_ref.hash.to_string(),
@@ -956,7 +956,7 @@ impl EventDualityServer {
 
     /// Get CAS storage statistics - typed response
     pub async fn cas_stats_typed(&self) -> Result<hooteproto::responses::CasStatsResponse, ToolError> {
-        let cas_dir = self.local_models.cas_base_path();
+        let cas_dir = self.cas.config().base_path.clone();
         let metadata_dir = cas_dir.join("metadata");
 
         let mut total_items = 0u64;
@@ -1285,63 +1285,56 @@ impl EventDualityServer {
     // Orpheus Classify - Typed (Phase 1)
     // =========================================================================
 
-    /// Classify MIDI content - typed response
+    /// Classify MIDI content via Orpheus ZMQ service - typed response
     pub async fn orpheus_classify_typed(
         &self,
         midi_hash: &str,
     ) -> Result<hooteproto::responses::OrpheusClassifiedResponse, ToolError> {
-        // Get MIDI from CAS
-        let cas_ref = self
-            .local_models
-            .inspect_cas_content(midi_hash)
-            .await
-            .map_err(|e| ToolError::internal(format!("Failed to get MIDI from CAS: {}", e)))?;
+        use hooteproto::{Payload, ToolRequest, request::OrpheusClassifyRequest};
 
-        let local_path = cas_ref
-            .local_path
-            .ok_or_else(|| ToolError::not_found("midi", midi_hash))?;
+        let orpheus = self.orpheus.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Orpheus service not configured. Check orpheus_endpoint in config.",
+            )
+        })?;
 
-        // Call Orpheus classify service
-        let client = reqwest::Client::new();
-        let response = client
-            .post("http://localhost:2001/classify")
-            .json(&serde_json::json!({
-                "midi_path": local_path,
-            }))
-            .send()
+        let request = OrpheusClassifyRequest {
+            midi_hash: midi_hash.to_string(),
+        };
+
+        let payload = Payload::ToolRequest(ToolRequest::OrpheusClassify(request));
+
+        let response = orpheus
+            .request(payload)
             .await
             .map_err(|e| ToolError::service("orpheus", "request_failed", e.to_string()))?;
 
-        if !response.status().is_success() {
-            return Err(ToolError::service(
+        match response {
+            Payload::TypedResponse(envelope) => match envelope {
+                hooteproto::ResponseEnvelope::Success { response } => match response {
+                    hooteproto::responses::ToolResponse::OrpheusClassified(resp) => Ok(resp),
+                    _ => Err(ToolError::service(
+                        "orpheus",
+                        "unexpected_response",
+                        "Expected OrpheusClassified response type",
+                    )),
+                },
+                hooteproto::ResponseEnvelope::Error(err) => {
+                    Err(ToolError::service("orpheus", "classify_failed", err.message()))
+                }
+                _ => Err(ToolError::service(
+                    "orpheus",
+                    "unexpected_envelope",
+                    "Expected Success or Error envelope",
+                )),
+            },
+            _ => Err(ToolError::service(
                 "orpheus",
-                "classify_failed",
-                format!("HTTP {}", response.status()),
-            ));
+                "unexpected_payload",
+                "Expected TypedResponse payload",
+            )),
         }
-
-        let result: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| ToolError::service("orpheus", "parse_failed", e.to_string()))?;
-
-        // Extract classifications from response
-        let classifications: Vec<hooteproto::responses::MidiClassification> = result
-            .get("classifications")
-            .and_then(|c| c.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| {
-                        Some(hooteproto::responses::MidiClassification {
-                            label: v.get("label")?.as_str()?.to_string(),
-                            confidence: v.get("confidence")?.as_f64()? as f32,
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        Ok(hooteproto::responses::OrpheusClassifiedResponse { classifications })
     }
 
     // ============================================================
@@ -1885,11 +1878,7 @@ impl EventDualityServer {
         let sample_rate = sample_rate.unwrap_or(44100);
 
         // Get MIDI content from CAS
-        let midi_cas = self
-            .local_models
-            .inspect_cas_content(input_hash)
-            .await
-            .map_err(|e| ToolError::not_found("midi", e.to_string()))?;
+        let midi_cas = self.cas_lookup(input_hash)?;
 
         let midi_path = midi_cas
             .local_path
@@ -1899,11 +1888,7 @@ impl EventDualityServer {
             .map_err(|e| ToolError::internal(format!("Failed to read MIDI: {}", e)))?;
 
         // Get SoundFont content from CAS
-        let sf_cas = self
-            .local_models
-            .inspect_cas_content(soundfont_hash)
-            .await
-            .map_err(|e| ToolError::not_found("soundfont", e.to_string()))?;
+        let sf_cas = self.cas_lookup(soundfont_hash)?;
 
         let sf_path = sf_cas
             .local_path
@@ -2155,11 +2140,7 @@ impl EventDualityServer {
         })?;
 
         // Verify seed exists in CAS
-        let _ = self
-            .local_models
-            .inspect_cas_content(seed_hash)
-            .await
-            .map_err(|e| ToolError::not_found("seed_midi", e.to_string()))?;
+        let _ = self.cas_lookup(seed_hash)?;
 
         let variations_count = num_variations.unwrap_or(1) as usize;
         let var_set_id = if variations_count > 1 {
@@ -2256,11 +2237,7 @@ impl EventDualityServer {
         })?;
 
         // Verify input exists in CAS
-        let _ = self
-            .local_models
-            .inspect_cas_content(input_hash)
-            .await
-            .map_err(|e| ToolError::not_found("input_midi", e.to_string()))?;
+        let _ = self.cas_lookup(input_hash)?;
 
         let variations_count = num_variations.unwrap_or(1) as usize;
         let var_set_id = if variations_count > 1 {
@@ -2356,19 +2333,11 @@ impl EventDualityServer {
         })?;
 
         // Verify section A exists in CAS
-        let _ = self
-            .local_models
-            .inspect_cas_content(section_a_hash)
-            .await
-            .map_err(|e| ToolError::not_found("section_a", e.to_string()))?;
+        let _ = self.cas_lookup(section_a_hash)?;
 
         // Verify section B if provided
         if let Some(ref hash) = section_b_hash {
-            let _ = self
-                .local_models
-                .inspect_cas_content(hash)
-                .await
-                .map_err(|e| ToolError::not_found("section_b", e.to_string()))?;
+            let _ = self.cas_lookup(hash)?;
         }
 
         let creator_str = creator.clone().unwrap_or_else(|| "orpheus_bridge".to_string());
@@ -2443,11 +2412,7 @@ impl EventDualityServer {
 
         // Verify seed exists in CAS if provided
         if let Some(ref hash) = seed_hash {
-            let _ = self
-                .local_models
-                .inspect_cas_content(hash)
-                .await
-                .map_err(|e| ToolError::not_found("seed", e.to_string()))?;
+            let _ = self.cas_lookup(hash)?;
         }
 
         let variations_count = num_variations.unwrap_or(1) as usize;
@@ -2763,7 +2728,7 @@ impl EventDualityServer {
         })
     }
 
-    /// Generate song with YuE - spawns background job
+    /// Generate song with YuE via ZMQ - spawns background job
     pub async fn yue_generate_typed(
         &self,
         lyrics: String,
@@ -2778,92 +2743,116 @@ impl EventDualityServer {
     ) -> Result<hooteproto::responses::JobStartedResponse, ToolError> {
         use crate::artifact_store::{Artifact, ArtifactStore};
         use crate::types::{ArtifactId, ContentHash, VariationSetId};
+        use hooteproto::{Payload, ToolRequest, request::YueGenerateRequest, responses::ToolResponse};
+
+        let yue = self.yue.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "YuE service not configured. Check yue endpoint in config.",
+            )
+        })?;
 
         let job_id = self.job_store.create_job("yue_generate".to_string());
         let _ = self.job_store.mark_running(&job_id);
 
-        let local_models = Arc::clone(&self.local_models);
         let artifact_store = Arc::clone(&self.artifact_store);
         let job_store = self.job_store.clone();
         let job_id_clone = job_id.clone();
+        let yue_client = Arc::clone(yue);
 
         let genre_str = genre.clone().unwrap_or_else(|| "pop".to_string());
-        let max_tokens = max_new_tokens.unwrap_or(3000);
-        let segments = run_n_segments.unwrap_or(2);
-        let seed_val = seed.unwrap_or(0);
 
         let handle = tokio::spawn(async move {
-            let result: anyhow::Result<hooteproto::responses::ToolResponse> = (async {
-                let response = local_models
-                    .run_yue_generate(
-                        lyrics.clone(),
-                        genre_str.clone(),
-                        max_tokens,
-                        segments,
-                        seed_val,
-                        Some(job_id_clone.as_str().to_string()),
-                    )
-                    .await?;
+            let result: anyhow::Result<ToolResponse> = (async {
+                let request = YueGenerateRequest {
+                    lyrics: lyrics.clone(),
+                    genre: genre.clone(),
+                    max_new_tokens,
+                    run_n_segments,
+                    seed,
+                    tags: tags.clone(),
+                    creator: creator.clone(),
+                    parent_id: parent_id.clone(),
+                    variation_set_id: variation_set_id.clone(),
+                };
 
-                // Decode audio_base64 from response
-                use base64::Engine;
-                let audio_base64 = response
-                    .get("audio_base64")
-                    .and_then(|p| p.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("No audio_base64 in YuE response"))?;
+                let payload = Payload::ToolRequest(ToolRequest::YueGenerate(request));
 
-                let audio_bytes = base64::engine::general_purpose::STANDARD
-                    .decode(audio_base64)
-                    .map_err(|e| anyhow::anyhow!("Failed to decode audio_base64: {}", e))?;
+                let response = yue_client
+                    .request(payload)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("YuE request failed: {}", e))?;
 
-                let sample_rate = response.get("sample_rate").and_then(|s| s.as_u64()).unwrap_or(44100) as u32;
-                let duration_seconds = response.get("duration").and_then(|d| d.as_f64()).unwrap_or(60.0);
-                let hash = local_models.store_cas_content(&audio_bytes, "audio/wav").await?;
-                let content_hash = ContentHash::new(&hash);
-                let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
+                match response {
+                    Payload::TypedResponse(envelope) => {
+                        match envelope {
+                            hooteproto::ResponseEnvelope::Success { response } => {
+                                let (content_hash_str, duration_seconds, sample_rate) = match &response {
+                                    ToolResponse::AudioGenerated(r) => {
+                                        (r.content_hash.clone(), r.duration_seconds, r.sample_rate)
+                                    }
+                                    _ => anyhow::bail!("Unexpected response type from YuE"),
+                                };
 
-                let creator_str = creator.unwrap_or_else(|| "yue".to_string());
-                let mut artifact_tags = tags;
-                artifact_tags.push("type:audio".to_string());
-                artifact_tags.push("source:yue".to_string());
-                artifact_tags.push(format!("genre:{}", genre_str));
+                                let content_hash = ContentHash::new(&content_hash_str);
+                                let artifact_id = ArtifactId::from_hash_prefix(&content_hash);
 
-                let metadata = serde_json::json!({
-                    "mime_type": "audio/wav",
-                    "source": "yue",
-                    "lyrics": lyrics,
-                    "genre": genre_str,
-                    "duration_seconds": duration_seconds,
-                    "sample_rate": sample_rate,
-                });
+                                let creator_str = creator.unwrap_or_else(|| "yue".to_string());
+                                let mut artifact_tags = tags;
+                                artifact_tags.push("type:audio".to_string());
+                                artifact_tags.push("source:yue".to_string());
+                                artifact_tags.push(format!("genre:{}", genre_str));
 
-                let mut artifact = Artifact::new(
-                    artifact_id.clone(),
-                    content_hash,
-                    &creator_str,
-                    metadata,
-                ).with_tags(artifact_tags);
+                                let metadata = serde_json::json!({
+                                    "mime_type": "audio/wav",
+                                    "source": "yue",
+                                    "lyrics": lyrics,
+                                    "genre": genre_str,
+                                    "duration_seconds": duration_seconds,
+                                    "sample_rate": sample_rate,
+                                });
 
-                if let Some(ref parent) = parent_id {
-                    artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
+                                let mut artifact = Artifact::new(
+                                    artifact_id.clone(),
+                                    content_hash,
+                                    &creator_str,
+                                    metadata,
+                                ).with_tags(artifact_tags);
+
+                                if let Some(ref parent) = parent_id {
+                                    artifact = artifact.with_parent(ArtifactId::new(parent.clone()));
+                                }
+                                if let Some(ref var_set) = variation_set_id {
+                                    artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
+                                }
+
+                                let mut store = artifact_store.write().map_err(|_| anyhow::anyhow!("Artifact store lock poisoned"))?;
+                                store.put(artifact)?;
+
+                                Ok(ToolResponse::AudioGenerated(
+                                    hooteproto::responses::AudioGeneratedResponse {
+                                        artifact_id: artifact_id.as_str().to_string(),
+                                        content_hash: content_hash_str,
+                                        duration_seconds,
+                                        sample_rate,
+                                        format: hooteproto::responses::AudioFormat::Wav,
+                                        genre: Some(genre_str),
+                                    },
+                                ))
+                            }
+                            hooteproto::ResponseEnvelope::Error(err) => {
+                                anyhow::bail!("YuE error: {}", err.message())
+                            }
+                            hooteproto::ResponseEnvelope::JobStarted { .. } => {
+                                anyhow::bail!("Unexpected async response")
+                            }
+                            hooteproto::ResponseEnvelope::Ack { .. } => {
+                                anyhow::bail!("Unexpected ack response")
+                            }
+                        }
+                    }
+                    _ => anyhow::bail!("Unexpected payload type"),
                 }
-                if let Some(ref var_set) = variation_set_id {
-                    artifact.variation_set_id = Some(VariationSetId::new(var_set.clone()));
-                }
-
-                let mut store = artifact_store.write().map_err(|_| anyhow::anyhow!("Artifact store lock poisoned"))?;
-                store.put(artifact)?;
-
-                Ok(hooteproto::responses::ToolResponse::AudioGenerated(
-                    hooteproto::responses::AudioGeneratedResponse {
-                        artifact_id: artifact_id.as_str().to_string(),
-                        content_hash: hash,
-                        duration_seconds,
-                        sample_rate,
-                        format: hooteproto::responses::AudioFormat::Wav,
-                        genre: Some(genre_str),
-                    },
-                ))
             })
             .await;
 
@@ -2910,12 +2899,8 @@ impl EventDualityServer {
         let job_id_clone = job_id.clone();
         let beatthis_client = Arc::clone(beatthis);
 
-        // Get audio bytes - need to do this before spawn since we need async local_models
         let audio_bytes = if let Some(ref hash) = audio_hash {
-            let content = self.local_models
-                .inspect_cas_content(hash)
-                .await
-                .map_err(|e| ToolError::not_found("audio", e.to_string()))?;
+            let content = self.cas_lookup(hash)?;
             let path = content.local_path.ok_or_else(|| ToolError::not_found("audio", hash.clone()))?;
             std::fs::read(&path).map_err(|e| ToolError::internal(format!("Failed to read audio: {}", e)))?
         } else if let Some(ref path) = audio_path {
@@ -3593,10 +3578,7 @@ impl EventDualityServer {
         };
 
         // Get MIDI bytes from CAS
-        let content = self.local_models
-            .inspect_cas_content(&hash)
-            .await
-            .map_err(|e| ToolError::not_found("content", e.to_string()))?;
+        let content = self.cas_lookup(&hash)?;
 
         let path = content.local_path
             .ok_or_else(|| ToolError::not_found("content", hash.clone()))?;
@@ -3646,10 +3628,7 @@ impl EventDualityServer {
         };
 
         // Get audio bytes from CAS
-        let content = self.local_models
-            .inspect_cas_content(&hash)
-            .await
-            .map_err(|e| ToolError::not_found("content", e.to_string()))?;
+        let content = self.cas_lookup(&hash)?;
 
         let path = content.local_path
             .ok_or_else(|| ToolError::not_found("content", hash.clone()))?;

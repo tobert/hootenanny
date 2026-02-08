@@ -13,14 +13,8 @@ pub type ModelsConfig = HashMap<String, String>;
 /// Default model endpoints for bootstrap.
 pub fn default_models() -> ModelsConfig {
     let mut models = HashMap::new();
-    models.insert("orpheus".to_string(), "http://127.0.0.1:2000".to_string());
-    models.insert("orpheus_classifier".to_string(), "http://127.0.0.1:2001".to_string());
-    models.insert("orpheus_bridge".to_string(), "http://127.0.0.1:2002".to_string());
-    models.insert("orpheus_loops".to_string(), "http://127.0.0.1:2003".to_string());
-    models.insert("musicgen".to_string(), "http://127.0.0.1:2006".to_string());
-    models.insert("clap".to_string(), "http://127.0.0.1:2007".to_string());
-    models.insert("yue".to_string(), "http://127.0.0.1:2008".to_string());
-    models.insert("beatthis".to_string(), "http://127.0.0.1:2012".to_string());
+    // All model services now use ZMQ (see connections config).
+    // Only gpu_observer remains HTTP — it's infrastructure, not a model path.
     models.insert("gpu_observer".to_string(), "http://127.0.0.1:2099".to_string());
     models
 }
@@ -75,6 +69,10 @@ pub struct ConnectionsConfig {
     /// Demucs ZMQ endpoint (audio separation via hootpy)
     #[serde(default = "ConnectionsConfig::default_demucs")]
     pub demucs: String,
+
+    /// YuE ZMQ endpoint (text-to-song generation via hootpy)
+    #[serde(default = "ConnectionsConfig::default_yue")]
+    pub yue: String,
 }
 
 impl ConnectionsConfig {
@@ -137,6 +135,10 @@ impl ConnectionsConfig {
     fn default_demucs() -> String {
         format!("ipc://{}/demucs.sock", Self::socket_dir())
     }
+
+    fn default_yue() -> String {
+        format!("ipc://{}/yue.sock", Self::socket_dir())
+    }
 }
 
 impl Default for ConnectionsConfig {
@@ -153,6 +155,7 @@ impl Default for ConnectionsConfig {
             audioldm2: Self::default_audioldm2(),
             anticipatory: Self::default_anticipatory(),
             demucs: Self::default_demucs(),
+            yue: Self::default_yue(),
         }
     }
 }
@@ -282,16 +285,16 @@ mod tests {
     #[test]
     fn test_default_models() {
         let models = default_models();
-        assert_eq!(models.get("orpheus"), Some(&"http://127.0.0.1:2000".to_string()));
-        assert_eq!(models.get("beatthis"), Some(&"http://127.0.0.1:2012".to_string()));
-        assert_eq!(models.len(), 9);
+        assert_eq!(models.get("gpu_observer"), Some(&"http://127.0.0.1:2099".to_string()));
+        assert_eq!(models.len(), 1);
     }
 
     #[test]
-    fn test_connections_musicgen_clap() {
+    fn test_connections_musicgen_clap_yue() {
         let conn = ConnectionsConfig::default();
         assert!(conn.musicgen.contains("musicgen.sock"));
         assert!(conn.clap.contains("clap.sock"));
+        assert!(conn.yue.contains("yue.sock"));
     }
 
     #[test]

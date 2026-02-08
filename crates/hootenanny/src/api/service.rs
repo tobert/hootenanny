@@ -2,16 +2,15 @@ use crate::artifact_store::FileStore;
 use crate::event_buffer::EventBufferHandle;
 use crate::gpu_monitor::GpuMonitor;
 use crate::job_system::JobStore;
-use crate::mcp_tools::local_models::LocalModels;
 use crate::sessions::SessionManager;
 use crate::streams::{SlicingEngine, StreamManager};
-use crate::zmq::{AnticipatoryClient, Audioldm2Client, BeatthisClient, BroadcastPublisher, ClapClient, DemucsClient, GardenManager, MusicgenClient, OrpheusClient, RaveClient, VibeweaverClient};
+use crate::zmq::{AnticipatoryClient, Audioldm2Client, BeatthisClient, BroadcastPublisher, ClapClient, DemucsClient, GardenManager, MusicgenClient, OrpheusClient, RaveClient, VibeweaverClient, YueClient};
 use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use std::sync::{Arc, RwLock};
 
 #[derive(Clone)]
 pub struct EventDualityServer {
-    pub local_models: Arc<LocalModels>,
+    pub cas: cas::FileStore,
     pub artifact_store: Arc<RwLock<FileStore>>,
     pub job_store: JobStore,
     pub audio_graph_db: Arc<AudioGraphDb>,
@@ -36,6 +35,8 @@ pub struct EventDualityServer {
     pub anticipatory: Option<Arc<AnticipatoryClient>>,
     /// Optional Demucs client for audio separation
     pub demucs: Option<Arc<DemucsClient>>,
+    /// Optional YuE client for text-to-song generation
+    pub yue: Option<Arc<YueClient>>,
     /// Optional broadcast publisher for SSE events via holler
     pub broadcaster: Option<BroadcastPublisher>,
     /// Stream manager for capture sessions
@@ -58,7 +59,7 @@ impl std::fmt::Debug for EventDualityServer {
 
 impl EventDualityServer {
     pub fn new(
-        local_models: Arc<LocalModels>,
+        cas: cas::FileStore,
         artifact_store: Arc<RwLock<FileStore>>,
         job_store: Arc<JobStore>,
         audio_graph_db: Arc<AudioGraphDb>,
@@ -66,7 +67,7 @@ impl EventDualityServer {
         gpu_monitor: Arc<GpuMonitor>,
     ) -> Self {
         Self {
-            local_models,
+            cas,
             artifact_store,
             job_store: (*job_store).clone(),
             audio_graph_db,
@@ -82,6 +83,7 @@ impl EventDualityServer {
             audioldm2: None,
             anticipatory: None,
             demucs: None,
+            yue: None,
             broadcaster: None,
             stream_manager: None,
             session_manager: None,
@@ -147,6 +149,12 @@ impl EventDualityServer {
     /// Create with Demucs client for audio separation
     pub fn with_demucs(mut self, demucs: Option<Arc<DemucsClient>>) -> Self {
         self.demucs = demucs;
+        self
+    }
+
+    /// Create with YuE client for text-to-song generation
+    pub fn with_yue(mut self, yue: Option<Arc<YueClient>>) -> Self {
+        self.yue = yue;
         self
     }
 
