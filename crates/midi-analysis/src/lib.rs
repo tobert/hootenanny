@@ -7,8 +7,8 @@ pub mod voice_separate;
 
 pub use analyze::{analyze, MidiAnalysis, MidiFileContext, TrackProfile};
 pub use classify::{
-    classify_heuristic, classify_voices, extract_features, ClassificationMethod, VoiceClassification,
-    VoiceFeatures, VoiceRole,
+    classify_heuristic, classify_voices, classify_voices_with_features, extract_features,
+    ClassificationMethod, VoiceClassification, VoiceFeatures, VoiceRole,
 };
 pub use midi_writer::{voices_to_midi, ExportOptions};
 pub use note::{SeparatedVoice, SeparationMethod, TimedNote, VoiceStats};

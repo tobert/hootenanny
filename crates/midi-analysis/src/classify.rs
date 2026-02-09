@@ -40,7 +40,7 @@ impl std::fmt::Display for VoiceRole {
 }
 
 /// Numeric feature vector extracted from a voice in context.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct VoiceFeatures {
     // Register
     pub mean_pitch_normalized: f64,
@@ -109,7 +109,10 @@ pub fn extract_features(
     let notes = &voice.notes;
     let ppq = context.ppq as f64;
 
-    // Beats per measure from first time signature (default 4/4)
+    // Beats per measure from first time signature (default 4/4).
+    // NOTE: uses first time signature for the entire piece. Pieces with
+    // mid-stream time signature changes will have approximate downbeat
+    // fractions. A full TimeMap solution is a future enhancement.
     let beats_per_measure = context
         .time_signatures
         .first()
@@ -266,12 +269,21 @@ pub fn classify_heuristic(features: &VoiceFeatures) -> (VoiceRole, f64, Vec<(Voi
         candidates.push((VoiceRole::Bass, 0.75));
     }
 
-    // Rule 4: Highest voice with good coverage + activity
+    // Rule 4a: Highest voice with good coverage + activity
     if features.is_highest_voice
         && features.coverage > 0.3
         && features.notes_per_beat > 0.5
     {
         candidates.push((VoiceRole::Melody, 0.70));
+    }
+
+    // Rule 4b: Slow melody — ballads with whole/half notes (highest voice, long durations)
+    if features.is_highest_voice
+        && features.coverage > 0.3
+        && features.mean_duration_beats > 1.0
+        && features.notes_per_beat > 0.25
+    {
+        candidates.push((VoiceRole::Melody, 0.65));
     }
 
     // Rule 5: Rhythmic - steady IOI, narrow pitch range, good coverage
@@ -336,13 +348,23 @@ pub fn classify_voices(
         return Vec::new();
     }
 
-    // Extract features for all voices
     let features: Vec<VoiceFeatures> = voices
         .iter()
         .map(|v| extract_features(v, voices, context, track_profiles))
         .collect();
 
-    // Initial classification
+    classify_voices_with_features(features)
+}
+
+/// Classify voices from pre-computed feature vectors.
+///
+/// Use this when features have already been extracted (e.g. for ML fallback)
+/// to avoid redundant extraction.
+pub fn classify_voices_with_features(features: Vec<VoiceFeatures>) -> Vec<VoiceClassification> {
+    if features.is_empty() {
+        return Vec::new();
+    }
+
     let mut classifications: Vec<VoiceClassification> = features
         .into_iter()
         .enumerate()
@@ -397,13 +419,26 @@ fn resolve_unique_role(
         })
         .expect("claimants is non-empty");
 
-    // Demote all others
+    // Demote all others to their best alternative role
     for &idx in &claimants {
         if idx != best {
             let old_role = classifications[idx].role;
             let old_conf = classifications[idx].confidence;
-            classifications[idx].role = demotion_role;
-            classifications[idx].confidence = (old_conf * 0.8).min(0.50);
+
+            // Pick the highest-confidence alternative that isn't the conflicting role
+            let best_alternative = classifications[idx]
+                .alternative_roles
+                .iter()
+                .find(|(role, _)| *role != target_role)
+                .map(|(role, conf)| (*role, *conf));
+
+            let (new_role, new_conf) = match best_alternative {
+                Some((alt_role, alt_conf)) => (alt_role, alt_conf),
+                None => (demotion_role, (old_conf * 0.8).min(0.50)),
+            };
+
+            classifications[idx].role = new_role;
+            classifications[idx].confidence = new_conf;
             classifications[idx]
                 .alternative_roles
                 .insert(0, (old_role, old_conf));
@@ -886,5 +921,131 @@ mod tests {
         assert!((rank_normalized(2.0, &[1.0, 2.0, 3.0]) - 0.5).abs() < 0.01);
         assert!((rank_normalized(3.0, &[1.0, 2.0, 3.0]) - 1.0).abs() < 0.01);
         assert!((rank_normalized(5.0, &[5.0]) - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn conflict_resolution_demotes_to_best_alternative_not_hardcoded() {
+        // A rhythmic synth (narrow pitch, steady IOI, good coverage) should
+        // become Rhythm when demoted from Melody, not Countermelody.
+        //
+        // Voice 0: clear melody (high pitch, active)
+        let melody_notes = make_notes(&[
+            (0, 480, 80, 0),
+            (480, 960, 84, 0),
+            (960, 1440, 88, 0),
+            (1440, 1920, 86, 0),
+        ]);
+        let melody = make_voice(melody_notes, 0);
+
+        // Voice 1: rhythmic synth that also triggers Melody (is_highest by narrow
+        // margin in a separate context) but with Rhythm as best alternative.
+        // We give it notes at pitch 76 so it's in the "highest" band and
+        // narrow pitch range + steady IOI to trigger Rhythm rule.
+        let rhythmic_notes = make_notes(&[
+            (0, 240, 76, 1),
+            (480, 720, 76, 1),
+            (960, 1200, 76, 1),
+            (1440, 1680, 76, 1),
+        ]);
+        let rhythmic = make_voice(rhythmic_notes, 1);
+
+        // Low bass to anchor the pitch rank
+        let bass_notes = make_notes(&[
+            (0, 960, 36, 2),
+            (960, 1920, 40, 2),
+        ]);
+        let bass = make_voice(bass_notes, 2);
+
+        let all = vec![melody.clone(), rhythmic.clone(), bass.clone()];
+        let context = make_context(480, 1920);
+        let profiles = vec![
+            make_track_profile(0, vec![0], false),
+            make_track_profile(1, vec![0], false),
+            make_track_profile(2, vec![33], false),
+        ];
+
+        let features: Vec<VoiceFeatures> = all
+            .iter()
+            .map(|v| extract_features(v, &all, &context, &profiles))
+            .collect();
+
+        let classifications = classify_voices_with_features(features);
+
+        // Only one voice should be Melody
+        let melody_count = classifications.iter().filter(|c| c.role == VoiceRole::Melody).count();
+        assert!(melody_count <= 1, "Expected at most 1 melody, got {}", melody_count);
+
+        // If a voice was demoted from melody and had Rhythm as an alternative,
+        // it should NOT be Countermelody (the old hardcoded demotion)
+        for c in &classifications {
+            if c.alternative_roles.iter().any(|(r, _)| *r == VoiceRole::Melody) {
+                // This voice was demoted from Melody
+                assert_ne!(
+                    c.role, VoiceRole::Countermelody,
+                    "Demoted voice should use its best alternative, not hardcoded Countermelody"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn slow_melody_whole_notes_classified_as_melody() {
+        // Ballad melody: whole notes (2 beats each), highest voice, good coverage
+        let melody_notes = make_notes(&[
+            (0, 960, 72, 0),    // 2 beats
+            (960, 1920, 76, 0), // 2 beats
+            (1920, 2880, 79, 0),
+            (2880, 3840, 84, 0),
+        ]);
+        let mut melody = make_voice(melody_notes, 0);
+        melody.source_track = Some(0);
+
+        // Accompanying bass
+        let bass_notes = make_notes(&[
+            (0, 960, 36, 1),
+            (960, 1920, 40, 1),
+            (1920, 2880, 43, 1),
+            (2880, 3840, 36, 1),
+        ]);
+        let mut bass = make_voice(bass_notes, 1);
+        bass.source_track = Some(2);
+
+        let all_voices = vec![melody.clone(), bass.clone()];
+        let context = make_context(480, 3840);
+        let profiles = vec![
+            make_track_profile(0, vec![0], false),  // melody: piano
+            make_track_profile(1, vec![0], false),
+            make_track_profile(2, vec![33], false),  // bass track
+        ];
+
+        let features = extract_features(&melody, &all_voices, &context, &profiles);
+
+        // Verify this is a slow melody: ~0.5 notes/beat, 2.0 mean_duration_beats
+        assert!(features.is_highest_voice, "Should be highest voice");
+        assert!(features.coverage > 0.3, "Should have decent coverage");
+        assert!(features.mean_duration_beats > 1.0, "Should have long note durations");
+
+        let (role, _, _) = classify_heuristic(&features);
+        assert_eq!(role, VoiceRole::Melody, "Slow melody with whole notes should be classified as Melody");
+    }
+
+    #[test]
+    fn classify_voices_with_features_empty_returns_empty() {
+        let result = classify_voices_with_features(vec![]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn voice_features_default_is_valid() {
+        let feat = VoiceFeatures::default();
+        // Default should classify as something (not panic)
+        let (role, confidence, _) = classify_heuristic(&feat);
+        assert!(confidence > 0.0);
+        // With all zeros: not highest, not lowest, low coverage → likely Padding or HarmonicFill
+        assert!(
+            role == VoiceRole::Padding || role == VoiceRole::HarmonicFill,
+            "Default features should classify as Padding or HarmonicFill, got {:?}",
+            role,
+        );
     }
 }

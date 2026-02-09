@@ -4750,7 +4750,10 @@ impl EventDualityServer {
                 time_signatures: vec![],
                 total_ticks: max_tick,
             };
-            (context, vec![])
+            // Build synthetic track profiles from voice data so
+            // instrument_hints() can detect percussion (channel 9) etc.
+            let track_profiles = build_synthetic_track_profiles(&voices);
+            (context, track_profiles)
         };
 
         // Extract features for all voices (needed for both heuristic and ML)
@@ -4762,18 +4765,19 @@ impl EventDualityServer {
         let features_json = serde_json::to_string(&features)
             .unwrap_or_else(|_| "[]".to_string());
 
-        // Try ML classification if requested
+        // Try ML classification if requested, using pre-computed features
+        // to avoid redundant extraction in the heuristic fallback path
         let (classifications, method_used) = if request.use_ml {
             match self.try_ml_classification(&features).await {
                 Ok(ml_results) => (ml_results, "machine_learning"),
                 Err(e) => {
                     tracing::warn!("ML classification unavailable ({:?}), falling back to heuristic", e);
-                    let c = midi_analysis::classify_voices(&voices, &context, &track_profiles);
+                    let c = midi_analysis::classify_voices_with_features(features.clone());
                     (c, "heuristic")
                 }
             }
         } else {
-            let c = midi_analysis::classify_voices(&voices, &context, &track_profiles);
+            let c = midi_analysis::classify_voices_with_features(features.clone());
             (c, "heuristic")
         };
 
@@ -4873,10 +4877,8 @@ impl EventDualityServer {
                                     role,
                                     confidence: info.confidence,
                                     method: midi_analysis::ClassificationMethod::MachineLearning,
-                                    features: features.get(i).cloned().unwrap_or_else(|| {
-                                        // Fallback: this shouldn't happen but be defensive
-                                        features[0].clone()
-                                    }),
+                                    features: features.get(i).cloned()
+                                        .unwrap_or_default(),
                                     alternative_roles,
                                 }
                             })
@@ -4917,6 +4919,47 @@ impl EventDualityServer {
     }
 }
 
+/// Build minimal TrackProfile entries from separated voices so that
+/// instrument_hints() can detect percussion (channel 9) even without
+/// the original MIDI file.
+fn build_synthetic_track_profiles(
+    voices: &[midi_analysis::SeparatedVoice],
+) -> Vec<midi_analysis::TrackProfile> {
+    use std::collections::HashMap;
+
+    let mut by_track: HashMap<usize, (Vec<u8>, bool)> = HashMap::new();
+    for voice in voices {
+        let track_idx = voice.source_track.unwrap_or(0);
+        let channel = voice.source_channel.unwrap_or(0);
+        let entry = by_track.entry(track_idx).or_insert_with(|| (vec![], false));
+        if !entry.0.contains(&channel) {
+            entry.0.push(channel);
+        }
+        if channel == 9 {
+            entry.1 = true;
+        }
+    }
+
+    let mut profiles: Vec<midi_analysis::TrackProfile> = by_track
+        .into_iter()
+        .map(|(track_index, (channels, is_percussion))| midi_analysis::TrackProfile {
+            track_index,
+            name: None,
+            instrument: None,
+            programs_used: vec![],
+            channels_used: channels,
+            is_percussion,
+            note_count: 0,
+            pitch_range: Default::default(),
+            polyphony: Default::default(),
+            density: Default::default(),
+            merged_voices_likely: false,
+        })
+        .collect();
+    profiles.sort_by_key(|p| p.track_index);
+    profiles
+}
+
 /// Parse a voice role string from the ML service response into a VoiceRole enum.
 fn parse_voice_role(s: &str) -> midi_analysis::VoiceRole {
     match s {
@@ -4929,7 +4972,10 @@ fn parse_voice_role(s: &str) -> midi_analysis::VoiceRole {
         "primary_harmony" => midi_analysis::VoiceRole::PrimaryHarmony,
         "secondary_harmony" => midi_analysis::VoiceRole::SecondaryHarmony,
         "padding" => midi_analysis::VoiceRole::Padding,
-        _ => midi_analysis::VoiceRole::HarmonicFill,
+        other => {
+            tracing::warn!("Unknown voice role '{}' from ML service, defaulting to HarmonicFill", other);
+            midi_analysis::VoiceRole::HarmonicFill
+        }
     }
 }
 

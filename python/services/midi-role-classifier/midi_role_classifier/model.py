@@ -2,9 +2,8 @@
 ML model for MIDI voice role classification.
 
 Uses a GradientBoostingClassifier trained on feature vectors extracted
-by the Rust heuristic classifier. The model file is loaded from disk
-if available; otherwise falls back to a simple rule-based approach
-that mirrors the Rust heuristic.
+by the Rust heuristic classifier. A trained model must be present on disk;
+the canonical heuristic fallback lives in Rust (midi-analysis crate).
 """
 
 from __future__ import annotations
@@ -15,6 +14,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from hootpy import ServiceError
 
 log = logging.getLogger(__name__)
 
@@ -87,17 +88,22 @@ class RoleClassifierModel:
         """
         Predict voice roles from feature vectors.
 
-        Returns a list of dicts with 'role', 'confidence', and 'alternatives'.
+        Requires a trained model. If no model is loaded, raises ServiceError
+        so the Rust side can fall back to its canonical heuristic classifier.
         """
         if not features:
             return []
 
-        X = features_to_array(features)
+        if self.model is None or not self.is_loaded:
+            raise ServiceError(
+                message=(
+                    "No trained ML model available. "
+                    "Rust heuristic classifier should be used as fallback."
+                )
+            )
 
-        if self.model is not None and self.is_loaded:
-            return self._predict_ml(X)
-        else:
-            return self._predict_fallback(X, features)
+        X = features_to_array(features)
+        return self._predict_ml(X)
 
     def _predict_ml(self, X: np.ndarray) -> list[dict[str, Any]]:
         """Predict using the trained sklearn model."""
@@ -130,60 +136,3 @@ class RoleClassifierModel:
             })
 
         return predictions
-
-    def _predict_fallback(
-        self, X: np.ndarray, features: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
-        """Simple fallback when no trained model is available.
-
-        This mirrors the Rust heuristic but runs in Python.
-        It's primarily useful for testing the ML pipeline end-to-end
-        before training data is available.
-        """
-        predictions = []
-        for i, feat in enumerate(features):
-            role, confidence, alternatives = _heuristic_classify(feat)
-            predictions.append({
-                "role": role,
-                "confidence": confidence,
-                "alternatives": alternatives,
-            })
-        return predictions
-
-
-def _heuristic_classify(
-    feat: dict[str, Any],
-) -> tuple[str, float, list[dict[str, Any]]]:
-    """Python mirror of the Rust heuristic classifier."""
-    candidates: list[tuple[str, float]] = []
-
-    is_drum = feat.get("is_drum_channel", False)
-    gm_cat = feat.get("gm_program_category", 0)
-
-    if is_drum or gm_cat == 14:
-        candidates.append(("percussion", 0.95))
-    if gm_cat == 4:
-        candidates.append(("bass", 0.85))
-    if feat.get("is_lowest_voice") and feat.get("mean_pitch_normalized", 1.0) < 0.378 and feat.get("coverage", 0) > 0.15:
-        candidates.append(("bass", 0.75))
-    if feat.get("is_highest_voice") and feat.get("coverage", 0) > 0.3 and feat.get("notes_per_beat", 0) > 0.5:
-        candidates.append(("melody", 0.70))
-    if feat.get("coverage", 0) > 0.4 and feat.get("ioi_std_dev_beats", 1.0) < 0.2 and feat.get("pitch_range_semitones", 128) <= 7:
-        candidates.append(("rhythm", 0.65))
-    if feat.get("pitch_rank_normalized", 0) > 0.5 and feat.get("coverage", 0) > 0.2 and not feat.get("is_highest_voice") and feat.get("notes_per_beat", 0) > 0.3:
-        candidates.append(("countermelody", 0.55))
-    if feat.get("polyphonic_fraction", 0) > 0.3 and feat.get("max_simultaneous", 0) >= 3:
-        candidates.append(("primary_harmony", 0.60))
-    if feat.get("polyphonic_fraction", 0) > 0.1 and feat.get("max_simultaneous", 0) >= 2 and feat.get("coverage", 1.0) < 0.5:
-        candidates.append(("secondary_harmony", 0.50))
-    if feat.get("coverage", 1.0) < 0.15 and feat.get("notes_per_beat", 1.0) < 0.3:
-        candidates.append(("padding", 0.45))
-
-    if not candidates:
-        candidates.append(("harmonic_fill", 0.35))
-
-    candidates.sort(key=lambda x: -x[1])
-    role, confidence = candidates[0]
-    alternatives = [{"role": r, "confidence": c} for r, c in candidates[1:]]
-
-    return role, confidence, alternatives
