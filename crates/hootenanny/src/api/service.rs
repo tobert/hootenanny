@@ -4,7 +4,7 @@ use crate::gpu_monitor::GpuMonitor;
 use crate::job_system::JobStore;
 use crate::sessions::SessionManager;
 use crate::streams::{SlicingEngine, StreamManager};
-use crate::zmq::{AnticipatoryClient, Audioldm2Client, BeatthisClient, BroadcastPublisher, ClapClient, DemucsClient, GardenManager, MusicgenClient, OrpheusClient, RaveClient, VibeweaverClient, YueClient};
+use crate::zmq::{AnticipatoryClient, Audioldm2Client, BeatthisClient, BroadcastPublisher, ClapClient, DemucsClient, GardenManager, MidiRoleClient, MusicgenClient, OrpheusClient, RaveClient, VibeweaverClient, YueClient};
 use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use std::sync::{Arc, RwLock};
 
@@ -37,6 +37,8 @@ pub struct EventDualityServer {
     pub demucs: Option<Arc<DemucsClient>>,
     /// Optional YuE client for text-to-song generation
     pub yue: Option<Arc<YueClient>>,
+    /// Optional MIDI role classifier client for voice role classification
+    pub midi_role: Option<Arc<MidiRoleClient>>,
     /// Optional broadcast publisher for SSE events via holler
     pub broadcaster: Option<BroadcastPublisher>,
     /// Stream manager for capture sessions
@@ -84,6 +86,7 @@ impl EventDualityServer {
             anticipatory: None,
             demucs: None,
             yue: None,
+            midi_role: None,
             broadcaster: None,
             stream_manager: None,
             session_manager: None,
@@ -155,6 +158,12 @@ impl EventDualityServer {
     /// Create with YuE client for text-to-song generation
     pub fn with_yue(mut self, yue: Option<Arc<YueClient>>) -> Self {
         self.yue = yue;
+        self
+    }
+
+    /// Create with MIDI role classifier client
+    pub fn with_midi_role(mut self, midi_role: Option<Arc<MidiRoleClient>>) -> Self {
+        self.midi_role = midi_role;
         self
     }
 

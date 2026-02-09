@@ -142,6 +142,7 @@ pub enum ToolResponse {
     MidiAnalyzed(MidiAnalyzedResponse),
     MidiVoiceSeparated(MidiVoiceSeparatedResponse),
     MidiStemsExported(MidiStemsExportedResponse),
+    MidiVoicesClassified(MidiVoicesClassifiedResponse),
 
     // === RAVE Audio Codec ===
     RaveEncoded(RaveEncodedResponse),
@@ -1181,6 +1182,33 @@ pub struct MidiStemsExportedResponse {
     pub stems: Vec<MidiStemInfo>,
     pub combined_artifact_id: Option<String>,
     pub combined_hash: Option<String>,
+    pub summary: String,
+}
+
+// =============================================================================
+// MIDI Voice Role Classification Responses
+// =============================================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VoiceRoleCandidate {
+    pub role: String,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VoiceRoleInfo {
+    pub voice_index: u16,
+    pub role: String,
+    pub confidence: f64,
+    pub method: String,
+    pub alternative_roles: Vec<VoiceRoleCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiVoicesClassifiedResponse {
+    pub classifications: Vec<VoiceRoleInfo>,
+    pub features_json: String,
+    pub method: String,
     pub summary: String,
 }
 

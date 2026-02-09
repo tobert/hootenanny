@@ -270,6 +270,8 @@ pub enum ToolRequest {
     MidiVoiceSeparate(MidiVoiceSeparateRequest),
     /// Export separated voices as individual MIDI files
     MidiStemsExport(MidiStemsExportRequest),
+    /// Classify separated MIDI voices by musical role
+    MidiClassifyVoices(MidiClassifyVoicesRequest),
 
     // ==========================================================================
     // RAVE Audio Codec
@@ -308,7 +310,7 @@ impl ToolRequest {
             Self::CasInspect(_) => ToolTiming::AsyncShort,
             Self::MidiInfo(_) => ToolTiming::AsyncShort,
             Self::AudioInfo(_) => ToolTiming::AsyncShort,
-            Self::MidiAnalyze(_) | Self::MidiVoiceSeparate(_) | Self::MidiStemsExport(_) => ToolTiming::AsyncShort,
+            Self::MidiAnalyze(_) | Self::MidiVoiceSeparate(_) | Self::MidiStemsExport(_) | Self::MidiClassifyVoices(_) => ToolTiming::AsyncShort,
             Self::Ping | Self::ListResources => ToolTiming::AsyncShort,
             Self::ReadResource(_) => ToolTiming::AsyncShort,
             Self::CasStore(_) | Self::CasGet(_) | Self::CasUploadFile(_) | Self::CasStats => ToolTiming::AsyncShort,
@@ -463,6 +465,7 @@ impl ToolRequest {
             Self::MidiAnalyze(_) => "midi_analyze",
             Self::MidiVoiceSeparate(_) => "midi_voice_separate",
             Self::MidiStemsExport(_) => "midi_stems_export",
+            Self::MidiClassifyVoices(_) => "midi_classify_voices",
             Self::RaveEncode(_) => "rave_encode",
             Self::RaveDecode(_) => "rave_decode",
             Self::RaveReconstruct(_) => "rave_reconstruct",
@@ -1352,4 +1355,16 @@ pub struct MidiStemsExportRequest {
     pub creator: Option<String>,
     pub parent_id: Option<String>,
     pub variation_set_id: Option<String>,
+}
+
+/// Classify separated MIDI voices by musical role (melody, bass, etc.)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiClassifyVoicesRequest {
+    pub artifact_id: Option<String>,
+    pub hash: Option<String>,
+    /// JSON-serialized voice separation results from midi_voice_separate
+    pub voice_data: String,
+    /// Try the Python ML classification service (falls back to heuristic)
+    #[serde(default)]
+    pub use_ml: bool,
 }

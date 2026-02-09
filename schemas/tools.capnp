@@ -150,6 +150,7 @@ struct ToolRequest {
     midiAnalyze @95 :MidiAnalyze;
     midiVoiceSeparate @96 :MidiVoiceSeparate;
     midiStemsExport @97 :MidiStemsExport;
+    midiClassifyVoices @98 :MidiClassifyVoices;
   }
 }
 
@@ -592,4 +593,11 @@ struct MidiStemsExport {
   voiceData @2 :Text;              # JSON-serialized voice separation results
   combinedFile @3 :Bool;           # Also export combined multi-track file
   metadata @4 :Common.ArtifactMetadata;
+}
+
+struct MidiClassifyVoices {
+  artifactId @0 :Text;
+  hash @1 :Text;
+  voiceData @2 :Text;              # JSON from midi_voice_separate
+  useMl @3 :Bool;                  # Try Python ML service
 }

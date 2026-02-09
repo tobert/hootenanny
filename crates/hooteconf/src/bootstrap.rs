@@ -73,6 +73,10 @@ pub struct ConnectionsConfig {
     /// YuE ZMQ endpoint (text-to-song generation via hootpy)
     #[serde(default = "ConnectionsConfig::default_yue")]
     pub yue: String,
+
+    /// MIDI role classifier ZMQ endpoint (voice role classification via hootpy)
+    #[serde(default = "ConnectionsConfig::default_midi_role")]
+    pub midi_role: String,
 }
 
 impl ConnectionsConfig {
@@ -139,6 +143,10 @@ impl ConnectionsConfig {
     fn default_yue() -> String {
         format!("ipc://{}/yue.sock", Self::socket_dir())
     }
+
+    fn default_midi_role() -> String {
+        format!("ipc://{}/midi-role.sock", Self::socket_dir())
+    }
 }
 
 impl Default for ConnectionsConfig {
@@ -156,6 +164,7 @@ impl Default for ConnectionsConfig {
             anticipatory: Self::default_anticipatory(),
             demucs: Self::default_demucs(),
             yue: Self::default_yue(),
+            midi_role: Self::default_midi_role(),
         }
     }
 }

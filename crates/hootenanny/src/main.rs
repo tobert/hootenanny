@@ -318,6 +318,16 @@ async fn main() -> Result<()> {
         None
     };
 
+    // --- MIDI Role Classifier Connection (lazy - ZMQ connects when peer available) ---
+    let midi_role_endpoint = &config.bootstrap.connections.midi_role;
+    let midi_role_client: Option<Arc<zmq::MidiRoleClient>> = if !midi_role_endpoint.is_empty() {
+        info!("🎼 Connecting to MIDI role classifier at {}...", midi_role_endpoint);
+        let midi_role_config = zmq::midi_role_config(midi_role_endpoint, zmq::DEFAULT_MIDI_ROLE_TIMEOUT_MS);
+        Some(zmq::MidiRoleClient::new(midi_role_config).await)
+    } else {
+        None
+    };
+
     let http_addr = config.infra.bind.http_bind_addr();
     let zmq_router = &config.infra.bind.zmq_router;
     let zmq_pub = &config.infra.bind.zmq_pub;
@@ -394,6 +404,7 @@ async fn main() -> Result<()> {
         .with_anticipatory(anticipatory_client.clone())
         .with_demucs(demucs_client.clone())
         .with_yue(yue_client.clone())
+        .with_midi_role(midi_role_client.clone())
         .with_broadcaster(Some(broadcast_publisher))
         .with_stream_manager(Some(stream_manager.clone()))
         .with_session_manager(Some(session_manager.clone()))

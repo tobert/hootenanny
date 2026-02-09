@@ -4709,6 +4709,203 @@ impl EventDualityServer {
         }
     }
 
+    /// Classify separated MIDI voices by musical role.
+    pub async fn midi_classify_voices_typed(
+        &self,
+        request: hooteproto::request::MidiClassifyVoicesRequest,
+    ) -> Result<hooteproto::responses::MidiVoicesClassifiedResponse, ToolError> {
+        // Deserialize voice data from midi_voice_separate
+        let voices: Vec<midi_analysis::SeparatedVoice> = serde_json::from_str(&request.voice_data)
+            .map_err(|e| ToolError::validation("voice_data", format!("Invalid voice JSON: {}", e)))?;
+
+        if voices.is_empty() {
+            return Ok(hooteproto::responses::MidiVoicesClassifiedResponse {
+                classifications: vec![],
+                features_json: "[]".to_string(),
+                method: "heuristic".to_string(),
+                summary: "No voices to classify".to_string(),
+            });
+        }
+
+        // Get MIDI context and track profiles if artifact/hash provided
+        let (context, track_profiles) = if request.artifact_id.is_some() || request.hash.is_some() {
+            let hash = self.resolve_midi_hash(&request.artifact_id, &request.hash)?;
+            let midi_bytes = self.read_cas_bytes(&hash).await?;
+            let analysis = midi_analysis::analyze(&midi_bytes, None)
+                .map_err(|e| ToolError::internal(format!("MIDI analysis failed: {}", e)))?;
+            (analysis.context, analysis.tracks)
+        } else {
+            // Infer minimal context from the voice data itself
+            let max_tick = voices
+                .iter()
+                .flat_map(|v| v.notes.iter())
+                .map(|n| n.offset_tick)
+                .max()
+                .unwrap_or(1920);
+            let context = midi_analysis::MidiFileContext {
+                ppq: 480,
+                format: 1,
+                track_count: 1,
+                tempo_changes: vec![],
+                time_signatures: vec![],
+                total_ticks: max_tick,
+            };
+            (context, vec![])
+        };
+
+        // Extract features for all voices (needed for both heuristic and ML)
+        let features: Vec<midi_analysis::VoiceFeatures> = voices
+            .iter()
+            .map(|v| midi_analysis::extract_features(v, &voices, &context, &track_profiles))
+            .collect();
+
+        let features_json = serde_json::to_string(&features)
+            .unwrap_or_else(|_| "[]".to_string());
+
+        // Try ML classification if requested
+        let (classifications, method_used) = if request.use_ml {
+            match self.try_ml_classification(&features).await {
+                Ok(ml_results) => (ml_results, "machine_learning"),
+                Err(e) => {
+                    tracing::warn!("ML classification unavailable ({:?}), falling back to heuristic", e);
+                    let c = midi_analysis::classify_voices(&voices, &context, &track_profiles);
+                    (c, "heuristic")
+                }
+            }
+        } else {
+            let c = midi_analysis::classify_voices(&voices, &context, &track_profiles);
+            (c, "heuristic")
+        };
+
+        // Convert to response types
+        let response_classifications: Vec<hooteproto::responses::VoiceRoleInfo> = classifications
+            .iter()
+            .map(|c| hooteproto::responses::VoiceRoleInfo {
+                voice_index: c.voice_index as u16,
+                role: c.role.to_string(),
+                confidence: c.confidence,
+                method: match c.method {
+                    midi_analysis::ClassificationMethod::Heuristic => "heuristic".to_string(),
+                    midi_analysis::ClassificationMethod::MachineLearning => "machine_learning".to_string(),
+                },
+                alternative_roles: c
+                    .alternative_roles
+                    .iter()
+                    .map(|(role, conf)| hooteproto::responses::VoiceRoleCandidate {
+                        role: role.to_string(),
+                        confidence: *conf,
+                    })
+                    .collect(),
+            })
+            .collect();
+
+        // Build summary
+        let role_summary: Vec<String> = classifications
+            .iter()
+            .map(|c| format!("v{}: {} ({:.0}%)", c.voice_index, c.role, c.confidence * 100.0))
+            .collect();
+
+        let summary = format!(
+            "Classified {} voices ({}): {}",
+            classifications.len(),
+            method_used,
+            role_summary.join(", "),
+        );
+
+        Ok(hooteproto::responses::MidiVoicesClassifiedResponse {
+            classifications: response_classifications,
+            features_json,
+            method: method_used.to_string(),
+            summary,
+        })
+    }
+
+    /// Try to classify voices using the Python ML service via ZMQ.
+    ///
+    /// Sends extracted feature vectors to the service, which runs a trained
+    /// sklearn model. Returns Err if the service is not configured or unreachable.
+    async fn try_ml_classification(
+        &self,
+        features: &[midi_analysis::VoiceFeatures],
+    ) -> Result<Vec<midi_analysis::VoiceClassification>, ToolError> {
+        use hooteproto::Payload;
+
+        let midi_role = self.midi_role.as_ref().ok_or_else(|| {
+            ToolError::service(
+                "midi_role",
+                "not_connected",
+                "MIDI role classifier service not configured",
+            )
+        })?;
+
+        // Send features as a MidiClassifyVoices request with feature JSON
+        let features_json = serde_json::to_string(features)
+            .map_err(|e| ToolError::internal(format!("Failed to serialize features: {}", e)))?;
+
+        let request = hooteproto::request::MidiClassifyVoicesRequest {
+            artifact_id: None,
+            hash: None,
+            voice_data: features_json,
+            use_ml: true,
+        };
+
+        let payload = Payload::ToolRequest(hooteproto::ToolRequest::MidiClassifyVoices(request));
+
+        let response = midi_role
+            .request(payload)
+            .await
+            .map_err(|e| ToolError::service("midi_role", "request_failed", e.to_string()))?;
+
+        match response {
+            Payload::TypedResponse(envelope) => match envelope {
+                hooteproto::ResponseEnvelope::Success { response } => match response {
+                    hooteproto::responses::ToolResponse::MidiVoicesClassified(resp) => {
+                        // Convert response back to VoiceClassification structs
+                        let classifications = resp.classifications.into_iter()
+                            .enumerate()
+                            .map(|(i, info)| {
+                                let role = parse_voice_role(&info.role);
+                                let alternative_roles = info.alternative_roles.into_iter()
+                                    .map(|alt| (parse_voice_role(&alt.role), alt.confidence))
+                                    .collect();
+                                midi_analysis::VoiceClassification {
+                                    voice_index: info.voice_index as usize,
+                                    role,
+                                    confidence: info.confidence,
+                                    method: midi_analysis::ClassificationMethod::MachineLearning,
+                                    features: features.get(i).cloned().unwrap_or_else(|| {
+                                        // Fallback: this shouldn't happen but be defensive
+                                        features[0].clone()
+                                    }),
+                                    alternative_roles,
+                                }
+                            })
+                            .collect();
+                        Ok(classifications)
+                    }
+                    _ => Err(ToolError::service(
+                        "midi_role",
+                        "unexpected_response",
+                        "Expected MidiVoicesClassified response type",
+                    )),
+                },
+                hooteproto::ResponseEnvelope::Error(err) => {
+                    Err(ToolError::service("midi_role", "classify_failed", err.message()))
+                }
+                _ => Err(ToolError::service(
+                    "midi_role",
+                    "unexpected_envelope",
+                    "Expected Success or Error envelope",
+                )),
+            },
+            _ => Err(ToolError::service(
+                "midi_role",
+                "unexpected_payload",
+                "Expected TypedResponse payload",
+            )),
+        }
+    }
+
     /// Helper: read bytes from CAS by hash
     async fn read_cas_bytes(&self, hash: &str) -> Result<Vec<u8>, ToolError> {
         let content = self.cas_lookup(hash)?;
@@ -4717,6 +4914,22 @@ impl EventDualityServer {
         tokio::fs::read(&path)
             .await
             .map_err(|e| ToolError::internal(format!("Failed to read file: {}", e)))
+    }
+}
+
+/// Parse a voice role string from the ML service response into a VoiceRole enum.
+fn parse_voice_role(s: &str) -> midi_analysis::VoiceRole {
+    match s {
+        "melody" => midi_analysis::VoiceRole::Melody,
+        "bass" => midi_analysis::VoiceRole::Bass,
+        "countermelody" => midi_analysis::VoiceRole::Countermelody,
+        "harmonic_fill" => midi_analysis::VoiceRole::HarmonicFill,
+        "percussion" => midi_analysis::VoiceRole::Percussion,
+        "rhythm" => midi_analysis::VoiceRole::Rhythm,
+        "primary_harmony" => midi_analysis::VoiceRole::PrimaryHarmony,
+        "secondary_harmony" => midi_analysis::VoiceRole::SecondaryHarmony,
+        "padding" => midi_analysis::VoiceRole::Padding,
+        _ => midi_analysis::VoiceRole::HarmonicFill,
     }
 }
 

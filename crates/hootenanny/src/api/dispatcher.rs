@@ -832,6 +832,12 @@ impl TypedDispatcher {
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
+            ToolRequest::MidiClassifyVoices(req) => {
+                match self.server.midi_classify_voices_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::MidiVoicesClassified(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
         }
     }
 

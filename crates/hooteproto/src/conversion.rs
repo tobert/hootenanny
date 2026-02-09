@@ -559,6 +559,13 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             m.set_combined_file(req.combined_file);
             set_artifact_metadata(&mut m.init_metadata(), &req.variation_set_id, &req.parent_id, &req.tags, &req.creator);
         }
+        ToolRequest::MidiClassifyVoices(req) => {
+            let mut m = builder.reborrow().init_midi_classify_voices();
+            m.set_artifact_id(req.artifact_id.as_deref().unwrap_or(""));
+            m.set_hash(req.hash.as_deref().unwrap_or(""));
+            m.set_voice_data(&req.voice_data);
+            m.set_use_ml(req.use_ml);
+        }
 
         ToolRequest::ArtifactUpload(req) => {
             let mut a = builder.reborrow().init_artifact_upload();
@@ -1491,6 +1498,15 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
                 creator: capnp_optional_string(meta.get_creator()?),
                 parent_id: capnp_optional_string(meta.get_parent_id()?),
                 variation_set_id: capnp_optional_string(meta.get_variation_set_id()?),
+            }))
+        }
+        tools_capnp::tool_request::MidiClassifyVoices(m) => {
+            let m = m?;
+            Ok(ToolRequest::MidiClassifyVoices(MidiClassifyVoicesRequest {
+                artifact_id: capnp_optional_string(m.get_artifact_id()?),
+                hash: capnp_optional_string(m.get_hash()?),
+                voice_data: m.get_voice_data()?.to_str()?.to_string(),
+                use_ml: m.get_use_ml(),
             }))
         }
 
@@ -2427,6 +2443,30 @@ fn response_to_capnp_tool_response(
             }
             b.set_combined_artifact_id(r.combined_artifact_id.as_deref().unwrap_or(""));
             b.set_combined_hash(r.combined_hash.as_deref().unwrap_or(""));
+            b.set_summary(&r.summary);
+        }
+        ToolResponse::MidiVoicesClassified(r) => {
+            let mut b = builder.reborrow().init_midi_voices_classified();
+            {
+                let mut list = b.reborrow().init_classifications(r.classifications.len() as u32);
+                for (i, cls) in r.classifications.iter().enumerate() {
+                    let mut info = list.reborrow().get(i as u32);
+                    info.set_voice_index(cls.voice_index);
+                    info.set_role(&cls.role);
+                    info.set_confidence(cls.confidence);
+                    info.set_method(&cls.method);
+                    {
+                        let mut alts = info.reborrow().init_alternative_roles(cls.alternative_roles.len() as u32);
+                        for (j, alt) in cls.alternative_roles.iter().enumerate() {
+                            let mut cand = alts.reborrow().get(j as u32);
+                            cand.set_role(&alt.role);
+                            cand.set_confidence(alt.confidence);
+                        }
+                    }
+                }
+            }
+            b.set_features_json(&r.features_json);
+            b.set_method(&r.method);
             b.set_summary(&r.summary);
         }
 
@@ -3597,6 +3637,36 @@ fn capnp_tool_response_to_response(
                 stems,
                 combined_artifact_id: capnp_optional_string(r.get_combined_artifact_id()?),
                 combined_hash: capnp_optional_string(r.get_combined_hash()?),
+                summary: r.get_summary()?.to_string()?,
+            }))
+        }
+        Which::MidiVoicesClassified(r) => {
+            let r = r?;
+            let classifications = r.get_classifications()?
+                .iter()
+                .map(|info| {
+                    let alternative_roles = info.get_alternative_roles()?
+                        .iter()
+                        .map(|cand| {
+                            Ok(VoiceRoleCandidate {
+                                role: cand.get_role()?.to_string()?,
+                                confidence: cand.get_confidence(),
+                            })
+                        })
+                        .collect::<capnp::Result<Vec<_>>>()?;
+                    Ok(VoiceRoleInfo {
+                        voice_index: info.get_voice_index(),
+                        role: info.get_role()?.to_string()?,
+                        confidence: info.get_confidence(),
+                        method: info.get_method()?.to_string()?,
+                        alternative_roles,
+                    })
+                })
+                .collect::<capnp::Result<Vec<_>>>()?;
+            Ok(ToolResponse::MidiVoicesClassified(MidiVoicesClassifiedResponse {
+                classifications,
+                features_json: r.get_features_json()?.to_string()?,
+                method: r.get_method()?.to_string()?,
                 summary: r.get_summary()?.to_string()?,
             }))
         }

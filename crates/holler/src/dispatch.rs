@@ -451,6 +451,15 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
                 variation_set_id: p.variation_set_id,
             })))
         }
+        "midi_classify_voices" => {
+            let p: MidiClassifyVoicesArgs = serde_json::from_value(args).context("Invalid midi_classify_voices arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::MidiClassifyVoices(request::MidiClassifyVoicesRequest {
+                artifact_id: p.artifact_id,
+                hash: p.hash,
+                voice_data: p.voice_data,
+                use_ml: p.use_ml.unwrap_or(false),
+            })))
+        }
 
         // === Artifact Tools ===
         "artifact_upload" => {
@@ -1219,4 +1228,12 @@ struct MidiStemsExportArgs {
     creator: Option<String>,
     parent_id: Option<String>,
     variation_set_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MidiClassifyVoicesArgs {
+    artifact_id: Option<String>,
+    hash: Option<String>,
+    voice_data: String,
+    use_ml: Option<bool>,
 }

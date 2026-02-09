@@ -723,6 +723,21 @@ pub fn list_tools() -> Vec<ToolInfo> {
             }),
         },
 
+        ToolInfo {
+            name: "midi_classify_voices".to_string(),
+            description: "Classify separated MIDI voices by musical role (melody, bass, countermelody, harmony, percussion, etc.) using heuristic analysis or optional ML".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "required": ["voice_data"],
+                "properties": {
+                    "artifact_id": { "type": "string", "description": "Artifact ID of original MIDI (for context/features)" },
+                    "hash": { "type": "string", "description": "CAS hash of original MIDI (alternative to artifact_id)" },
+                    "voice_data": { "type": "string", "description": "JSON voice separation data from midi_voice_separate" },
+                    "use_ml": { "type": "boolean", "description": "Try ML classification service (falls back to heuristic, default false)" }
+                }
+            }),
+        },
+
         // ==========================================================================
         // RAVE Tools (Realtime Audio Variational autoEncoder)
         // ==========================================================================

@@ -142,6 +142,7 @@ struct ToolResponse {
     midiAnalyzed @73 :MidiAnalyzedResponse;
     midiVoiceSeparated @74 :MidiVoiceSeparatedResponse;
     midiStemsExported @75 :MidiStemsExportedResponse;
+    midiVoicesClassified @76 :MidiVoicesClassifiedResponse;
   }
 }
 
@@ -941,5 +942,27 @@ struct MidiStemsExportedResponse {
   stems @0 :List(MidiStemInfo);
   combinedArtifactId @1 :Text;     # Empty if not requested
   combinedHash @2 :Text;
+  summary @3 :Text;
+}
+
+# === MIDI Voice Role Classification ===
+
+struct VoiceRoleCandidate {
+  role @0 :Text;
+  confidence @1 :Float64;
+}
+
+struct VoiceRoleInfo {
+  voiceIndex @0 :UInt16;
+  role @1 :Text;
+  confidence @2 :Float64;
+  method @3 :Text;
+  alternativeRoles @4 :List(VoiceRoleCandidate);
+}
+
+struct MidiVoicesClassifiedResponse {
+  classifications @0 :List(VoiceRoleInfo);
+  featuresJson @1 :Text;            # Feature vectors for training data
+  method @2 :Text;                  # "heuristic" or "machine_learning"
   summary @3 :Text;
 }
