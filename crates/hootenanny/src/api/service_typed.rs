@@ -4453,6 +4453,48 @@ impl EventDualityServer {
         })
     }
 
+    /// Unified music understanding: key, meter, chords, voices.
+    pub async fn midi_understand_typed(
+        &self,
+        request: hooteproto::request::MidiUnderstandRequest,
+    ) -> Result<hooteproto::responses::MidiUnderstoodResponse, ToolError> {
+        let engine = self.understanding_engine.as_ref().ok_or_else(|| {
+            ToolError::internal("Music understanding engine not configured")
+        })?;
+
+        let hash = self.resolve_midi_hash(&request.artifact_id, &request.hash)?;
+
+        // Engine handles caching internally (cache hit returns immediately)
+        let understanding = engine
+            .understand(&hash)
+            .map_err(|e| ToolError::internal(format!("Music understanding failed: {}", e)))?;
+
+        let understanding_json = serde_json::to_string(&understanding)
+            .map_err(|e| ToolError::internal(format!("Failed to serialize understanding: {}", e)))?;
+
+        let key_str = format!("{} {}", understanding.key.root, understanding.key.mode);
+        let meter_str = format!("{}/{}", understanding.meter.numerator, understanding.meter.denominator);
+        let summary = format!(
+            "Key: {} (confidence {:.2}), Meter: {} (confidence {:.2}), {} chords, {} voices",
+            key_str,
+            understanding.key.confidence,
+            meter_str,
+            understanding.meter.confidence,
+            understanding.chords.len(),
+            understanding.voices.len(),
+        );
+
+        Ok(hooteproto::responses::MidiUnderstoodResponse {
+            understanding_json,
+            key: key_str,
+            meter: meter_str,
+            chord_count: understanding.chords.len() as u16,
+            voice_count: understanding.voices.len() as u16,
+            cached: false, // engine tracks this internally
+            summary,
+        })
+    }
+
     /// Separate merged voices in MIDI tracks into individual musical lines.
     pub async fn midi_voice_separate_typed(
         &self,

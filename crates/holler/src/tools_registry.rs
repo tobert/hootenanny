@@ -738,6 +738,18 @@ pub fn list_tools() -> Vec<ToolInfo> {
             }),
         },
 
+        ToolInfo {
+            name: "midi_understand".to_string(),
+            description: "Unified music understanding: detects key, meter, chords, and classifies voices from a MIDI file. Results are cached by content hash.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "artifact_id": { "type": "string", "description": "Artifact ID of MIDI file" },
+                    "hash": { "type": "string", "description": "CAS hash of MIDI file (alternative to artifact_id)" }
+                }
+            }),
+        },
+
         // ==========================================================================
         // RAVE Tools (Realtime Audio Variational autoEncoder)
         // ==========================================================================

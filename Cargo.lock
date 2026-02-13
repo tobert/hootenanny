@@ -1338,6 +1338,7 @@ dependencies = [
  "hound",
  "midi-analysis",
  "midly",
+ "music-understand",
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
@@ -1993,6 +1994,24 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "music-understand"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cas",
+ "chrono",
+ "midi-analysis",
+ "midly",
+ "pretty_assertions",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tracing",
 ]
 
 [[package]]

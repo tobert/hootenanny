@@ -114,6 +114,23 @@ async fn main() -> Result<()> {
     ));
     info!("   Artifact store at: {}", artifact_store_path.display());
 
+    // --- Music Understanding Engine ---
+    info!("🎵 Initializing Music Understanding Engine...");
+    let understanding_cache_path = state_dir.join("music_understanding.sqlite");
+    let understanding_engine = match music_understand::MusicUnderstandingEngine::new(
+        cas_dir.clone(),
+        understanding_cache_path.clone(),
+    ) {
+        Ok(engine) => {
+            info!("   Understanding cache at: {}", understanding_cache_path.display());
+            Some(Arc::new(engine))
+        }
+        Err(e) => {
+            tracing::warn!("   Failed to initialize understanding engine: {}", e);
+            None
+        }
+    };
+
     // --- Job Store Initialization ---
     info!("⚙️  Initializing shared Job Store...");
     let job_store = Arc::new(job_system::JobStore::new());
@@ -405,6 +422,7 @@ async fn main() -> Result<()> {
         .with_demucs(demucs_client.clone())
         .with_yue(yue_client.clone())
         .with_midi_role(midi_role_client.clone())
+        .with_understanding_engine(understanding_engine.clone())
         .with_broadcaster(Some(broadcast_publisher))
         .with_stream_manager(Some(stream_manager.clone()))
         .with_session_manager(Some(session_manager.clone()))

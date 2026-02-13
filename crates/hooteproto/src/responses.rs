@@ -143,6 +143,7 @@ pub enum ToolResponse {
     MidiVoiceSeparated(MidiVoiceSeparatedResponse),
     MidiStemsExported(MidiStemsExportedResponse),
     MidiVoicesClassified(MidiVoicesClassifiedResponse),
+    MidiUnderstood(MidiUnderstoodResponse),
 
     // === RAVE Audio Codec ===
     RaveEncoded(RaveEncodedResponse),
@@ -1209,6 +1210,21 @@ pub struct MidiVoicesClassifiedResponse {
     pub classifications: Vec<VoiceRoleInfo>,
     pub features_json: String,
     pub method: String,
+    pub summary: String,
+}
+
+/// Unified music understanding response
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiUnderstoodResponse {
+    /// Full MusicUnderstanding serialized as JSON
+    pub understanding_json: String,
+    /// Human-readable key, e.g. "Db minor"
+    pub key: String,
+    /// Human-readable meter, e.g. "3/4"
+    pub meter: String,
+    pub chord_count: u16,
+    pub voice_count: u16,
+    pub cached: bool,
     pub summary: String,
 }
 

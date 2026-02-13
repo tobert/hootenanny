@@ -838,6 +838,12 @@ impl TypedDispatcher {
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
+            ToolRequest::MidiUnderstand(req) => {
+                match self.server.midi_understand_typed(req).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::MidiUnderstood(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
         }
     }
 

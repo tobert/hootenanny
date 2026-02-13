@@ -49,6 +49,8 @@ pub struct EventDualityServer {
     pub slicing_engine: Option<Arc<SlicingEngine>>,
     /// Event buffer for cursor-based polling
     pub event_buffer: Option<EventBufferHandle>,
+    /// Music understanding engine (key, meter, chords, voices)
+    pub understanding_engine: Option<Arc<music_understand::MusicUnderstandingEngine>>,
 }
 
 impl std::fmt::Debug for EventDualityServer {
@@ -92,6 +94,7 @@ impl EventDualityServer {
             session_manager: None,
             slicing_engine: None,
             event_buffer: None,
+            understanding_engine: None,
         }
     }
 
@@ -194,6 +197,12 @@ impl EventDualityServer {
     /// Create with event buffer for cursor-based polling
     pub fn with_event_buffer(mut self, event_buffer: Option<EventBufferHandle>) -> Self {
         self.event_buffer = event_buffer;
+        self
+    }
+
+    /// Create with music understanding engine
+    pub fn with_understanding_engine(mut self, engine: Option<Arc<music_understand::MusicUnderstandingEngine>>) -> Self {
+        self.understanding_engine = engine;
         self
     }
 

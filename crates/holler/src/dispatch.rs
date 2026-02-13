@@ -461,6 +461,14 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             })))
         }
 
+        "midi_understand" => {
+            let p: MidiUnderstandArgs = serde_json::from_value(args).context("Invalid midi_understand arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::MidiUnderstand(request::MidiUnderstandRequest {
+                artifact_id: p.artifact_id,
+                hash: p.hash,
+            })))
+        }
+
         // === Artifact Tools ===
         "artifact_upload" => {
             let p: ArtifactUploadArgs = serde_json::from_value(args).context("Invalid artifact_upload arguments")?;
@@ -1236,4 +1244,10 @@ struct MidiClassifyVoicesArgs {
     hash: Option<String>,
     voice_data: String,
     use_ml: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MidiUnderstandArgs {
+    artifact_id: Option<String>,
+    hash: Option<String>,
 }

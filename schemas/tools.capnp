@@ -151,6 +151,7 @@ struct ToolRequest {
     midiVoiceSeparate @96 :MidiVoiceSeparate;
     midiStemsExport @97 :MidiStemsExport;
     midiClassifyVoices @98 :MidiClassifyVoices;
+    midiUnderstand @99 :MidiUnderstand;
   }
 }
 
@@ -600,4 +601,9 @@ struct MidiClassifyVoices {
   hash @1 :Text;
   voiceData @2 :Text;              # JSON from midi_voice_separate
   useMl @3 :Bool;                  # Try Python ML service
+}
+
+struct MidiUnderstand {
+  artifactId @0 :Text;
+  hash @1 :Text;
 }

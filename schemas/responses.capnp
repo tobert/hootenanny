@@ -143,6 +143,7 @@ struct ToolResponse {
     midiVoiceSeparated @74 :MidiVoiceSeparatedResponse;
     midiStemsExported @75 :MidiStemsExportedResponse;
     midiVoicesClassified @76 :MidiVoicesClassifiedResponse;
+    midiUnderstood @77 :MidiUnderstoodResponse;
   }
 }
 
@@ -965,4 +966,14 @@ struct MidiVoicesClassifiedResponse {
   featuresJson @1 :Text;            # Feature vectors for training data
   method @2 :Text;                  # "heuristic" or "machine_learning"
   summary @3 :Text;
+}
+
+struct MidiUnderstoodResponse {
+  understandingJson @0 :Text;       # Full MusicUnderstanding as JSON
+  key @1 :Text;                     # e.g. "Db minor"
+  meter @2 :Text;                   # e.g. "3/4"
+  chordCount @3 :UInt16;
+  voiceCount @4 :UInt16;
+  cached @5 :Bool;
+  summary @6 :Text;
 }

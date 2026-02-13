@@ -566,6 +566,11 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             m.set_voice_data(&req.voice_data);
             m.set_use_ml(req.use_ml);
         }
+        ToolRequest::MidiUnderstand(req) => {
+            let mut m = builder.reborrow().init_midi_understand();
+            m.set_artifact_id(req.artifact_id.as_deref().unwrap_or(""));
+            m.set_hash(req.hash.as_deref().unwrap_or(""));
+        }
 
         ToolRequest::ArtifactUpload(req) => {
             let mut a = builder.reborrow().init_artifact_upload();
@@ -1507,6 +1512,13 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
                 hash: capnp_optional_string(m.get_hash()?),
                 voice_data: m.get_voice_data()?.to_str()?.to_string(),
                 use_ml: m.get_use_ml(),
+            }))
+        }
+        tools_capnp::tool_request::MidiUnderstand(m) => {
+            let m = m?;
+            Ok(ToolRequest::MidiUnderstand(MidiUnderstandRequest {
+                artifact_id: capnp_optional_string(m.get_artifact_id()?),
+                hash: capnp_optional_string(m.get_hash()?),
             }))
         }
 
@@ -2467,6 +2479,17 @@ fn response_to_capnp_tool_response(
             }
             b.set_features_json(&r.features_json);
             b.set_method(&r.method);
+            b.set_summary(&r.summary);
+        }
+
+        ToolResponse::MidiUnderstood(r) => {
+            let mut b = builder.reborrow().init_midi_understood();
+            b.set_understanding_json(&r.understanding_json);
+            b.set_key(&r.key);
+            b.set_meter(&r.meter);
+            b.set_chord_count(r.chord_count);
+            b.set_voice_count(r.voice_count);
+            b.set_cached(r.cached);
             b.set_summary(&r.summary);
         }
 
@@ -3667,6 +3690,18 @@ fn capnp_tool_response_to_response(
                 classifications,
                 features_json: r.get_features_json()?.to_string()?,
                 method: r.get_method()?.to_string()?,
+                summary: r.get_summary()?.to_string()?,
+            }))
+        }
+        Which::MidiUnderstood(r) => {
+            let r = r?;
+            Ok(ToolResponse::MidiUnderstood(MidiUnderstoodResponse {
+                understanding_json: r.get_understanding_json()?.to_string()?,
+                key: r.get_key()?.to_string()?,
+                meter: r.get_meter()?.to_string()?,
+                chord_count: r.get_chord_count(),
+                voice_count: r.get_voice_count(),
+                cached: r.get_cached(),
                 summary: r.get_summary()?.to_string()?,
             }))
         }
