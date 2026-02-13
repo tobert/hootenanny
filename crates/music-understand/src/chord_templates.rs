@@ -77,16 +77,6 @@ fn to_interval_mask(pitch_classes: &[u8], root: u8) -> u16 {
     mask
 }
 
-/// Count set bits in a u16.
-fn popcount(mut x: u16) -> usize {
-    let mut count = 0;
-    while x != 0 {
-        count += x & 1;
-        x >>= 1;
-    }
-    count as usize
-}
-
 /// Match a set of pitch classes against chord templates.
 ///
 /// Returns `(root_pc, symbol, quality, confidence)` or `None` if no match.
@@ -111,13 +101,13 @@ pub fn match_chord(
 
         for template in TEMPLATES {
             // How many template tones are present?
-            let matched = popcount(intervals & template.intervals);
+            let matched = (intervals & template.intervals).count_ones() as usize;
             if matched < template.size.min(2) {
                 continue;
             }
 
             // Score: fraction of template matched, penalize extra notes
-            let extra = popcount(intervals & !template.intervals);
+            let extra = (intervals & !template.intervals).count_ones() as usize;
             let mut score = matched as f64 / template.size as f64 - extra as f64 * 0.1;
 
             // Bonus for bass hint matching root

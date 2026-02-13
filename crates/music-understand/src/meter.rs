@@ -43,7 +43,7 @@ pub fn detect_meter(notes: &[TimedNote], context: &MidiFileContext) -> MeterDete
 
     // Quantize to 16th-note resolution, deduplicate, sort
     let mut quantized: Vec<f64> = onsets.iter().map(|o| (o * 4.0).round() / 4.0).collect();
-    quantized.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    quantized.sort_by(|a, b| a.total_cmp(b));
     quantized.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
 
     if quantized.len() < 4 {
