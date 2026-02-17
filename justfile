@@ -4,6 +4,11 @@
 default:
     @just --list
 
+# All Python model service unit names (startup order)
+python_services := "hoot-midi-role-classifier hoot-beatthis hoot-clap hoot-orpheus hoot-anticipatory hoot-rave hoot-demucs hoot-audioldm2 hoot-musicgen hoot-yue"
+rust_services := "hootenanny holler vibeweaver chaosgarden"
+all_services := rust_services + " " + python_services
+
 # Build all crates in release mode
 build:
     cargo build --release
@@ -44,36 +49,46 @@ restart-chaosgarden: build
     @sleep 1
     systemctl --user status chaosgarden --no-pager | head -8
 
-# Restart all services (hootenanny, holler, vibeweaver, chaosgarden, rave)
+# Restart all services (Rust + Python)
 restart-all: build
-    systemctl --user restart hootenanny holler vibeweaver chaosgarden rave
+    systemctl --user restart {{all_services}}
+    @sleep 2
+    @just status
+
+# Restart just the Python model services
+restart-python:
+    systemctl --user restart {{python_services}}
     @sleep 2
     @just status
 
 # Show status of all services
 status:
     @echo "=== Hootenanny Services ==="
-    @systemctl --user is-active hootenanny holler vibeweaver chaosgarden rave 2>/dev/null | paste - - - - - || true
-    @systemctl --user list-units hootenanny.service holler.service vibeweaver.service chaosgarden.service rave.service --no-pager --no-legend
+    @systemctl --user list-units {{rust_services}} {{python_services}} --no-pager --no-legend --all
+
+# Generate systemd units for Python model services
+gen-systemd:
+    python3 bin/gen-systemd.py --all -o systemd/generated/
 
 # Install systemd unit files (symlinks to repo)
-install-services:
+install-services: gen-systemd
     mkdir -p ~/.config/systemd/user
     ln -sf $(pwd)/systemd/hootenanny.service ~/.config/systemd/user/
     ln -sf $(pwd)/systemd/holler.service ~/.config/systemd/user/
     ln -sf $(pwd)/systemd/vibeweaver.service ~/.config/systemd/user/
     ln -sf $(pwd)/systemd/chaosgarden.service ~/.config/systemd/user/
-    ln -sf $(pwd)/systemd/rave.service ~/.config/systemd/user/
+    ln -sf $(pwd)/systemd/generated/hootenanny-models.slice ~/.config/systemd/user/
+    for f in $(pwd)/systemd/generated/hoot-*.service; do ln -sf "$f" ~/.config/systemd/user/; done
     systemctl --user daemon-reload
-    @echo "Unit files installed. Enable with: systemctl --user enable hootenanny holler vibeweaver chaosgarden rave"
+    @echo "Unit files installed. Enable with: just enable-services"
 
 # Enable all services to start on login
 enable-services:
-    systemctl --user enable hootenanny holler vibeweaver chaosgarden rave
+    systemctl --user enable {{all_services}}
 
 # Disable all services
 disable-services:
-    systemctl --user disable hootenanny holler vibeweaver chaosgarden rave
+    systemctl --user disable {{all_services}}
 
 # Generate Python client from running hootenanny
 # Requires: hootenanny running, uv installed
@@ -135,10 +150,6 @@ download-rave-models:
 # List installed RAVE models
 list-rave-models:
     @ls -lh ~/.hootenanny/models/rave/*.ts 2>/dev/null || echo "No RAVE models installed. Run: just download-rave-models"
-
-# Run RAVE service (foreground)
-run-rave:
-    cd python/services/rave && uv run python -m rave.service
 
 # === Python Services ===
 

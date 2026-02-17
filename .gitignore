@@ -20,6 +20,9 @@ python/__pycache__/
 
 # Generated Python client (regenerate with: cd python && uv run hooteproto-gen)
 python/hooteproto/client.py
+
+# Generated systemd units
+systemd/generated/
 python/hooteproto/types.py
 python/hooteproto/tools.json
 python/hooteproto/.schema_hash
