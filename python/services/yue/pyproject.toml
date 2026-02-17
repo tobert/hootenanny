@@ -16,3 +16,4 @@ package = false
 
 [tool.uv.sources]
 hootpy = { workspace = true }
+yue-inference = { git = "https://github.com/tobert/yue-inference" }
