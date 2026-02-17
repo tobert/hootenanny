@@ -240,29 +240,31 @@ fn format_mode(mode: &Mode) -> &'static str {
     }
 }
 
+fn format_note(output: &mut String, note: &Note) {
+    if let Some(acc) = note.accidental {
+        output.push_str(format_accidental(&acc));
+    }
+    let note_name = format_note_name(&note.pitch);
+    if note.octave >= 1 {
+        output.push_str(&note_name.to_lowercase());
+        for _ in 1..note.octave {
+            output.push('\'');
+        }
+    } else {
+        output.push_str(note_name);
+        for _ in note.octave..0 {
+            output.push(',');
+        }
+    }
+    format_duration(output, &note.duration);
+    if note.tie {
+        output.push('-');
+    }
+}
+
 fn format_element(output: &mut String, element: &Element) {
     match element {
-        Element::Note(note) => {
-            if let Some(acc) = note.accidental {
-                output.push_str(format_accidental(&acc));
-            }
-            let note_name = format_note_name(&note.pitch);
-            if note.octave >= 1 {
-                output.push_str(&note_name.to_lowercase());
-                for _ in 1..note.octave {
-                    output.push('\'');
-                }
-            } else {
-                output.push_str(note_name);
-                for _ in note.octave..0 {
-                    output.push(',');
-                }
-            }
-            format_duration(output, &note.duration);
-            if note.tie {
-                output.push('-');
-            }
-        }
+        Element::Note(note) => format_note(output, note),
         Element::Chord(chord) => {
             output.push('[');
             for note in &chord.notes {
@@ -317,7 +319,32 @@ fn format_element(output: &mut String, element: &Element) {
         },
         Element::LineBreak => output.push('\n'),
         Element::Space => output.push(' '),
-        _ => {}
+        Element::ChordSymbol(symbol) => {
+            output.push('"');
+            output.push_str(symbol);
+            output.push('"');
+        }
+        Element::Tuplet(tuplet) => {
+            output.push_str(&format!("({}:{}", tuplet.p, tuplet.q));
+            for elem in &tuplet.elements {
+                format_element(output, elem);
+            }
+        }
+        Element::GraceNotes { acciaccatura, notes } => {
+            if *acciaccatura {
+                output.push_str("{/");
+            } else {
+                output.push('{');
+            }
+            for note in notes {
+                format_note(output, note);
+            }
+            output.push('}');
+        }
+        Element::InlineField(_)
+        | Element::Decoration(_)
+        | Element::Slur(_)
+        | Element::VoiceSwitch(_) => {}
     }
 }
 
@@ -392,4 +419,43 @@ pub fn semitones_to_key(source: &Key, target: &str) -> Result<i8, String> {
     };
 
     Ok(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn round_trip(abc: &str) -> String {
+        let result = parse(abc);
+        assert!(!result.has_errors(), "parse errors: {:?}", result.errors().collect::<Vec<_>>());
+        to_abc(&result.value)
+    }
+
+    #[test]
+    fn tuplet_round_trip_preserves_ratio() {
+        let abc = "X:1\nT:Test\nM:4/4\nL:1/8\nK:C\n(3:2ABC\n";
+        let output = round_trip(abc);
+        assert!(output.contains("(3:2"), "expected tuplet (3:2, got: {}", output);
+    }
+
+    #[test]
+    fn grace_notes_round_trip() {
+        let abc = "X:1\nT:Test\nM:4/4\nL:1/8\nK:C\n{AB}c\n";
+        let output = round_trip(abc);
+        assert!(output.contains("{AB}"), "expected grace notes {{AB}}, got: {}", output);
+    }
+
+    #[test]
+    fn acciaccatura_round_trip() {
+        let abc = "X:1\nT:Test\nM:4/4\nL:1/8\nK:C\n{/A}B\n";
+        let output = round_trip(abc);
+        assert!(output.contains("{/A}"), "expected acciaccatura {{/A}}, got: {}", output);
+    }
+
+    #[test]
+    fn chord_symbol_round_trip() {
+        let abc = "X:1\nT:Test\nM:4/4\nL:1/8\nK:C\n\"Am\"A2\n";
+        let output = round_trip(abc);
+        assert!(output.contains("\"Am\""), "expected chord symbol \"Am\", got: {}", output);
+    }
 }
