@@ -59,7 +59,7 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            bind_address: "tcp://0.0.0.0:5575".to_string(),
+            bind_address: "tcp://127.0.0.1:5575".to_string(),
             worker_name: "vibeweaver".to_string(),
             broadcast_endpoint: None,
         }

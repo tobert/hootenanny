@@ -108,7 +108,7 @@ impl GardenEndpoints {
         let zmq_router = &config.infra.services.chaosgarden.zmq_router;
 
         // TCP mode if zmq_router is explicitly configured (not the placeholder default)
-        if zmq_router.starts_with("tcp://") && zmq_router != "tcp://0.0.0.0:5585" {
+        if zmq_router.starts_with("tcp://") && zmq_router != "tcp://127.0.0.1:5585" {
             if let Some(port_str) = zmq_router.rsplit(':').next() {
                 if let Ok(port) = port_str.parse::<u16>() {
                     return Ok(Self::tcp("localhost", port));

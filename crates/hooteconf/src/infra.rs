@@ -76,12 +76,12 @@ pub struct BindConfig {
     pub http_port: u16,
 
     /// ZMQ ROUTER address for hooteproto gateway.
-    /// Default: tcp://0.0.0.0:5580
+    /// Default: tcp://127.0.0.1:5580
     #[serde(default = "BindConfig::default_zmq_router")]
     pub zmq_router: String,
 
     /// ZMQ PUB address for event broadcasts.
-    /// Default: tcp://0.0.0.0:5581
+    /// Default: tcp://127.0.0.1:5581
     #[serde(default = "BindConfig::default_zmq_pub")]
     pub zmq_pub: String,
 
@@ -100,11 +100,11 @@ impl BindConfig {
     }
 
     fn default_zmq_router() -> String {
-        "tcp://0.0.0.0:5580".to_string()
+        "tcp://127.0.0.1:5580".to_string()
     }
 
     fn default_zmq_pub() -> String {
-        "tcp://0.0.0.0:5581".to_string()
+        "tcp://127.0.0.1:5581".to_string()
     }
 
     /// Get the full HTTP bind address as "ip:port".
@@ -317,7 +317,7 @@ impl Default for GatewayConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VibeweaverConfig {
     /// ZMQ ROUTER address to bind (for receiving requests).
-    /// Default: tcp://0.0.0.0:5575
+    /// Default: tcp://127.0.0.1:5575
     #[serde(default = "VibeweaverConfig::default_zmq_router")]
     pub zmq_router: String,
 
@@ -339,7 +339,7 @@ pub struct VibeweaverConfig {
 
 impl VibeweaverConfig {
     fn default_zmq_router() -> String {
-        "tcp://0.0.0.0:5575".to_string()
+        "tcp://127.0.0.1:5575".to_string()
     }
 
     fn default_hootenanny() -> String {
@@ -370,7 +370,7 @@ impl Default for VibeweaverConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChaosgardenConfig {
     /// ZMQ ROUTER address to bind (for receiving requests).
-    /// Default: tcp://0.0.0.0:5585
+    /// Default: tcp://127.0.0.1:5585
     #[serde(default = "ChaosgardenConfig::default_zmq_router")]
     pub zmq_router: String,
 
@@ -382,7 +382,7 @@ pub struct ChaosgardenConfig {
 
 impl ChaosgardenConfig {
     fn default_zmq_router() -> String {
-        "tcp://0.0.0.0:5585".to_string()
+        "tcp://127.0.0.1:5585".to_string()
     }
 
     fn default_ipc_socket() -> String {
@@ -476,8 +476,8 @@ mod tests {
         let bind = BindConfig::default();
         assert_eq!(bind.http_address, "127.0.0.1");
         assert_eq!(bind.http_port, 8082);
-        assert_eq!(bind.zmq_router, "tcp://0.0.0.0:5580");
-        assert_eq!(bind.zmq_pub, "tcp://0.0.0.0:5581");
+        assert_eq!(bind.zmq_router, "tcp://127.0.0.1:5580");
+        assert_eq!(bind.zmq_pub, "tcp://127.0.0.1:5581");
         assert_eq!(bind.http_bind_addr(), "127.0.0.1:8082");
     }
 

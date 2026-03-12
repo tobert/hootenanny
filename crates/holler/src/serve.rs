@@ -201,7 +201,7 @@ pub async fn run(config: ServeConfig) -> Result<()> {
         .merge(health_router);
 
     // Bind and serve
-    let addr = format!("0.0.0.0:{}", config.port);
+    let addr = format!("127.0.0.1:{}", config.port);
 
     // Check if TLS is enabled
     let tls_enabled = config

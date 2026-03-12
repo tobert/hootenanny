@@ -61,6 +61,11 @@ restart-python:
     @sleep 2
     @just status
 
+# Stop all services immediately
+stop-all:
+    systemctl --user stop {{all_services}}
+    @echo "All hootenanny services stopped."
+
 # Show status of all services
 status:
     @echo "=== Hootenanny Services ==="
