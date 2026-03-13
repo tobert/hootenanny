@@ -145,6 +145,9 @@ pub enum ToolResponse {
     MidiVoicesClassified(MidiVoicesClassifiedResponse),
     MidiUnderstood(MidiUnderstoodResponse),
 
+    // === Audio Device Discovery ===
+    AudioDevices(AudioDevicesResponse),
+
     // === RAVE Audio Codec ===
     RaveEncoded(RaveEncodedResponse),
     RaveDecoded(RaveDecodedResponse),
@@ -1226,6 +1229,32 @@ pub struct MidiUnderstoodResponse {
     pub voice_count: u16,
     pub cached: bool,
     pub summary: String,
+}
+
+// =============================================================================
+// Audio Device Discovery
+// =============================================================================
+
+/// Information about a single PipeWire audio device
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioDeviceInfo {
+    /// PipeWire node ID
+    pub id: u32,
+    /// Device name (node.description or node.name)
+    pub name: String,
+    /// Media class ("Audio/Source" or "Audio/Sink")
+    pub media_class: String,
+    /// Nickname (node.nick, e.g. "USB Audio CODEC")
+    pub nick: Option<String>,
+}
+
+/// Available audio devices grouped by type
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioDevicesResponse {
+    /// Capture devices (Audio/Source)
+    pub sources: Vec<AudioDeviceInfo>,
+    /// Playback devices (Audio/Sink)
+    pub sinks: Vec<AudioDeviceInfo>,
 }
 
 // =============================================================================

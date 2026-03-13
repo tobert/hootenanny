@@ -127,6 +127,7 @@ struct AudioStatus {
 struct AttachInput {
   deviceName @0 :Text;
   sampleRate @1 :UInt32;
+  monitor @2 :Bool;
 }
 
 struct InputStatus {

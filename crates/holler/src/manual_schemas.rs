@@ -292,6 +292,10 @@ pub fn garden_attach_input_request() -> Value {
             "sample_rate": {
                 "type": ["integer", "null"],
                 "description": "Sample rate in Hz (should match output). Default: 48000"
+            },
+            "monitor": {
+                "type": ["boolean", "null"],
+                "description": "Enable monitor passthrough immediately (avoids buffer overruns). Default: false"
             }
         }
     })

@@ -571,6 +571,7 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             m.set_artifact_id(req.artifact_id.as_deref().unwrap_or(""));
             m.set_hash(req.hash.as_deref().unwrap_or(""));
         }
+        ToolRequest::AudioListDevices => builder.reborrow().set_audio_list_devices(()),
 
         ToolRequest::ArtifactUpload(req) => {
             let mut a = builder.reborrow().init_artifact_upload();
@@ -729,6 +730,7 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             let mut a = builder.reborrow().init_garden_attach_input();
             a.set_device_name(req.device_name.as_deref().unwrap_or(""));
             a.set_sample_rate(req.sample_rate.unwrap_or(0));
+            a.set_monitor(req.monitor.unwrap_or(false));
         }
         ToolRequest::GardenDetachInput => builder.reborrow().set_garden_detach_input(()),
         ToolRequest::GardenInputStatus => builder.reborrow().set_garden_input_status(()),
@@ -1235,6 +1237,7 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
             Ok(ToolRequest::GardenAttachInput(GardenAttachInputRequest {
                 device_name: capnp_optional_string(a.get_device_name()?),
                 sample_rate: if a.get_sample_rate() == 0 { None } else { Some(a.get_sample_rate()) },
+                monitor: if a.get_monitor() { Some(true) } else { None },
             }))
         }
         tools_capnp::tool_request::GardenDetachInput(()) => Ok(ToolRequest::GardenDetachInput),
@@ -1521,6 +1524,7 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
                 hash: capnp_optional_string(m.get_hash()?),
             }))
         }
+        tools_capnp::tool_request::AudioListDevices(()) => Ok(ToolRequest::AudioListDevices),
 
         _ => Err(capnp::Error::failed("Unsupported ToolRequest variant".to_string())),
     }
@@ -2491,6 +2495,30 @@ fn response_to_capnp_tool_response(
             b.set_voice_count(r.voice_count);
             b.set_cached(r.cached);
             b.set_summary(&r.summary);
+        }
+
+        ToolResponse::AudioDevices(r) => {
+            let mut b = builder.reborrow().init_audio_devices();
+            {
+                let mut sources = b.reborrow().init_sources(r.sources.len() as u32);
+                for (i, dev) in r.sources.iter().enumerate() {
+                    let mut d = sources.reborrow().get(i as u32);
+                    d.set_id(dev.id);
+                    d.set_name(&dev.name);
+                    d.set_media_class(&dev.media_class);
+                    d.set_nick(dev.nick.as_deref().unwrap_or(""));
+                }
+            }
+            {
+                let mut sinks = b.reborrow().init_sinks(r.sinks.len() as u32);
+                for (i, dev) in r.sinks.iter().enumerate() {
+                    let mut d = sinks.reborrow().get(i as u32);
+                    d.set_id(dev.id);
+                    d.set_name(&dev.name);
+                    d.set_media_class(&dev.media_class);
+                    d.set_nick(dev.nick.as_deref().unwrap_or(""));
+                }
+            }
         }
 
         // MidiPlayStarted and MidiPlayStopped are returned via JSON from garden shell
@@ -3703,6 +3731,23 @@ fn capnp_tool_response_to_response(
                 voice_count: r.get_voice_count(),
                 cached: r.get_cached(),
                 summary: r.get_summary()?.to_string()?,
+            }))
+        }
+        Which::AudioDevices(r) => {
+            let r = r?;
+            let sources = r.get_sources()?;
+            let sinks = r.get_sinks()?;
+            let parse_device = |d: responses_capnp::audio_device_info::Reader<'_>| -> capnp::Result<AudioDeviceInfo> {
+                Ok(AudioDeviceInfo {
+                    id: d.get_id(),
+                    name: d.get_name()?.to_string()?,
+                    media_class: d.get_media_class()?.to_string()?,
+                    nick: capnp_optional_string(d.get_nick()?),
+                })
+            };
+            Ok(ToolResponse::AudioDevices(AudioDevicesResponse {
+                sources: sources.iter().map(parse_device).collect::<capnp::Result<Vec<_>>>()?,
+                sinks: sinks.iter().map(parse_device).collect::<capnp::Result<Vec<_>>>()?,
             }))
         }
     }

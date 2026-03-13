@@ -152,6 +152,9 @@ struct ToolRequest {
     midiStemsExport @97 :MidiStemsExport;
     midiClassifyVoices @98 :MidiClassifyVoices;
     midiUnderstand @99 :MidiUnderstand;
+
+    # === Audio Device Discovery ===
+    audioListDevices @100 :Void;
   }
 }
 

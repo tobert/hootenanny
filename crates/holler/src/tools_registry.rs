@@ -282,6 +282,11 @@ pub fn list_tools() -> Vec<ToolInfo> {
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
         },
         ToolInfo {
+            name: "audio_list_devices".to_string(),
+            description: "List available audio devices (PipeWire sources and sinks)".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        ToolInfo {
             name: "audio_capture".to_string(),
             description: "Capture audio from monitor input to CAS".to_string(),
             input_schema: serde_json::json!({
@@ -389,14 +394,19 @@ pub fn list_tools() -> Vec<ToolInfo> {
                         "properties": {
                             "type": {
                                 "type": "string",
-                                "description": "Message type: note_on, note_off, control_change, program_change, pitch_bend"
+                                "description": "Message type: note_on, note_off, control_change, program_change, pitch_bend, raw, start, stop, continue, timing_clock"
                             },
                             "channel": {"type": "integer"},
                             "pitch": {"type": "integer"},
                             "velocity": {"type": "integer"},
                             "controller": {"type": "integer"},
                             "value": {"type": "integer"},
-                            "program": {"type": "integer"}
+                            "program": {"type": "integer"},
+                            "bytes": {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                                "description": "Raw MIDI bytes (for raw type)"
+                            }
                         }
                     }
                 }

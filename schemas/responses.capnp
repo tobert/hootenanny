@@ -144,6 +144,9 @@ struct ToolResponse {
     midiStemsExported @75 :MidiStemsExportedResponse;
     midiVoicesClassified @76 :MidiVoicesClassifiedResponse;
     midiUnderstood @77 :MidiUnderstoodResponse;
+
+    # Audio Device Discovery
+    audioDevices @78 :AudioDevicesResponse;
   }
 }
 
@@ -976,4 +979,20 @@ struct MidiUnderstoodResponse {
   voiceCount @4 :UInt16;
   cached @5 :Bool;
   summary @6 :Text;
+}
+
+# =============================================================================
+# Audio Device Discovery
+# =============================================================================
+
+struct AudioDeviceInfo {
+  id @0 :UInt32;                    # PipeWire node ID
+  name @1 :Text;                    # node.description or node.name
+  mediaClass @2 :Text;             # "Audio/Source", "Audio/Sink"
+  nick @3 :Text;                    # node.nick (e.g. "USB Audio CODEC")
+}
+
+struct AudioDevicesResponse {
+  sources @0 :List(AudioDeviceInfo);  # Capture devices
+  sinks @1 :List(AudioDeviceInfo);    # Playback devices
 }

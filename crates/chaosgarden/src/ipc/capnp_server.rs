@@ -406,11 +406,15 @@ impl CapnpGardenServer {
             ToolRequest::GardenAttachInput(r) => ShellRequest::AttachInput {
                 device_name: r.device_name,
                 sample_rate: r.sample_rate,
+                monitor: r.monitor,
             },
             ToolRequest::GardenDetachInput => ShellRequest::DetachInput,
             ToolRequest::GardenInputStatus => ShellRequest::GetInputStatus,
             ToolRequest::GardenSetMonitor(r) => ShellRequest::SetMonitor { enabled: r.enabled, gain: r.gain },
             ToolRequest::GardenGetAudioSnapshot(r) => ShellRequest::GetAudioSnapshot { frames: r.frames },
+
+            // Audio device discovery
+            ToolRequest::AudioListDevices => ShellRequest::ListAudioDevices,
 
             // MIDI I/O (direct ALSA)
             ToolRequest::MidiListPorts => ShellRequest::ListMidiPorts,
@@ -598,6 +602,15 @@ fn shell_reply_to_payload(reply: hooteproto::garden::ShellReply) -> Payload {
         }
         ShellReply::PendingApprovals { approvals: _ } => {
             Payload::TypedResponse(ResponseEnvelope::ack("pending_approvals".to_string()))
+        }
+        // Audio device discovery
+        ShellReply::AudioDevices { sources, sinks } => {
+            Payload::TypedResponse(ResponseEnvelope::success(
+                ToolResponse::AudioDevices(hooteproto::responses::AudioDevicesResponse {
+                    sources,
+                    sinks,
+                })
+            ))
         }
         // MIDI I/O responses
         ShellReply::MidiPorts { inputs, outputs } => {

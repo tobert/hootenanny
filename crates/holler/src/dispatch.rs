@@ -119,8 +119,10 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             Ok(Payload::ToolRequest(ToolRequest::GardenAttachInput(request::GardenAttachInputRequest {
                 device_name: p.device_name,
                 sample_rate: p.sample_rate,
+                monitor: p.monitor,
             })))
         }
+        "audio_list_devices" => Ok(Payload::ToolRequest(ToolRequest::AudioListDevices)),
         "audio_input_detach" => Ok(Payload::ToolRequest(ToolRequest::GardenDetachInput)),
         "audio_input_status" => Ok(Payload::ToolRequest(ToolRequest::GardenInputStatus)),
         "audio_monitor" => {
@@ -769,6 +771,7 @@ struct GardenAttachAudioArgs {
 struct GardenAttachInputArgs {
     device_name: Option<String>,
     sample_rate: Option<u32>,
+    monitor: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]

@@ -276,6 +276,12 @@ pub enum ToolRequest {
     MidiUnderstand(MidiUnderstandRequest),
 
     // ==========================================================================
+    // Audio Device Discovery
+    // ==========================================================================
+    /// List available audio devices (sources and sinks)
+    AudioListDevices,
+
+    // ==========================================================================
     // RAVE Audio Codec
     // ==========================================================================
     /// Encode audio to latent codes
@@ -326,6 +332,7 @@ impl ToolRequest {
             Self::GardenAttachAudio(_) | Self::GardenDetachAudio | Self::GardenAudioStatus => ToolTiming::AsyncShort,
             Self::GardenAttachInput(_) | Self::GardenDetachInput | Self::GardenInputStatus => ToolTiming::AsyncShort,
             Self::GardenSetMonitor(_) | Self::GardenGetAudioSnapshot(_) => ToolTiming::AsyncShort,
+            Self::AudioListDevices => ToolTiming::AsyncShort,
             Self::MidiListPorts | Self::MidiStatus => ToolTiming::AsyncShort,
             Self::MidiInputAttach(_) | Self::MidiInputDetach(_) => ToolTiming::AsyncShort,
             Self::MidiOutputAttach(_) | Self::MidiOutputDetach(_) => ToolTiming::AsyncShort,
@@ -427,6 +434,7 @@ impl ToolRequest {
             Self::GardenInputStatus => "garden_input_status",
             Self::GardenSetMonitor(_) => "garden_set_monitor",
             Self::GardenGetAudioSnapshot(_) => "garden_get_audio_snapshot",
+            Self::AudioListDevices => "audio_list_devices",
             Self::MidiListPorts => "midi_list_ports",
             Self::MidiInputAttach(_) => "midi_input_attach",
             Self::MidiInputDetach(_) => "midi_input_detach",
@@ -1009,6 +1017,7 @@ pub struct GardenAttachAudioRequest {
 pub struct GardenAttachInputRequest {
     pub device_name: Option<String>,
     pub sample_rate: Option<u32>,
+    pub monitor: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

@@ -607,6 +607,12 @@ impl TypedDispatcher {
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
+            ToolRequest::AudioListDevices => {
+                match self.server.audio_list_devices_typed().await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::AudioDevices(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
             ToolRequest::GardenSetMonitor(req) => {
                 match self.server.garden_set_monitor_typed(req).await {
                     Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenMonitorStatus(resp)),

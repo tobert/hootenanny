@@ -778,9 +778,16 @@ impl GardenDaemon {
         &self,
         device_name: Option<String>,
         sample_rate: Option<u32>,
+        monitor: Option<bool>,
     ) -> Result<(), String> {
         // Detach any existing input first
         self.detach_input();
+
+        // Enable monitor passthrough BEFORE starting capture to avoid buffer overruns
+        if monitor == Some(true) {
+            self.monitor_channel.enabled.store(true, Ordering::Relaxed);
+            info!("Monitor passthrough pre-enabled (avoiding buffer overruns)");
+        }
 
         let sample_rate = sample_rate.unwrap_or(48000);
         let channels = 2u32; // Stereo
@@ -914,6 +921,104 @@ impl GardenDaemon {
             format: 0, // 0 = f32le
             samples,
         }
+    }
+
+    // === Audio Device Discovery ===
+
+    /// List available PipeWire audio devices using pw-dump
+    fn list_audio_devices(&self) -> ShellReply {
+        use hooteproto::responses::AudioDeviceInfo;
+
+        let output = match std::process::Command::new("pw-dump")
+            .arg("--no-colors")
+            .output()
+        {
+            Ok(output) => output,
+            Err(e) => {
+                return ShellReply::Error {
+                    error: format!("Failed to run pw-dump: {}", e),
+                    traceback: None,
+                };
+            }
+        };
+
+        if !output.status.success() {
+            return ShellReply::Error {
+                error: format!(
+                    "pw-dump failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+                traceback: None,
+            };
+        }
+
+        let json: serde_json::Value = match serde_json::from_slice(&output.stdout) {
+            Ok(v) => v,
+            Err(e) => {
+                return ShellReply::Error {
+                    error: format!("Failed to parse pw-dump output: {}", e),
+                    traceback: None,
+                };
+            }
+        };
+
+        let mut sources = Vec::new();
+        let mut sinks = Vec::new();
+
+        if let Some(nodes) = json.as_array() {
+            for node in nodes {
+                let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if node_type != "PipeWire:Interface:Node" {
+                    continue;
+                }
+
+                let info = match node.get("info") {
+                    Some(info) => info,
+                    None => continue,
+                };
+                let props = match info.get("props") {
+                    Some(props) => props,
+                    None => continue,
+                };
+
+                let media_class = props
+                    .get("media.class")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                if media_class != "Audio/Source" && media_class != "Audio/Sink" {
+                    continue;
+                }
+
+                let id = node.get("id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let name = props
+                    .get("node.description")
+                    .or_else(|| props.get("node.name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let nick = props
+                    .get("node.nick")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                let device = AudioDeviceInfo {
+                    id,
+                    name,
+                    media_class: media_class.to_string(),
+                    nick,
+                };
+
+                match media_class {
+                    "Audio/Source" => sources.push(device),
+                    "Audio/Sink" => sinks.push(device),
+                    _ => {}
+                }
+            }
+        }
+
+        info!("Found {} audio sources, {} sinks", sources.len(), sinks.len());
+        ShellReply::AudioDevices { sources, sinks }
     }
 
     // === MIDI I/O Methods ===
@@ -1823,8 +1928,8 @@ impl GardenDaemon {
             ShellRequest::GetAudioStatus => self.get_audio_status(),
 
             // Monitor input attachment
-            ShellRequest::AttachInput { device_name, sample_rate } => {
-                match self.attach_input(device_name, sample_rate) {
+            ShellRequest::AttachInput { device_name, sample_rate, monitor } => {
+                match self.attach_input(device_name, sample_rate, monitor) {
                     Ok(()) => ShellReply::Ok {
                         result: serde_json::json!({"status": "attached"}),
                     },
@@ -1909,6 +2014,11 @@ impl GardenDaemon {
             }
             ShellRequest::RaveStreamStatus { stream_id } => {
                 self.get_rave_streaming_status(stream_id)
+            }
+
+            // Audio device discovery
+            ShellRequest::ListAudioDevices => {
+                self.list_audio_devices()
             }
 
             // MIDI I/O (direct ALSA)

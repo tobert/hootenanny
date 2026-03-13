@@ -506,6 +506,8 @@ pub enum ShellRequest {
         device_name: Option<String>,
         /// Sample rate (None = 48000, should match output)
         sample_rate: Option<u32>,
+        /// Enable monitor passthrough immediately (avoids buffer overruns)
+        monitor: Option<bool>,
     },
     DetachInput,
     GetInputStatus,
@@ -547,6 +549,8 @@ pub enum ShellRequest {
     },
 
     // MIDI I/O (direct ALSA for low latency)
+    /// List available audio devices (PipeWire sources and sinks)
+    ListAudioDevices,
     /// List available MIDI ports
     ListMidiPorts,
     /// Attach a MIDI input by port name pattern
@@ -748,6 +752,11 @@ pub enum ShellReply {
         /// RT callback stats: samples read from RAVE output ring
         #[serde(default)]
         rt_rave_samples_read: u64,
+    },
+    /// Available audio devices
+    AudioDevices {
+        sources: Vec<crate::responses::AudioDeviceInfo>,
+        sinks: Vec<crate::responses::AudioDeviceInfo>,
     },
     /// Available MIDI ports
     MidiPorts {

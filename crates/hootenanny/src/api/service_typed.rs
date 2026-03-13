@@ -3758,6 +3758,27 @@ impl EventDualityServer {
         }
     }
 
+    /// List available PipeWire audio devices.
+    pub async fn audio_list_devices_typed(
+        &self,
+    ) -> Result<hooteproto::responses::AudioDevicesResponse, ToolError> {
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation(
+                "not_connected",
+                "Not connected to chaosgarden",
+            )
+        })?;
+
+        use hooteproto::request::ToolRequest;
+        use hooteproto::responses::ToolResponse;
+
+        match manager.tool_request(ToolRequest::AudioListDevices).await {
+            Ok(ToolResponse::AudioDevices(response)) => Ok(response),
+            Ok(other) => Err(ToolError::internal(format!("Unexpected response: {:?}", other))),
+            Err(e) => Err(ToolError::internal(format!("List audio devices failed: {}", e))),
+        }
+    }
+
     /// Detach PipeWire audio input.
     pub async fn garden_detach_input_typed(
         &self,
