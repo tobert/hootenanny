@@ -550,11 +550,27 @@ impl EventDualityServer {
             ToolError::validation("not_connected", "Not connected to chaosgarden")
         })?;
 
+        // Resolve artifact IDs to CAS content hashes.
+        // Chaosgarden only understands CAS hashes, not artifact IDs.
+        let resolved_content_id = if content_id.starts_with("artifact_") {
+            let store = self
+                .artifact_store
+                .read()
+                .map_err(|_| ToolError::internal("Lock poisoned"))?;
+            let artifact = store
+                .get(content_id)
+                .map_err(|e| ToolError::internal(format!("Failed to look up artifact: {}", e)))?
+                .ok_or_else(|| ToolError::not_found("artifact", content_id))?;
+            artifact.content_hash.as_str().to_string()
+        } else {
+            content_id.to_string()
+        };
+
         let request = ToolRequest::GardenCreateRegion(GardenCreateRegionRequest {
             position,
             duration,
             behavior_type: behavior_type.to_string(),
-            content_id: content_id.to_string(),
+            content_id: resolved_content_id,
         });
 
         match manager.tool_request(request).await {

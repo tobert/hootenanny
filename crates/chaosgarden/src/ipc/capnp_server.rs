@@ -395,6 +395,7 @@ impl CapnpGardenServer {
                     },
                 }
             }
+            ToolRequest::GardenClearRegions => ShellRequest::ClearRegions,
             ToolRequest::GardenEmergencyPause => ShellRequest::Pause,
             ToolRequest::GardenAttachAudio(r) => ShellRequest::AttachAudio {
                 device_name: r.device_name,

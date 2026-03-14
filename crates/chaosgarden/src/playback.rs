@@ -203,6 +203,8 @@ pub struct PlaybackEngine {
     active_regions: HashSet<Uuid>,
     /// Active audio nodes for PlayContent::Audio regions
     active_audio_nodes: HashMap<Uuid, ActiveAudioRegion>,
+    /// Regions that failed to preload — don't retry every tick
+    failed_preload: HashSet<Uuid>,
     /// Active MIDI regions for PlayContent::Midi regions
     active_midi_regions: HashMap<Uuid, ActiveMidiRegion>,
     /// Content resolver for loading audio (optional - if None, regions are skipped)
@@ -225,6 +227,7 @@ impl PlaybackEngine {
             active_crossfades: Vec::new(),
             active_regions: HashSet::new(),
             active_audio_nodes: HashMap::new(),
+            failed_preload: HashSet::new(),
             active_midi_regions: HashMap::new(),
             content_resolver: None,
             region_buffer: AudioBuffer::new(buffer_size, 2),
@@ -249,6 +252,7 @@ impl PlaybackEngine {
             active_crossfades: Vec::new(),
             active_regions: HashSet::new(),
             active_audio_nodes: HashMap::new(),
+            failed_preload: HashSet::new(),
             active_midi_regions: HashMap::new(),
             content_resolver: Some(resolver),
             region_buffer: AudioBuffer::new(buffer_size, 2),
@@ -496,8 +500,10 @@ impl PlaybackEngine {
                     continue;
                 }
 
-                // Skip already active
-                if self.active_audio_nodes.contains_key(&region.id) {
+                // Skip already active or previously failed
+                if self.active_audio_nodes.contains_key(&region.id)
+                    || self.failed_preload.contains(&region.id)
+                {
                     continue;
                 }
 
@@ -542,8 +548,9 @@ impl PlaybackEngine {
                                 region_id = %region.id,
                                 content_hash = %content_hash,
                                 error = %e,
-                                "failed to preload audio region"
+                                "failed to preload audio region (will not retry)"
                             );
+                            self.failed_preload.insert(region.id);
                         }
                     }
                 }
@@ -633,6 +640,8 @@ impl PlaybackEngine {
     pub fn stop(&mut self) {
         self.transport = TransportState::Stopped;
         self.position = PlaybackPosition::default();
+        // Clear failed preload cache so regions can be retried
+        self.failed_preload.clear();
         // Reset MIDI region playheads (but don't remove them)
         for active in self.active_midi_regions.values_mut() {
             active.playhead_tick = 0;
@@ -1276,5 +1285,47 @@ mod tests {
             .fold(0.0f32, f32::max);
         assert!(max_amp < 0.35, "output amplitude should be reduced by gain");
         assert!(max_amp > 0.15, "output should still have signal");
+    }
+
+    #[test]
+    fn test_failed_preload_not_retried() {
+        let resolver = Arc::new(MemoryResolver::new());
+        // No audio stored — preload will fail
+
+        let tempo_map = Arc::new(TempoMap::default());
+        let mut engine =
+            PlaybackEngine::with_resolver(48000, 256, tempo_map.clone(), resolver);
+
+        let mut graph = Graph::new();
+        graph.add_node(Box::new(SilentNode::new("master")));
+        let mut compiled = CompiledGraph::compile(&mut graph, 256).unwrap();
+
+        let region = Region::play_audio(Beat(0.0), Beat(4.0), "nonexistent_hash".to_string());
+
+        engine.play();
+
+        // First process — should fail to preload and record the failure
+        let _ = engine.process(&mut compiled, &[region.clone()]).unwrap();
+        assert!(
+            engine.failed_preload.contains(&region.id),
+            "region should be marked as failed after first attempt"
+        );
+        assert!(
+            engine.active_audio_nodes.is_empty(),
+            "no active nodes after failed preload"
+        );
+
+        // Second process — should NOT retry (failed_preload blocks it)
+        let _ = engine.process(&mut compiled, &[region.clone()]).unwrap();
+        // If it retried, we'd see warn logs spamming — but structurally,
+        // the region should still be in failed_preload
+        assert!(engine.failed_preload.contains(&region.id));
+
+        // After stop, failed_preload should be cleared for retry
+        engine.stop();
+        assert!(
+            engine.failed_preload.is_empty(),
+            "stop should clear failed_preload for retry"
+        );
     }
 }

@@ -2800,4 +2800,38 @@ mod tests {
             assert_eq!(engine_ref.position().beats.0, 0.0);
         }
     }
+
+    #[test]
+    fn test_clear_regions() {
+        let daemon = GardenDaemon::new();
+
+        // Create two regions
+        for pos in [0.0, 8.0] {
+            let behavior = crate::ipc::Behavior::PlayContent {
+                content_hash: format!("hash_{}", pos as i32),
+            };
+            daemon.handle_shell(ShellRequest::CreateRegion {
+                position: IpcBeat(pos),
+                duration: IpcBeat(4.0),
+                behavior,
+            });
+        }
+
+        // Verify 2 regions exist
+        let regions = daemon.get_regions(None);
+        assert_eq!(regions.len(), 2);
+
+        // Clear all regions
+        let reply = daemon.handle_shell(ShellRequest::ClearRegions);
+        match reply {
+            ShellReply::Ok { result } => {
+                assert_eq!(result["cleared"], 2);
+            }
+            _ => panic!("expected Ok with cleared count"),
+        }
+
+        // Verify empty
+        let regions = daemon.get_regions(None);
+        assert_eq!(regions.len(), 0);
+    }
 }
