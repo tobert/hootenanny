@@ -142,8 +142,7 @@ impl ServerHandler for ZmqHandler {
             server_info: Implementation::from_build_env(),
             instructions: Some(
                 "Holler MCP gateway - forwards tool calls to hootenanny ZMQ backends. \
-                 Use resources to explore session context, artifacts, and soundfonts. \
-                 Use prompts for Trustfall query templates."
+                 Use resources to explore session context, artifacts, and soundfonts."
                     .to_string(),
             ),
         }

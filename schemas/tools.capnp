@@ -49,13 +49,13 @@ struct ToolRequest {
     artifactList @23 :ArtifactList;
     artifactCreate @24 :ArtifactCreate;
 
-    # === Graph Tools ===
-    graphQuery @25 :GraphQuery;
-    graphBind @26 :GraphBind;
-    graphTag @27 :GraphTag;
-    graphConnect @28 :GraphConnect;
-    graphFind @29 :GraphFind;
-    graphContext @30 :GraphContext;
+    # === Removed Graph Tools (ordinals preserved) ===
+    removedGraphQuery @25 :Void;
+    removedGraphBind @26 :Void;
+    removedGraphTag @27 :Void;
+    removedGraphConnect @28 :Void;
+    removedGraphFind @29 :Void;
+    removedGraphContext @30 :Void;
     addAnnotation @31 :AddAnnotation;
 
     # === Config Tools ===
@@ -97,7 +97,7 @@ struct ToolRequest {
     gardenStop @53 :Void;
     gardenSeek @54 :Garden.Seek;
     gardenSetTempo @55 :Garden.SetTempo;
-    gardenQuery @56 :Garden.Query;
+    removedGardenQuery @56 :Void;
     gardenEmergencyPause @57 :Void;
     gardenCreateRegion @58 :Garden.CreateRegion;
     gardenDeleteRegion @59 :Garden.DeleteRegion;
@@ -363,48 +363,6 @@ struct ArtifactCreate {
   tags @1 :List(Text);
   creator @2 :Text;
   metadata @3 :Text;  # JSON
-}
-
-# === Graph Types ===
-struct GraphQuery {
-  query @0 :Text;
-  variables @1 :Text;  # JSON
-  limit @2 :UInt32;
-}
-
-struct GraphBind {
-  id @0 :Text;
-  name @1 :Text;
-  hints @2 :List(Common.GraphHint);
-}
-
-struct GraphTag {
-  identityId @0 :Text;
-  namespace @1 :Text;
-  value @2 :Text;
-}
-
-struct GraphConnect {
-  fromIdentity @0 :Text;
-  fromPort @1 :Text;
-  toIdentity @2 :Text;
-  toPort @3 :Text;
-  transport @4 :Text;
-}
-
-struct GraphFind {
-  name @0 :Text;
-  tagNamespace @1 :Text;
-  tagValue @2 :Text;
-}
-
-struct GraphContext {
-  tag @0 :Text;
-  vibeSearch @1 :Text;
-  creator @2 :Text;
-  limit @3 :UInt32;
-  includeMetadata @4 :Bool;
-  includeAnnotations @5 :Bool;
 }
 
 struct AddAnnotation {

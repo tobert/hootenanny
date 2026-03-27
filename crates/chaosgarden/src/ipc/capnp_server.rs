@@ -489,15 +489,6 @@ impl CapnpGardenServer {
                 stream_id: r.stream_id,
             },
 
-            // GardenQuery is handled by hootenanny, not chaosgarden
-            ToolRequest::GardenQuery(_) => {
-                return Payload::Error {
-                    code: "not_supported".to_string(),
-                    message: "Trustfall queries are now handled by hootenanny via GetSnapshot".to_string(),
-                    details: None,
-                };
-            }
-
             _ => return Payload::Error {
                 code: "not_implemented".to_string(),
                 message: format!("ToolRequest not implemented in chaosgarden: {:?}", req),

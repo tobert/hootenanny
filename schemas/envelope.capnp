@@ -32,7 +32,7 @@ struct Payload {
     gardenStop @8 :Void;
     gardenSeek @9 :Garden.Seek;
     gardenSetTempo @10 :Garden.SetTempo;
-    gardenQuery @11 :Garden.Query;
+    removedGardenQuery @11 :Void;
     gardenEmergencyPause @12 :Void;
     gardenCreateRegion @13 :Garden.CreateRegion;
     gardenDeleteRegion @14 :Garden.DeleteRegion;

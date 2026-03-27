@@ -64,8 +64,7 @@ fn test_stdio_initialize() {
     assert_eq!(
         response["result"]["instructions"],
         "Holler MCP gateway - forwards tool calls to hootenanny ZMQ backends. \
-         Use resources to explore session context, artifacts, and soundfonts. \
-         Use prompts for Trustfall query templates."
+         Use resources to explore session context, artifacts, and soundfonts."
     );
 }
 

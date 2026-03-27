@@ -12,14 +12,13 @@ const CATEGORIES: &[(&str, &[&str])] = &[
     ("abc", &["abc_validate", "abc_to_midi"]),
     ("analysis", &["beats_detect", "audio_analyze", "midi_classify", "midi_info"]),
     ("rendering", &["soundfont_inspect", "midi_render"]),
-    ("playback", &["play", "pause", "stop", "seek", "tempo", "garden_query"]),
+    ("playback", &["play", "pause", "stop", "seek", "tempo"]),
     ("timeline", &["timeline_region_create", "timeline_region_move", "timeline_region_delete", "timeline_region_list", "timeline_clear"]),
     ("audio", &["audio_output_attach", "audio_output_detach", "audio_output_status", "audio_input_attach", "audio_input_detach", "audio_input_status", "audio_monitor"]),
     ("artifacts", &["artifact_list", "artifact_get", "artifact_upload"]),
     ("jobs", &["job_poll", "job_cancel", "job_list"]),
     ("system", &["status", "config", "storage_stats", "event_poll"]),
     ("kernel", &["kernel_eval", "kernel_session", "kernel_reset"]),
-    ("graph", &["graph_bind", "graph_tag", "graph_connect", "graph_find", "graph_query", "graph_context"]),
     ("help", &["help"]),
 ];
 

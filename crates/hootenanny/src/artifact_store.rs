@@ -11,12 +11,42 @@
 
 use crate::types::{ArtifactId, ContentHash, VariationSetId};
 use anyhow::Result;
-use audio_graph_mcp::sources::{AnnotationData, ArtifactData, ArtifactSource};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
+
+/// Annotation data transfer object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnnotationData {
+    pub id: String,
+    pub artifact_id: String,
+    pub message: String,
+    pub vibe: Option<String>,
+    pub source: String,
+    pub created_at: String,
+}
+
+impl AnnotationData {
+    /// Create a new annotation with generated ID and timestamp.
+    pub fn new(artifact_id: String, message: String, vibe: Option<String>, source: String) -> Self {
+        let id = format!(
+            "ann_{}",
+            &uuid::Uuid::new_v4().to_string().replace("-", "")[..12]
+        );
+        let created_at = chrono::Utc::now().to_rfc3339();
+
+        Self {
+            id,
+            artifact_id,
+            message,
+            vibe,
+            source,
+            created_at,
+        }
+    }
+}
 
 /// Universal artifact with variation semantics
 #[derive(Clone, Debug, Serialize)]
@@ -360,6 +390,29 @@ impl FileStore {
         })
     }
 
+    /// Add an annotation to an artifact
+    pub fn add_annotation(&self, annotation: AnnotationData) -> anyhow::Result<()> {
+        let mut annotations = self
+            .annotations
+            .write()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in add_annotation: {}", e))?;
+        annotations.push(annotation);
+        Ok(())
+    }
+
+    /// Get annotations for a specific artifact
+    pub fn annotations_for(&self, artifact_id: &str) -> anyhow::Result<Vec<AnnotationData>> {
+        let annotations = self
+            .annotations
+            .read()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned in annotations_for: {}", e))?;
+        Ok(annotations
+            .iter()
+            .filter(|a| a.artifact_id == artifact_id)
+            .cloned()
+            .collect())
+    }
+
     /// Save to disk
     pub fn save(&self) -> Result<()> {
         let artifacts = self.store.all()?;
@@ -388,92 +441,6 @@ impl FileStore {
     }
 }
 
-// ============================================================================
-// ArtifactSource Implementation for Trustfall Integration
-// ============================================================================
-
-impl ArtifactSource for FileStore {
-    fn get(&self, id: &str) -> anyhow::Result<Option<ArtifactData>> {
-        let artifact = self.store.get(id)?;
-        Ok(artifact.map(|a| artifact_to_data(&a)))
-    }
-
-    fn all(&self) -> anyhow::Result<Vec<ArtifactData>> {
-        let artifacts = self.store.all()?;
-        Ok(artifacts.iter().map(artifact_to_data).collect())
-    }
-
-    fn by_tag(&self, tag: &str) -> anyhow::Result<Vec<ArtifactData>> {
-        let artifacts = self.store.all()?;
-        Ok(artifacts
-            .iter()
-            .filter(|a| a.has_tag(tag))
-            .map(artifact_to_data)
-            .collect())
-    }
-
-    fn by_creator(&self, creator: &str) -> anyhow::Result<Vec<ArtifactData>> {
-        let artifacts = self.store.all()?;
-        Ok(artifacts
-            .iter()
-            .filter(|a| a.creator == creator)
-            .map(artifact_to_data)
-            .collect())
-    }
-
-    fn by_parent(&self, parent_id: &str) -> anyhow::Result<Vec<ArtifactData>> {
-        let artifacts = self.store.all()?;
-        Ok(artifacts
-            .iter()
-            .filter(|a| a.parent_id.as_ref().map(|p| p.as_str()) == Some(parent_id))
-            .map(artifact_to_data)
-            .collect())
-    }
-
-    fn by_variation_set(&self, set_id: &str) -> anyhow::Result<Vec<ArtifactData>> {
-        let artifacts = self.store.all()?;
-        Ok(artifacts
-            .iter()
-            .filter(|a| a.variation_set_id.as_ref().map(|s| s.as_str()) == Some(set_id))
-            .map(artifact_to_data)
-            .collect())
-    }
-
-    fn annotations_for(&self, artifact_id: &str) -> anyhow::Result<Vec<AnnotationData>> {
-        let annotations = self
-            .annotations
-            .read()
-            .map_err(|e| anyhow::anyhow!("Lock poisoned in annotations_for: {}", e))?;
-        Ok(annotations
-            .iter()
-            .filter(|a| a.artifact_id == artifact_id)
-            .cloned()
-            .collect())
-    }
-
-    fn add_annotation(&self, annotation: AnnotationData) -> anyhow::Result<()> {
-        let mut annotations = self
-            .annotations
-            .write()
-            .map_err(|e| anyhow::anyhow!("Lock poisoned in add_annotation: {}", e))?;
-        annotations.push(annotation);
-        Ok(())
-    }
-
-    fn recent(&self, within: std::time::Duration) -> anyhow::Result<Vec<ArtifactData>> {
-        let cutoff = chrono::Utc::now() - chrono::Duration::from_std(within)?;
-        let mut artifacts: Vec<_> = self
-            .store
-            .all()?
-            .iter()
-            .filter(|a| a.created_at >= cutoff)
-            .map(artifact_to_data)
-            .collect();
-        // Sort newest first
-        artifacts.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        Ok(artifacts)
-    }
-}
 
 impl ArtifactStore for FileStore {
     fn get(&self, id: &str) -> Result<Option<Artifact>> {
@@ -505,108 +472,6 @@ impl ArtifactStore for FileStore {
     }
 }
 
-/// Convert internal Artifact to ArtifactData for Trustfall
-fn artifact_to_data(a: &Artifact) -> ArtifactData {
-    ArtifactData {
-        id: a.id.as_str().to_string(),
-        content_hash: a.content_hash.as_str().to_string(),
-        created_at: a.created_at.to_rfc3339(),
-        creator: a.creator.clone(),
-        tags: a.tags.clone(),
-        parent_id: a.parent_id.as_ref().map(|p| p.as_str().to_string()),
-        variation_set_id: a.variation_set_id.as_ref().map(|s| s.as_str().to_string()),
-        variation_index: a.variation_index,
-        metadata: a.metadata.clone(),
-    }
-}
-
-// ============================================================================
-// Wrapper for Arc<RwLock<FileStore>> to implement ArtifactSource
-// ============================================================================
-
-use std::sync::Arc;
-
-/// Wrapper that allows Arc<RwLock<FileStore>> to be used as ArtifactSource
-pub struct FileStoreSource {
-    store: Arc<RwLock<FileStore>>,
-}
-
-impl FileStoreSource {
-    pub fn new(store: Arc<RwLock<FileStore>>) -> Self {
-        Self { store }
-    }
-}
-
-impl ArtifactSource for FileStoreSource {
-    fn get(&self, id: &str) -> anyhow::Result<Option<ArtifactData>> {
-        let store = self
-            .store
-            .read()
-            .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store_source.get: {}", e))?;
-        ArtifactSource::get(&*store, id)
-    }
-
-    fn all(&self) -> anyhow::Result<Vec<ArtifactData>> {
-        let store = self
-            .store
-            .read()
-            .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store_source.all: {}", e))?;
-        ArtifactSource::all(&*store)
-    }
-
-    fn by_tag(&self, tag: &str) -> anyhow::Result<Vec<ArtifactData>> {
-        let store = self
-            .store
-            .read()
-            .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store_source.by_tag: {}", e))?;
-        ArtifactSource::by_tag(&*store, tag)
-    }
-
-    fn by_creator(&self, creator: &str) -> anyhow::Result<Vec<ArtifactData>> {
-        let store = self
-            .store
-            .read()
-            .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store_source.by_creator: {}", e))?;
-        ArtifactSource::by_creator(&*store, creator)
-    }
-
-    fn by_parent(&self, parent_id: &str) -> anyhow::Result<Vec<ArtifactData>> {
-        let store = self
-            .store
-            .read()
-            .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store_source.by_parent: {}", e))?;
-        ArtifactSource::by_parent(&*store, parent_id)
-    }
-
-    fn by_variation_set(&self, set_id: &str) -> anyhow::Result<Vec<ArtifactData>> {
-        let store = self.store.read().map_err(|e| {
-            anyhow::anyhow!("Lock poisoned in file_store_source.by_variation_set: {}", e)
-        })?;
-        ArtifactSource::by_variation_set(&*store, set_id)
-    }
-
-    fn annotations_for(&self, artifact_id: &str) -> anyhow::Result<Vec<AnnotationData>> {
-        let store = self.store.read().map_err(|e| {
-            anyhow::anyhow!("Lock poisoned in file_store_source.annotations_for: {}", e)
-        })?;
-        ArtifactSource::annotations_for(&*store, artifact_id)
-    }
-
-    fn add_annotation(&self, annotation: AnnotationData) -> anyhow::Result<()> {
-        let store = self.store.read().map_err(|e| {
-            anyhow::anyhow!("Lock poisoned in file_store_source.add_annotation: {}", e)
-        })?;
-        ArtifactSource::add_annotation(&*store, annotation)
-    }
-
-    fn recent(&self, within: std::time::Duration) -> anyhow::Result<Vec<ArtifactData>> {
-        let store = self
-            .store
-            .read()
-            .map_err(|e| anyhow::anyhow!("Lock poisoned in file_store_source.recent: {}", e))?;
-        ArtifactSource::recent(&*store, within)
-    }
-}
 
 #[cfg(test)]
 mod tests {

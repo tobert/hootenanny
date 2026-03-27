@@ -128,17 +128,6 @@ impl TypedDispatcher {
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
-            ToolRequest::GardenQuery(req) => {
-                match self
-                    .server
-                    .garden_query_typed(&req.query, req.variables.as_ref())
-                    .await
-                {
-                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenQueryResult(resp)),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
-
             // === Jobs ===
             ToolRequest::JobStatus(req) => match self.server.job_status_typed(&req.job_id).await {
                 Ok(resp) => ResponseEnvelope::success(ToolResponse::JobStatus(resp)),
@@ -252,86 +241,6 @@ impl TypedDispatcher {
                     .await
                 {
                     Ok(resp) => ResponseEnvelope::success(ToolResponse::ArtifactCreated(resp)),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
-
-            // === Graph ===
-            ToolRequest::GraphFind(req) => {
-                match self
-                    .server
-                    .graph_find_typed(
-                        req.name.as_deref(),
-                        req.tag_namespace.as_deref(),
-                        req.tag_value.as_deref(),
-                    )
-                    .await
-                {
-                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GraphIdentities(resp)),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
-            ToolRequest::GraphContext(req) => {
-                match self
-                    .server
-                    .graph_context_typed(
-                        req.limit.map(|l| l as usize),
-                        req.tag.as_deref(),
-                        req.creator.as_deref(),
-                        req.vibe_search.as_deref(),
-                        req.within_minutes,
-                        req.include_annotations,
-                        req.include_metadata,
-                    )
-                    .await
-                {
-                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GraphContext(resp)),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
-            ToolRequest::GraphQuery(req) => {
-                match self
-                    .server
-                    .graph_query_typed(&req.query, req.limit.map(|l| l as usize), req.variables.as_ref())
-                    .await
-                {
-                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GraphQueryResult(resp)),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
-            ToolRequest::GraphBind(req) => {
-                match self
-                    .server
-                    .graph_bind_typed(&req.id, &req.name, req.hints)
-                    .await
-                {
-                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GraphBind(resp)),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
-            ToolRequest::GraphTag(req) => {
-                match self
-                    .server
-                    .graph_tag_typed(&req.identity_id, &req.namespace, &req.value)
-                    .await
-                {
-                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GraphTag(resp)),
-                    Err(e) => ResponseEnvelope::error(e),
-                }
-            }
-            ToolRequest::GraphConnect(req) => {
-                match self
-                    .server
-                    .graph_connect_typed(
-                        &req.from_identity,
-                        &req.from_port,
-                        &req.to_identity,
-                        &req.to_port,
-                        req.transport,
-                    )
-                    .await
-                {
-                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GraphConnect(resp)),
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }

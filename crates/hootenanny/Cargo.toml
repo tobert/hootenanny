@@ -32,7 +32,6 @@ midi-analysis = { path = "../midi-analysis" }
 music-understand = { path = "../music-understand" }
 cas = { path = "../cas" }
 chaosgarden = { path = "../chaosgarden" }
-audio-graph-mcp = { path = "../audio-graph-mcp" }
 hooteconf = { path = "../hooteconf" }
 hooteproto = { path = "../hooteproto" }
 capnp = "0.20"
@@ -41,7 +40,6 @@ capnp = "0.20"
 bytes = "1.9"
 tmq = { workspace = true }
 zmq = { workspace = true }
-trustfall = "0.8"
 bincode = "1.3"
 clap = { version = "4.5.51", features = ["derive"] }
 hex = "0.4.3"

@@ -48,15 +48,14 @@ struct ToolResponse {
     gardenStatus @21 :GardenStatusResponse;
     gardenRegions @22 :GardenRegionsResponse;
     gardenRegionCreated @23 :GardenRegionCreatedResponse;
-    gardenQueryResult @24 :GardenQueryResultResponse;
-
-    # Graph
-    graphIdentity @25 :GraphIdentityResponse;
-    graphIdentities @26 :GraphIdentitiesResponse;
-    graphConnection @27 :GraphConnectionResponse;
-    graphTags @28 :GraphTagsResponse;
-    graphContext @29 :GraphContextResponse;
-    graphQueryResult @30 :GraphQueryResultResponse;
+    # Removed graph/garden query tools (ordinals preserved)
+    removedGardenQueryResult @24 :Void;
+    removedGraphIdentity @25 :Void;
+    removedGraphIdentities @26 :Void;
+    removedGraphConnection @27 :Void;
+    removedGraphTags @28 :Void;
+    removedGraphContext @29 :Void;
+    removedGraphQueryResult @30 :Void;
 
     # Config
     configValue @31 :ConfigValueResponse;
@@ -98,10 +97,10 @@ struct ToolResponse {
     # Project Result
     projectResult @46 :ProjectResultResponse;
 
-    # Graph Results
-    graphBind @47 :GraphBindResponse;
-    graphTag @48 :GraphTagResponse;
-    graphConnect @49 :GraphConnectResponse;
+    # Removed graph mutation tools (ordinals preserved)
+    removedGraphBind @47 :Void;
+    removedGraphTag @48 :Void;
+    removedGraphConnect @49 :Void;
 
     # Job Extended (with full details)
     jobPoll @50 :JobPollResponse;
@@ -497,11 +496,6 @@ struct GardenRegionCreatedResponse {
   duration @2 :Float64;
 }
 
-struct GardenQueryResultResponse {
-  results @0 :Text;           # JSON array - Trustfall results are dynamic
-  count @1 :UInt64;
-}
-
 struct GardenAudioStatusResponse {
   attached @0 :Bool;
   deviceName @1 :Text;
@@ -548,53 +542,6 @@ struct AudioCapturedResponse {
 # =============================================================================
 # Graph Responses
 # =============================================================================
-
-struct GraphIdentityResponse {
-  id @0 :Text;
-  name @1 :Text;
-  createdAt @2 :UInt64;
-}
-
-struct GraphIdentityInfo {
-  id @0 :Text;
-  name @1 :Text;
-  tags @2 :List(Text);
-}
-
-struct GraphIdentitiesResponse {
-  identities @0 :List(GraphIdentityInfo);
-  count @1 :UInt64;
-}
-
-struct GraphConnectionResponse {
-  connectionId @0 :Text;
-  fromIdentity @1 :Text;
-  fromPort @2 :Text;
-  toIdentity @3 :Text;
-  toPort @4 :Text;
-  transport @5 :Text;         # empty if none
-}
-
-struct GraphTagInfo {
-  namespace @0 :Text;
-  value @1 :Text;
-}
-
-struct GraphTagsResponse {
-  identityId @0 :Text;
-  tags @1 :List(GraphTagInfo);
-}
-
-struct GraphContextResponse {
-  context @0 :Text;
-  artifactCount @1 :UInt64;
-  identityCount @2 :UInt64;
-}
-
-struct GraphQueryResultResponse {
-  results @0 :Text;           # JSON array - Trustfall results are dynamic
-  count @1 :UInt64;
-}
 
 # =============================================================================
 # Config Responses
@@ -714,28 +661,6 @@ struct ProjectResultResponse {
   projectionType @2 :Text;
   durationSeconds @3 :Float64;  # 0.0 if not audio
   sampleRate @4 :UInt32;        # 0 if not audio
-}
-
-# =============================================================================
-# Graph Responses
-# =============================================================================
-
-struct GraphBindResponse {
-  identityId @0 :Text;
-  name @1 :Text;
-  hintsCount @2 :UInt32;
-}
-
-struct GraphTagResponse {
-  identityId @0 :Text;
-  tag @1 :Text;
-}
-
-struct GraphConnectResponse {
-  fromIdentity @0 :Text;
-  fromPort @1 :Text;
-  toIdentity @2 :Text;
-  toPort @3 :Text;
 }
 
 # =============================================================================

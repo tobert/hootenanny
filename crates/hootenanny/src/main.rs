@@ -8,7 +8,6 @@ mod gpu_monitor;
 mod job_system;
 mod mcp_tools;
 mod persistence;
-mod pipewire;
 mod sessions;
 mod streams;
 mod telemetry;
@@ -18,9 +17,6 @@ mod zmq;
 
 use anyhow::{Context, Result};
 use api::service::EventDualityServer;
-use audio_graph_mcp::{
-    AudioGraphAdapter, Database as AudioGraphDb, PipeWireListener, PipeWireSnapshot, PipeWireSource,
-};
 use cas::FileStore;
 use clap::Parser;
 use hooteconf::HootConfig;
@@ -143,39 +139,6 @@ async fn main() -> Result<()> {
     info!("🎮 Initializing GPU observer client...");
     let gpu_monitor = Arc::new(gpu_monitor::GpuMonitor::new());
     info!("   GPU observer client ready");
-
-    // --- Audio Graph Initialization ---
-    info!("🎛️  Initializing Audio Graph...");
-    let audio_graph_db =
-        Arc::new(AudioGraphDb::in_memory().context("Failed to create audio graph db")?);
-    let artifact_source = Arc::new(artifact_store::FileStoreSource::new(artifact_store.clone()));
-
-    // Create shared PipeWire snapshot for live device tracking
-    let pipewire_snapshot = Arc::new(tokio::sync::RwLock::new(PipeWireSnapshot::default()));
-
-    // Take initial snapshot if PipeWire is available
-    let pw_source = PipeWireSource::new();
-    if pw_source.is_available() {
-        match pw_source.snapshot() {
-            Ok(initial) => {
-                *pipewire_snapshot.write().await = initial;
-                info!("   Initial PipeWire snapshot captured");
-            }
-            Err(e) => {
-                tracing::warn!("   Failed to capture initial PipeWire snapshot: {}", e);
-            }
-        }
-    }
-
-    let graph_adapter = Arc::new(
-        AudioGraphAdapter::new_with_live_snapshot(
-            audio_graph_db.clone(),
-            pipewire_snapshot.clone(),
-            artifact_source,
-        )
-        .context("Failed to create audio graph adapter")?,
-    );
-    info!("   Audio graph ready (in-memory, with Trustfall adapter + artifacts + live PipeWire)");
 
     // --- Chaosgarden Connection (non-blocking) ---
     let chaosgarden_endpoint = &config.bootstrap.connections.chaosgarden;
@@ -372,24 +335,6 @@ async fn main() -> Result<()> {
     job_store.set_broadcaster(broadcast_publisher.clone());
     info!("   Job store connected to broadcaster");
 
-    // --- PipeWire Device Hot-Plug Listener ---
-    info!("🔌 Starting PipeWire device listener...");
-    let (device_event_tx, device_event_rx) = tokio::sync::mpsc::channel(256);
-
-    // Spawn PipeWire listener (runs in blocking thread)
-    let listener = PipeWireListener::new(pipewire_snapshot.clone(), device_event_tx);
-    let _pipewire_handle = listener.spawn();
-    info!("   PipeWire listener started");
-
-    // Spawn device event manager (processes events and broadcasts)
-    let event_manager = pipewire::DeviceEventManager::new(
-        device_event_rx,
-        audio_graph_db.clone(),
-        broadcast_publisher.clone(),
-    );
-    tokio::spawn(event_manager.run());
-    info!("   Device event manager started");
-
     // --- Stream Subsystems (for capture sessions) ---
     info!("🎙️  Initializing stream capture subsystems...");
     let cas_arc = Arc::new(cas.clone());
@@ -406,8 +351,6 @@ async fn main() -> Result<()> {
             cas.clone(),
             artifact_store.clone(),
             job_store.clone(),
-            audio_graph_db.clone(),
-            graph_adapter.clone(),
             gpu_monitor.clone(),
         )
         .with_garden(garden_manager.clone())

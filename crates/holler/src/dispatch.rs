@@ -63,14 +63,6 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             let p: GardenSetTempoArgs = serde_json::from_value(args).context("Invalid tempo arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::GardenSetTempo(request::GardenSetTempoRequest { bpm: p.bpm })))
         }
-        "garden_query" => {
-            let p: GardenQueryArgs = serde_json::from_value(args).context("Invalid garden_query arguments")?;
-            Ok(Payload::ToolRequest(ToolRequest::GardenQuery(request::GardenQueryRequest {
-                query: p.query,
-                variables: p.variables,
-            })))
-        }
-
         // === Timeline Tools ===
         "timeline_region_create" => {
             let p: GardenCreateRegionArgs = serde_json::from_value(args).context("Invalid timeline_region_create arguments")?;
@@ -496,65 +488,6 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             Ok(Payload::ToolRequest(ToolRequest::ArtifactGet(request::ArtifactGetRequest { id: p.id })))
         }
 
-        // === Graph Tools ===
-        "graph_query" => {
-            let p: GraphQueryArgs = serde_json::from_value(args).context("Invalid graph_query arguments")?;
-            Ok(Payload::ToolRequest(ToolRequest::GraphQuery(request::GraphQueryRequest {
-                query: p.query,
-                variables: p.variables,
-                limit: p.limit,
-            })))
-        }
-        "graph_find" => {
-            let p: GraphFindArgs = serde_json::from_value(args).unwrap_or_default();
-            Ok(Payload::ToolRequest(ToolRequest::GraphFind(request::GraphFindRequest {
-                name: p.name,
-                tag_namespace: p.tag_namespace,
-                tag_value: p.tag_value,
-            })))
-        }
-        "graph_bind" => {
-            let p: GraphBindArgs = serde_json::from_value(args).context("Invalid graph_bind arguments")?;
-            Ok(Payload::ToolRequest(ToolRequest::GraphBind(request::GraphBindRequest {
-                id: p.id,
-                name: p.name,
-                hints: p.hints.into_iter().map(|h| request::GraphHint {
-                    kind: h.kind,
-                    value: h.value,
-                    confidence: h.confidence,
-                }).collect(),
-            })))
-        }
-        "graph_tag" => {
-            let p: GraphTagArgs = serde_json::from_value(args).context("Invalid graph_tag arguments")?;
-            Ok(Payload::ToolRequest(ToolRequest::GraphTag(request::GraphTagRequest {
-                identity_id: p.identity_id,
-                namespace: p.namespace,
-                value: p.value,
-            })))
-        }
-        "graph_connect" => {
-            let p: GraphConnectArgs = serde_json::from_value(args).context("Invalid graph_connect arguments")?;
-            Ok(Payload::ToolRequest(ToolRequest::GraphConnect(request::GraphConnectRequest {
-                from_identity: p.from_identity,
-                from_port: p.from_port,
-                to_identity: p.to_identity,
-                to_port: p.to_port,
-                transport: p.transport,
-            })))
-        }
-        "graph_context" => {
-            let p: GraphContextArgs = serde_json::from_value(args).unwrap_or_default();
-            Ok(Payload::ToolRequest(ToolRequest::GraphContext(request::GraphContextRequest {
-                tag: p.tag,
-                vibe_search: p.vibe_search,
-                creator: p.creator,
-                limit: p.limit,
-                include_metadata: p.include_metadata,
-                include_annotations: p.include_annotations,
-                within_minutes: None,
-            })))
-        }
         "add_annotation" => {
             let p: AddAnnotationArgs = serde_json::from_value(args).context("Invalid add_annotation arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::AddAnnotation(request::AddAnnotationRequest {
@@ -727,12 +660,6 @@ struct GardenSeekArgs {
 #[derive(Debug, Deserialize)]
 struct GardenSetTempoArgs {
     bpm: f64,
-}
-
-#[derive(Debug, Deserialize)]
-struct GardenQueryArgs {
-    query: String,
-    variables: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -949,72 +876,6 @@ struct ArtifactListArgs {
 #[derive(Debug, Deserialize)]
 struct ArtifactGetArgs {
     id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct GraphQueryArgs {
-    query: String,
-    variables: Option<serde_json::Value>,
-    limit: Option<usize>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GraphFindArgs {
-    name: Option<String>,
-    tag_namespace: Option<String>,
-    tag_value: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GraphBindArgs {
-    id: String,
-    name: String,
-    #[serde(default)]
-    hints: Vec<GraphHintArgs>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GraphHintArgs {
-    kind: String,
-    value: String,
-    #[serde(default = "default_confidence")]
-    confidence: f64,
-}
-
-fn default_confidence() -> f64 {
-    1.0
-}
-
-#[derive(Debug, Deserialize)]
-struct GraphTagArgs {
-    identity_id: String,
-    namespace: String,
-    value: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct GraphConnectArgs {
-    from_identity: String,
-    from_port: String,
-    to_identity: String,
-    to_port: String,
-    transport: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GraphContextArgs {
-    tag: Option<String>,
-    vibe_search: Option<String>,
-    creator: Option<String>,
-    limit: Option<usize>,
-    #[serde(default)]
-    include_metadata: bool,
-    #[serde(default = "default_true")]
-    include_annotations: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Deserialize)]

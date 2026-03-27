@@ -8,7 +8,7 @@
 //! - `stdio`: MCP stdio transport for Claude Code
 //! - `client`: ZMQ client utilities
 //! - `subscriber`: ZMQ subscriber for broadcasts
-//! - `resources`: MCP Resources (entry points into Trustfall graph)
+//! - `resources`: MCP Resources (curated views into session state)
 //! - `prompts`: MCP Prompts (query templates)
 
 pub mod backend;

@@ -73,7 +73,6 @@ pub enum ToolResponse {
     UnifiedStatus(UnifiedStatusResponse),
     GardenRegions(GardenRegionsResponse),
     GardenRegionCreated(GardenRegionCreatedResponse),
-    GardenQueryResult(GardenQueryResultResponse),
     GardenAudioStatus(GardenAudioStatusResponse),
     GardenInputStatus(GardenInputStatusResponse),
     GardenMonitorStatus(GardenMonitorStatusResponse),
@@ -86,17 +85,6 @@ pub enum ToolResponse {
     MidiStatus(MidiStatusResponse),
     MidiPlayStarted(MidiPlayStartedResponse),
     MidiPlayStopped(MidiPlayStoppedResponse),
-
-    // === Graph ===
-    GraphIdentity(GraphIdentityResponse),
-    GraphIdentities(GraphIdentitiesResponse),
-    GraphConnection(GraphConnectionResponse),
-    GraphTags(GraphTagsResponse),
-    GraphContext(GraphContextResponse),
-    GraphQueryResult(GraphQueryResultResponse),
-    GraphBind(GraphBindResponse),
-    GraphTag(GraphTagResponse),
-    GraphConnect(GraphConnectResponse),
 
     // === Config ===
     ConfigValue(ConfigValueResponse),
@@ -745,12 +733,6 @@ pub struct GardenRegionCreatedResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GardenQueryResultResponse {
-    pub results: Vec<serde_json::Value>, // Trustfall results can be complex
-    pub count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GardenAudioStatusResponse {
     pub attached: bool,
     pub device_name: Option<String>,
@@ -849,86 +831,6 @@ pub struct MidiPlayStartedResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MidiPlayStoppedResponse {
     pub region_id: String,
-}
-
-// =============================================================================
-// Graph Responses
-// =============================================================================
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphIdentityResponse {
-    pub id: String,
-    pub name: String,
-    pub created_at: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphIdentityInfo {
-    pub id: String,
-    pub name: String,
-    pub tags: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphIdentitiesResponse {
-    pub identities: Vec<GraphIdentityInfo>,
-    pub count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphConnectionResponse {
-    pub connection_id: String,
-    pub from_identity: String,
-    pub from_port: String,
-    pub to_identity: String,
-    pub to_port: String,
-    pub transport: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphTagInfo {
-    pub namespace: String,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphTagsResponse {
-    pub identity_id: String,
-    pub tags: Vec<GraphTagInfo>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphContextResponse {
-    pub context: String,
-    pub artifact_count: usize,
-    pub identity_count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphQueryResultResponse {
-    pub results: Vec<serde_json::Value>, // Trustfall results
-    pub count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphBindResponse {
-    pub identity_id: String,
-    pub name: String,
-    pub hints_count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphTagResponse {
-    pub identity_id: String,
-    pub tag: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphConnectResponse {
-    pub from_identity: String,
-    pub from_port: String,
-    pub to_identity: String,
-    pub to_port: String,
 }
 
 // =============================================================================

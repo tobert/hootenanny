@@ -1,9 +1,7 @@
-//! MCP Resources - Entry points into the Trustfall graph
+//! MCP Resources - Curated views into session state
 //!
 //! Resources provide grounding for agents to understand context. They're curated
 //! views into session state, not exhaustive listings of all data.
-//!
-//! Design philosophy: Resources are entry points, not replacements for graph_query.
 
 use rmcp::model::{AnnotateAble, RawResource, RawResourceTemplate, Resource, ResourceContents};
 use std::fmt;
@@ -71,17 +69,6 @@ impl ResourceRegistry {
                 meta: None,
             }
             .no_annotation(),
-            RawResource {
-                uri: "holler://schema".into(),
-                name: "Trustfall Schema".into(),
-                title: Some("GraphQL Schema".into()),
-                description: Some("Trustfall GraphQL schema for graph_query tool".into()),
-                mime_type: Some("text/plain".into()),
-                size: None,
-                icons: None,
-                meta: None,
-            }
-            .no_annotation(),
         ]
     }
 
@@ -121,7 +108,6 @@ impl ResourceRegistry {
             "holler://artifacts/recent" => self.read_recent_artifacts().await,
             "holler://soundfonts" => self.read_soundfonts().await,
             "holler://status" => self.read_status().await,
-            "holler://schema" => Ok(self.read_schema()),
             _ if uri.starts_with("holler://artifact/") => {
                 let id = uri
                     .strip_prefix("holler://artifact/")
@@ -138,27 +124,23 @@ impl ResourceRegistry {
         }
     }
 
-    /// Delegate to graph_context tool for session context.
+    /// List recent artifacts for session context.
     async fn read_session_context(&self) -> Result<String, ResourceError> {
-        let request = ToolRequest::GraphContext(hooteproto::request::GraphContextRequest {
-            limit: Some(20),
+        let request = ToolRequest::ArtifactList(hooteproto::request::ArtifactListRequest {
             tag: None,
             creator: None,
-            vibe_search: None,
-            within_minutes: Some(60),
-            include_annotations: true,
-            include_metadata: false,
+            limit: Some(20),
         });
 
         self.execute_tool(request).await
     }
 
-    /// Query recent artifacts via Trustfall.
+    /// List recent artifacts.
     async fn read_recent_artifacts(&self) -> Result<String, ResourceError> {
-        let request = ToolRequest::GraphQuery(hooteproto::request::GraphQueryRequest {
-            query: r#"{ Artifact { id @output creator @output tags @output } }"#.into(),
+        let request = ToolRequest::ArtifactList(hooteproto::request::ArtifactListRequest {
+            tag: None,
+            creator: None,
             limit: Some(20),
-            variables: None,
         });
 
         self.execute_tool(request).await
@@ -179,12 +161,6 @@ impl ResourceRegistry {
     async fn read_status(&self) -> Result<String, ResourceError> {
         let request = ToolRequest::GardenStatus;
         self.execute_tool(request).await
-    }
-
-    /// Return the Trustfall GraphQL schema.
-    fn read_schema(&self) -> String {
-        // Embedded schema from audio-graph-mcp
-        include_str!("../../audio-graph-mcp/src/schema.graphql").to_string()
     }
 
     /// Read a single artifact by ID with lineage info.

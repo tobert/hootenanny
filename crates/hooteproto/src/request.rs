@@ -113,8 +113,6 @@ pub enum ToolRequest {
     GardenDeleteRegion(GardenDeleteRegionRequest),
     /// Move a region
     GardenMoveRegion(GardenMoveRegionRequest),
-    /// Query garden state with Trustfall
-    GardenQuery(GardenQueryRequest),
     /// Emergency pause
     GardenEmergencyPause,
     /// Attach audio output
@@ -180,22 +178,6 @@ pub enum ToolRequest {
     JobCancel(JobCancelRequest),
     /// Poll for buffered broadcast events
     EventPoll(EventPollRequest),
-
-    // ==========================================================================
-    // Graph
-    // ==========================================================================
-    /// Bind identity to device
-    GraphBind(GraphBindRequest),
-    /// Tag an identity
-    GraphTag(GraphTagRequest),
-    /// Connect two identities
-    GraphConnect(GraphConnectRequest),
-    /// Find identities
-    GraphFind(GraphFindRequest),
-    /// Execute Trustfall query
-    GraphQuery(GraphQueryRequest),
-    /// Get graph context for LLM
-    GraphContext(GraphContextRequest),
 
     // ==========================================================================
     // Config
@@ -310,10 +292,9 @@ impl ToolRequest {
             Self::AbcParse(_) | Self::AbcValidate(_) | Self::AbcTranspose(_) => ToolTiming::AsyncShort,
             Self::OrpheusClassify(_) => ToolTiming::AsyncShort,
             Self::SoundfontInspect(_) | Self::SoundfontPresetInspect(_) => ToolTiming::AsyncShort,
-            Self::GardenStatus | Self::GardenGetRegions(_) | Self::GardenQuery(_) => ToolTiming::AsyncShort,
+            Self::GardenStatus | Self::GardenGetRegions(_) => ToolTiming::AsyncShort,
             Self::JobStatus(_) | Self::JobList(_) => ToolTiming::AsyncShort,
             Self::ConfigGet(_) => ToolTiming::AsyncShort,
-            Self::GraphFind(_) | Self::GraphContext(_) | Self::GraphQuery(_) => ToolTiming::AsyncShort,
             Self::ArtifactGet(_) | Self::ArtifactList(_) | Self::ArtifactCreate(_) => ToolTiming::AsyncShort,
             Self::CasInspect(_) => ToolTiming::AsyncShort,
             Self::MidiInfo(_) => ToolTiming::AsyncShort,
@@ -324,7 +305,6 @@ impl ToolRequest {
             Self::CasStore(_) | Self::CasGet(_) | Self::CasUploadFile(_) | Self::CasStats => ToolTiming::AsyncShort,
             Self::ArtifactUpload(_) => ToolTiming::AsyncShort,
             Self::AbcToMidi(_) => ToolTiming::AsyncShort,
-            Self::GraphBind(_) | Self::GraphTag(_) | Self::GraphConnect(_) => ToolTiming::AsyncShort,
             Self::AddAnnotation(_) => ToolTiming::AsyncShort,
             Self::JobPoll(_) | Self::JobCancel(_) | Self::EventPoll(_) => ToolTiming::AsyncShort,
             Self::WeaveEval(_) | Self::WeaveSession | Self::WeaveReset(_) | Self::WeaveHelp(_) => ToolTiming::AsyncShort,
@@ -424,7 +404,6 @@ impl ToolRequest {
             Self::GardenDeleteRegion(_) => "garden_delete_region",
             Self::GardenMoveRegion(_) => "garden_move_region",
             Self::GardenClearRegions => "garden_clear_regions",
-            Self::GardenQuery(_) => "garden_query",
             Self::GardenEmergencyPause => "garden_emergency_pause",
             Self::GardenAttachAudio(_) => "garden_attach_audio",
             Self::GardenDetachAudio => "garden_detach_audio",
@@ -450,12 +429,6 @@ impl ToolRequest {
             Self::JobPoll(_) => "job_poll",
             Self::JobCancel(_) => "job_cancel",
             Self::EventPoll(_) => "event_poll",
-            Self::GraphBind(_) => "graph_bind",
-            Self::GraphTag(_) => "graph_tag",
-            Self::GraphConnect(_) => "graph_connect",
-            Self::GraphFind(_) => "graph_find",
-            Self::GraphQuery(_) => "graph_query",
-            Self::GraphContext(_) => "graph_context",
             Self::ConfigGet(_) => "config_get",
             Self::AddAnnotation(_) => "add_annotation",
             Self::WeaveEval(_) => "weave_eval",
@@ -811,12 +784,6 @@ pub struct GardenMoveRegionRequest {
     pub new_position: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GardenQueryRequest {
-    pub query: String,
-    pub variables: Option<serde_json::Value>,
-}
-
 // =============================================================================
 // Job Request Types
 // =============================================================================
@@ -861,77 +828,6 @@ pub struct EventPollRequest {
     pub timeout_ms: Option<u64>,
     /// Max events to return. Default: 100, max: 1000
     pub limit: Option<usize>,
-}
-
-// =============================================================================
-// Graph Request Types
-// =============================================================================
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphBindRequest {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub hints: Vec<GraphHint>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphHint {
-    pub kind: String,
-    pub value: String,
-    #[serde(default = "default_confidence")]
-    pub confidence: f64,
-}
-
-fn default_confidence() -> f64 {
-    1.0
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphTagRequest {
-    pub identity_id: String,
-    pub namespace: String,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphConnectRequest {
-    pub from_identity: String,
-    pub from_port: String,
-    pub to_identity: String,
-    pub to_port: String,
-    pub transport: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-pub struct GraphFindRequest {
-    pub name: Option<String>,
-    pub tag_namespace: Option<String>,
-    pub tag_value: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphQueryRequest {
-    pub query: String,
-    pub limit: Option<usize>,
-    pub variables: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphContextRequest {
-    pub limit: Option<usize>,
-    pub tag: Option<String>,
-    pub creator: Option<String>,
-    pub vibe_search: Option<String>,
-    pub within_minutes: Option<i64>,
-    #[serde(default = "default_true")]
-    pub include_annotations: bool,
-    #[serde(default)]
-    pub include_metadata: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 // =============================================================================

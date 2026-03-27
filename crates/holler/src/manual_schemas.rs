@@ -82,49 +82,6 @@ pub fn artifact_upload_request() -> Value {
     })
 }
 
-/// Manual schema for GraphBindRequest.
-///
-/// Reason: `#[serde(default)]` on `hints: Vec<GraphHint>` causes schemars to emit
-/// a default value that llama.cpp cannot parse.
-pub fn graph_bind_request() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "id": {
-                "type": "string",
-                "description": "Identity ID"
-            },
-            "name": {
-                "type": "string",
-                "description": "Human-readable name"
-            },
-            "hints": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "kind": {
-                            "type": "string",
-                            "description": "Hint kind (usb_device_id, midi_name, alsa_card, pipewire_name)"
-                        },
-                        "value": {
-                            "type": "string",
-                            "description": "Hint value"
-                        },
-                        "confidence": {
-                            "type": "number",
-                            "description": "Confidence score 0.0-1.0. Default: 1.0"
-                        }
-                    },
-                    "required": ["kind", "value"]
-                },
-                "description": "Hints for matching devices"
-            }
-        },
-        "required": ["id", "name"]
-    })
-}
-
 /// Manual schema for SoundfontInspectRequest.
 ///
 /// Reason: `#[serde(default)]` on `include_drum_map: bool` causes schemars to emit
@@ -146,74 +103,6 @@ pub fn soundfont_inspect_request() -> Value {
     })
 }
 
-/// Manual schema for GraphContextRequest.
-///
-/// Reason: Multiple defaults - `#[serde(default)]` on `include_metadata: bool` and
-/// `#[serde(default = "default_true")]` on `include_annotations: bool` cause
-/// schemars to emit default values that llama.cpp cannot parse.
-pub fn graph_context_request() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "tag": {
-                "type": ["string", "null"],
-                "description": "Filter by artifact tag (e.g., 'type:soundfont', 'type:midi', 'source:orpheus')"
-            },
-            "vibe_search": {
-                "type": ["string", "null"],
-                "description": "Search annotations/vibes for this text (e.g., 'warm', 'jazzy')"
-            },
-            "creator": {
-                "type": ["string", "null"],
-                "description": "Filter by creator (e.g., 'claude', 'user')"
-            },
-            "limit": {
-                "type": ["integer", "null"],
-                "minimum": 0,
-                "description": "Maximum number of artifacts to include. Default: 20"
-            },
-            "include_metadata": {
-                "type": "boolean",
-                "description": "Include full metadata. Default: false"
-            },
-            "include_annotations": {
-                "type": "boolean",
-                "description": "Include annotations. Default: true"
-            },
-            "within_minutes": {
-                "type": ["integer", "null"],
-                "description": "Time window in minutes for recent artifacts. Default: 10"
-            }
-        }
-    })
-}
-
-/// Manual schema for GraphQueryRequest.
-///
-/// Reason: `#[serde(default)]` on `variables: serde_json::Value` causes schemars
-/// to emit a complex default that llama.cpp cannot parse.
-pub fn graph_query_request() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "GraphQL query string OR artifact ID containing a saved query. Query example: '{ Artifact(tag: \"type:midi\") { id @output } }'"
-            },
-            "variables": {
-                "type": "object",
-                "description": "Variables for parameterized queries as JSON object (e.g., {\"artifact_id\": \"artifact_123\"})"
-            },
-            "limit": {
-                "type": ["integer", "null"],
-                "minimum": 0,
-                "description": "Maximum number of results to return. Default: 100"
-            }
-        },
-        "required": ["query"]
-    })
-}
-
 /// Manual schema for WeaveResetRequest.
 ///
 /// Reason: `#[serde(default)]` on `clear_session: bool` causes schemars to emit
@@ -231,27 +120,6 @@ pub fn weave_reset_request() -> Value {
 }
 
 // DAW schema functions removed (sample_request, extend_request, bridge_request, project_request, analyze_request, schedule_request)
-
-/// Manual schema for GardenQueryRequest.
-///
-/// Reason: `#[serde(default)]` on `variables: serde_json::Value` causes schemars
-/// to emit a default value that llama.cpp cannot parse.
-pub fn garden_query_request() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "GraphQL-style Trustfall query"
-            },
-            "variables": {
-                "type": "object",
-                "description": "Query variables as JSON object"
-            }
-        },
-        "required": ["query"]
-    })
-}
 
 /// Manual schema for GardenAttachAudioRequest.
 ///
@@ -400,79 +268,6 @@ pub fn event_poll_request() -> Value {
                 "type": ["integer", "null"],
                 "minimum": 1,
                 "description": "Max events to return. Default: 100, max: 1000"
-            }
-        }
-    })
-}
-
-/// Schema for GraphTagRequest
-pub fn graph_tag_request() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "identity_id": {
-                "type": "string",
-                "description": "Identity ID to tag"
-            },
-            "namespace": {
-                "type": "string",
-                "description": "Tag namespace"
-            },
-            "value": {
-                "type": "string",
-                "description": "Tag value"
-            }
-        },
-        "required": ["identity_id", "namespace", "value"]
-    })
-}
-
-/// Schema for GraphConnectRequest
-pub fn graph_connect_request() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "from_identity": {
-                "type": "string",
-                "description": "Source identity ID"
-            },
-            "from_port": {
-                "type": "string",
-                "description": "Source port"
-            },
-            "to_identity": {
-                "type": "string",
-                "description": "Target identity ID"
-            },
-            "to_port": {
-                "type": "string",
-                "description": "Target port"
-            },
-            "transport": {
-                "type": ["string", "null"],
-                "description": "Transport kind (din_midi, usb_midi, patch_cable_cv, etc.)"
-            }
-        },
-        "required": ["from_identity", "from_port", "to_identity", "to_port"]
-    })
-}
-
-/// Schema for GraphFindRequest
-pub fn graph_find_request() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "name": {
-                "type": ["string", "null"],
-                "description": "Filter by name"
-            },
-            "tag_namespace": {
-                "type": ["string", "null"],
-                "description": "Filter by tag namespace"
-            },
-            "tag_value": {
-                "type": ["string", "null"],
-                "description": "Filter by tag value"
             }
         }
     })
@@ -723,13 +518,6 @@ mod tests {
     }
 
     #[test]
-    fn test_graph_bind_request_schema() {
-        let schema = graph_bind_request();
-        assert_no_defaults(&schema, "graph_bind_request");
-        assert_has_types(&schema, "graph_bind_request");
-    }
-
-    #[test]
     fn test_soundfont_inspect_request_schema() {
         let schema = soundfont_inspect_request();
         assert_no_defaults(&schema, "soundfont_inspect_request");
@@ -737,31 +525,10 @@ mod tests {
     }
 
     #[test]
-    fn test_graph_context_request_schema() {
-        let schema = graph_context_request();
-        assert_no_defaults(&schema, "graph_context_request");
-        assert_has_types(&schema, "graph_context_request");
-    }
-
-    #[test]
-    fn test_graph_query_request_schema() {
-        let schema = graph_query_request();
-        assert_no_defaults(&schema, "graph_query_request");
-        assert_has_types(&schema, "graph_query_request");
-    }
-
-    #[test]
     fn test_weave_reset_request_schema() {
         let schema = weave_reset_request();
         assert_no_defaults(&schema, "weave_reset_request");
         assert_has_types(&schema, "weave_reset_request");
-    }
-
-    #[test]
-    fn test_garden_query_request_schema() {
-        let schema = garden_query_request();
-        assert_no_defaults(&schema, "garden_query_request");
-        assert_has_types(&schema, "garden_query_request");
     }
 
     #[test]

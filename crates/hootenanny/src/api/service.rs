@@ -5,7 +5,6 @@ use crate::job_system::JobStore;
 use crate::sessions::SessionManager;
 use crate::streams::{SlicingEngine, StreamManager};
 use crate::zmq::{AnticipatoryClient, Audioldm2Client, BeatthisClient, BroadcastPublisher, ClapClient, DemucsClient, GardenManager, MidiRoleClient, MusicgenClient, OrpheusClient, RaveClient, VibeweaverClient, YueClient};
-use audio_graph_mcp::{AudioGraphAdapter, Database as AudioGraphDb};
 use std::sync::{Arc, RwLock};
 
 #[derive(Clone)]
@@ -13,8 +12,6 @@ pub struct EventDualityServer {
     pub cas: cas::FileStore,
     pub artifact_store: Arc<RwLock<FileStore>>,
     pub job_store: JobStore,
-    pub audio_graph_db: Arc<AudioGraphDb>,
-    pub graph_adapter: Arc<AudioGraphAdapter>,
     pub gpu_monitor: Arc<GpuMonitor>,
     pub garden_manager: Option<Arc<GardenManager>>,
     /// Optional vibeweaver client for Python kernel proxy
@@ -66,16 +63,12 @@ impl EventDualityServer {
         cas: cas::FileStore,
         artifact_store: Arc<RwLock<FileStore>>,
         job_store: Arc<JobStore>,
-        audio_graph_db: Arc<AudioGraphDb>,
-        graph_adapter: Arc<AudioGraphAdapter>,
         gpu_monitor: Arc<GpuMonitor>,
     ) -> Self {
         Self {
             cas,
             artifact_store,
             job_store: (*job_store).clone(),
-            audio_graph_db,
-            graph_adapter,
             gpu_monitor,
             garden_manager: None,
             vibeweaver: None,

@@ -142,40 +142,6 @@ pub fn list_tools() -> Vec<ToolInfo> {
         },
 
         // ==========================================================================
-        // Graph Tools
-        // ==========================================================================
-        ToolInfo {
-            name: "graph_bind".to_string(),
-            description: "Bind identity".to_string(),
-            input_schema: manual_schemas::graph_bind_request(),
-        },
-        ToolInfo {
-            name: "graph_tag".to_string(),
-            description: "Tag identity".to_string(),
-            input_schema: manual_schemas::graph_tag_request(),
-        },
-        ToolInfo {
-            name: "graph_connect".to_string(),
-            description: "Connect identities".to_string(),
-            input_schema: manual_schemas::graph_connect_request(),
-        },
-        ToolInfo {
-            name: "graph_find".to_string(),
-            description: "Find identities".to_string(),
-            input_schema: manual_schemas::graph_find_request(),
-        },
-        ToolInfo {
-            name: "graph_context".to_string(),
-            description: "LLM context".to_string(),
-            input_schema: manual_schemas::graph_context_request(),
-        },
-        ToolInfo {
-            name: "graph_query".to_string(),
-            description: "Trustfall query".to_string(),
-            input_schema: manual_schemas::graph_query_request(),
-        },
-
-        // ==========================================================================
         // ABC Tools
         // ==========================================================================
         ToolInfo {
@@ -237,12 +203,6 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Set BPM".to_string(),
             input_schema: manual_schemas::garden_set_tempo_request(),
         },
-        ToolInfo {
-            name: "garden_query".to_string(),
-            description: "Trustfall query".to_string(),
-            input_schema: manual_schemas::garden_query_request(),
-        },
-
         // ==========================================================================
         // Audio I/O Tools
         // ==========================================================================
@@ -886,7 +846,7 @@ pub fn list_tools() -> Vec<ToolInfo> {
                 "type": "object",
                 "properties": {
                     "tool": { "type": "string", "description": "Tool name to get help for" },
-                    "category": { "type": "string", "description": "Category to list (generation, abc, analysis, rendering, playback, timeline, audio, artifacts, jobs, system, kernel, graph)" }
+                    "category": { "type": "string", "description": "Category to list (generation, abc, analysis, rendering, playback, timeline, audio, artifacts, jobs, system, kernel)" }
                 }
             }),
         },

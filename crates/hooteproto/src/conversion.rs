@@ -75,13 +75,6 @@ pub fn capnp_envelope_to_payload(
         envelope_capnp::payload::GardenStop(()) => Ok(Payload::ToolRequest(ToolRequest::GardenStop)),
         envelope_capnp::payload::GardenSeek(seek) => Ok(Payload::ToolRequest(ToolRequest::GardenSeek(GardenSeekRequest { beat: seek?.get_beat() }))),
         envelope_capnp::payload::GardenSetTempo(tempo) => Ok(Payload::ToolRequest(ToolRequest::GardenSetTempo(GardenSetTempoRequest { bpm: tempo?.get_bpm() }))),
-        envelope_capnp::payload::GardenQuery(query) => {
-            let query = query?;
-            Ok(Payload::ToolRequest(ToolRequest::GardenQuery(GardenQueryRequest {
-                query: query.get_query()?.to_str()?.to_string(),
-                variables: serde_json::from_str(query.get_variables()?.to_str()?).ok(),
-            })))
-        }
         envelope_capnp::payload::GardenEmergencyPause(()) => Ok(Payload::ToolRequest(ToolRequest::GardenEmergencyPause)),
         envelope_capnp::payload::GardenCreateRegion(region) => {
             let region = region?;
@@ -192,6 +185,8 @@ pub fn capnp_envelope_to_payload(
         }
         envelope_capnp::payload::ToolCall(call) => Err(capnp::Error::failed(format!("ToolCall deprecated: {}", call?.get_name()?.to_str()?))),
         envelope_capnp::payload::Register(_) => Err(capnp::Error::failed("Register unimplemented".to_string())),
+        // Removed garden query (ordinal preserved as Void)
+        envelope_capnp::payload::RemovedGardenQuery(()) => Err(capnp::Error::failed("garden_query has been removed".into())),
     }
 }
 
@@ -595,53 +590,6 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
                 for (i, v) in req.tags.iter().enumerate() { t.set(i as u32, v); }
             }
         }
-        ToolRequest::GraphQuery(req) => {
-            let mut q = builder.reborrow().init_graph_query();
-            q.set_query(&req.query);
-            q.set_limit(req.limit.unwrap_or(100) as u32);
-            q.set_variables(serde_json::to_string(&req.variables).unwrap_or_default());
-        }
-        ToolRequest::GraphBind(req) => {
-            let mut b = builder.reborrow().init_graph_bind();
-            b.set_id(&req.id);
-            b.set_name(&req.name);
-            let mut h = b.init_hints(req.hints.len() as u32);
-            for (i, hint) in req.hints.iter().enumerate() {
-                let mut hi = h.reborrow().get(i as u32);
-                hi.set_kind(&hint.kind);
-                hi.set_value(&hint.value);
-                hi.set_confidence(hint.confidence);
-            }
-        }
-        ToolRequest::GraphTag(req) => {
-            let mut t = builder.reborrow().init_graph_tag();
-            t.set_identity_id(&req.identity_id);
-            t.set_namespace(&req.namespace);
-            t.set_value(&req.value);
-        }
-        ToolRequest::GraphConnect(req) => {
-            let mut c = builder.reborrow().init_graph_connect();
-            c.set_from_identity(&req.from_identity);
-            c.set_from_port(&req.from_port);
-            c.set_to_identity(&req.to_identity);
-            c.set_to_port(&req.to_port);
-            c.set_transport(req.transport.as_deref().unwrap_or(""));
-        }
-        ToolRequest::GraphFind(req) => {
-            let mut f = builder.reborrow().init_graph_find();
-            f.set_name(req.name.as_deref().unwrap_or(""));
-            f.set_tag_namespace(req.tag_namespace.as_deref().unwrap_or(""));
-            f.set_tag_value(req.tag_value.as_deref().unwrap_or(""));
-        }
-        ToolRequest::GraphContext(req) => {
-            let mut c = builder.reborrow().init_graph_context();
-            c.set_tag(req.tag.as_deref().unwrap_or(""));
-            c.set_creator(req.creator.as_deref().unwrap_or(""));
-            c.set_vibe_search(req.vibe_search.as_deref().unwrap_or(""));
-            c.set_limit(req.limit.unwrap_or(20) as u32);
-            c.set_include_metadata(req.include_metadata);
-            c.set_include_annotations(req.include_annotations);
-        }
         ToolRequest::AddAnnotation(req) => {
             let mut a = builder.reborrow().init_add_annotation();
             a.set_artifact_id(&req.artifact_id);
@@ -694,11 +642,6 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
         ToolRequest::GardenStop => builder.reborrow().set_garden_stop(()),
         ToolRequest::GardenSeek(req) => builder.reborrow().init_garden_seek().set_beat(req.beat),
         ToolRequest::GardenSetTempo(req) => builder.reborrow().init_garden_set_tempo().set_bpm(req.bpm),
-        ToolRequest::GardenQuery(req) => {
-            let mut q = builder.reborrow().init_garden_query();
-            q.set_query(&req.query);
-            q.set_variables(serde_json::to_string(&req.variables).unwrap_or_default());
-        }
         ToolRequest::GardenEmergencyPause => builder.reborrow().set_garden_emergency_pause(()),
         ToolRequest::GardenCreateRegion(req) => {
             let mut r = builder.reborrow().init_garden_create_region();
@@ -1068,70 +1011,6 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
                 metadata,
             }))
         }
-        tools_capnp::tool_request::GraphQuery(q) => {
-            let q = q?;
-            Ok(ToolRequest::GraphQuery(GraphQueryRequest {
-                query: q.get_query()?.to_str()?.to_string(),
-                variables: serde_json::from_str(q.get_variables()?.to_str()?).ok(),
-                limit: Some(q.get_limit() as usize),
-            }))
-        }
-        tools_capnp::tool_request::GraphBind(b) => {
-            let b = b?;
-            let mut hints = Vec::new();
-            let hr = b.get_hints()?;
-            for i in 0..hr.len() {
-                let h = hr.get(i);
-                hints.push(crate::request::GraphHint {
-                    kind: h.get_kind()?.to_str()?.to_string(),
-                    value: h.get_value()?.to_str()?.to_string(),
-                    confidence: h.get_confidence(),
-                });
-            }
-            Ok(ToolRequest::GraphBind(GraphBindRequest {
-                id: b.get_id()?.to_str()?.to_string(),
-                name: b.get_name()?.to_str()?.to_string(),
-                hints,
-            }))
-        }
-        tools_capnp::tool_request::GraphTag(t) => {
-            let t = t?;
-            Ok(ToolRequest::GraphTag(GraphTagRequest {
-                identity_id: t.get_identity_id()?.to_str()?.to_string(),
-                namespace: t.get_namespace()?.to_str()?.to_string(),
-                value: t.get_value()?.to_str()?.to_string(),
-            }))
-        }
-        tools_capnp::tool_request::GraphConnect(c) => {
-            let c = c?;
-            Ok(ToolRequest::GraphConnect(GraphConnectRequest {
-                from_identity: c.get_from_identity()?.to_str()?.to_string(),
-                from_port: c.get_from_port()?.to_str()?.to_string(),
-                to_identity: c.get_to_identity()?.to_str()?.to_string(),
-                to_port: c.get_to_port()?.to_str()?.to_string(),
-                transport: capnp_optional_string(c.get_transport()?),
-            }))
-        }
-        tools_capnp::tool_request::GraphFind(f) => {
-            let f = f?;
-            Ok(ToolRequest::GraphFind(GraphFindRequest {
-                name: capnp_optional_string(f.get_name()?),
-                tag_namespace: capnp_optional_string(f.get_tag_namespace()?),
-                tag_value: capnp_optional_string(f.get_tag_value()?),
-            }))
-        }
-        tools_capnp::tool_request::GraphContext(c) => {
-            let c = c?;
-            Ok(ToolRequest::GraphContext(GraphContextRequest {
-                tag: capnp_optional_string(c.get_tag()?),
-                vibe_search: capnp_optional_string(c.get_vibe_search()?),
-                creator: capnp_optional_string(c.get_creator()?),
-                limit: Some(c.get_limit() as usize),
-                include_metadata: c.get_include_metadata(),
-                include_annotations: c.get_include_annotations(),
-                within_minutes: None,
-            }))
-        }
         tools_capnp::tool_request::AddAnnotation(a) => {
             let a = a?;
             Ok(ToolRequest::AddAnnotation(AddAnnotationRequest {
@@ -1190,13 +1069,6 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
         tools_capnp::tool_request::GardenStop(()) => Ok(ToolRequest::GardenStop),
         tools_capnp::tool_request::GardenSeek(s) => Ok(ToolRequest::GardenSeek(GardenSeekRequest { beat: s?.get_beat() })),
         tools_capnp::tool_request::GardenSetTempo(t) => Ok(ToolRequest::GardenSetTempo(GardenSetTempoRequest { bpm: t?.get_bpm() })),
-        tools_capnp::tool_request::GardenQuery(q) => {
-            let q = q?;
-            Ok(ToolRequest::GardenQuery(GardenQueryRequest {
-                query: q.get_query()?.to_str()?.to_string(),
-                variables: serde_json::from_str(q.get_variables()?.to_str()?).ok(),
-            }))
-        }
         tools_capnp::tool_request::GardenEmergencyPause(()) => Ok(ToolRequest::GardenEmergencyPause),
         tools_capnp::tool_request::GardenCreateRegion(r) => {
             let r = r?;
@@ -2070,11 +1942,6 @@ fn response_to_capnp_tool_response(
             b.set_position(r.position);
             b.set_duration(r.duration);
         }
-        ToolResponse::GardenQueryResult(r) => {
-            let mut b = builder.reborrow().init_garden_query_result();
-            b.set_results(serde_json::to_string(&r.results).unwrap_or_default());
-            b.set_count(r.count as u64);
-        }
         ToolResponse::GardenAudioStatus(r) => {
             let mut b = builder.reborrow().init_garden_audio_status();
             b.set_attached(r.attached);
@@ -2120,76 +1987,6 @@ fn response_to_capnp_tool_response(
             b.set_content_hash(&r.content_hash);
             b.set_sample_rate(r.sample_rate);
             b.set_duration_seconds(r.duration_seconds);
-        }
-
-        // Graph
-        ToolResponse::GraphIdentity(r) => {
-            let mut b = builder.reborrow().init_graph_identity();
-            b.set_id(&r.id);
-            b.set_name(&r.name);
-            b.set_created_at(r.created_at);
-        }
-        ToolResponse::GraphIdentities(r) => {
-            let mut b = builder.reborrow().init_graph_identities();
-            let mut ids = b.reborrow().init_identities(r.identities.len() as u32);
-            for (i, id) in r.identities.iter().enumerate() {
-                let mut identity = ids.reborrow().get(i as u32);
-                identity.set_id(&id.id);
-                identity.set_name(&id.name);
-                let mut tags = identity.reborrow().init_tags(id.tags.len() as u32);
-                for (j, tag) in id.tags.iter().enumerate() {
-                    tags.set(j as u32, tag);
-                }
-            }
-            b.set_count(r.count as u64);
-        }
-        ToolResponse::GraphConnection(r) => {
-            let mut b = builder.reborrow().init_graph_connection();
-            b.set_connection_id(&r.connection_id);
-            b.set_from_identity(&r.from_identity);
-            b.set_from_port(&r.from_port);
-            b.set_to_identity(&r.to_identity);
-            b.set_to_port(&r.to_port);
-            b.set_transport(r.transport.as_deref().unwrap_or(""));
-        }
-        ToolResponse::GraphTags(r) => {
-            let mut b = builder.reborrow().init_graph_tags();
-            b.set_identity_id(&r.identity_id);
-            let mut tags = b.reborrow().init_tags(r.tags.len() as u32);
-            for (i, tag) in r.tags.iter().enumerate() {
-                let mut t = tags.reborrow().get(i as u32);
-                t.set_namespace(&tag.namespace);
-                t.set_value(&tag.value);
-            }
-        }
-        ToolResponse::GraphContext(r) => {
-            let mut b = builder.reborrow().init_graph_context();
-            b.set_context(&r.context);
-            b.set_artifact_count(r.artifact_count as u64);
-            b.set_identity_count(r.identity_count as u64);
-        }
-        ToolResponse::GraphQueryResult(r) => {
-            let mut b = builder.reborrow().init_graph_query_result();
-            b.set_results(serde_json::to_string(&r.results).unwrap_or_default());
-            b.set_count(r.count as u64);
-        }
-        ToolResponse::GraphBind(r) => {
-            let mut b = builder.reborrow().init_graph_bind();
-            b.set_identity_id(&r.identity_id);
-            b.set_name(&r.name);
-            b.set_hints_count(r.hints_count as u32);
-        }
-        ToolResponse::GraphTag(r) => {
-            let mut b = builder.reborrow().init_graph_tag();
-            b.set_identity_id(&r.identity_id);
-            b.set_tag(&r.tag);
-        }
-        ToolResponse::GraphConnect(r) => {
-            let mut b = builder.reborrow().init_graph_connect();
-            b.set_from_identity(&r.from_identity);
-            b.set_from_port(&r.from_port);
-            b.set_to_identity(&r.to_identity);
-            b.set_to_port(&r.to_port);
         }
 
         // Config
@@ -3034,15 +2831,6 @@ fn capnp_tool_response_to_response(
                 duration: r.get_duration(),
             }))
         }
-        Which::GardenQueryResult(r) => {
-            let r = r?;
-            let results_str = r.get_results()?.to_string()?;
-            let results: Vec<serde_json::Value> = serde_json::from_str(&results_str).unwrap_or_default();
-            Ok(ToolResponse::GardenQueryResult(GardenQueryResultResponse {
-                results,
-                count: r.get_count() as usize,
-            }))
-        }
         Which::GardenAudioStatus(r) => {
             let r = r?;
             let device_name = r.get_device_name()?.to_string()?;
@@ -3102,77 +2890,6 @@ fn capnp_tool_response_to_response(
                 content_hash: r.get_content_hash()?.to_str()?.to_string(),
                 sample_rate: r.get_sample_rate(),
                 duration_seconds: r.get_duration_seconds(),
-            }))
-        }
-
-        // Graph
-        Which::GraphIdentity(r) => {
-            let r = r?;
-            Ok(ToolResponse::GraphIdentity(GraphIdentityResponse {
-                id: r.get_id()?.to_string()?,
-                name: r.get_name()?.to_string()?,
-                created_at: r.get_created_at(),
-            }))
-        }
-        Which::GraphIdentities(r) => {
-            let r = r?;
-            let mut identities = Vec::new();
-            for id in r.get_identities()?.iter() {
-                let tags: Vec<String> = id.get_tags()?.iter()
-                    .filter_map(|t| t.ok().and_then(|s| s.to_string().ok()))
-                    .collect();
-                identities.push(GraphIdentityInfo {
-                    id: id.get_id()?.to_string()?,
-                    name: id.get_name()?.to_string()?,
-                    tags,
-                });
-            }
-            Ok(ToolResponse::GraphIdentities(GraphIdentitiesResponse {
-                identities,
-                count: r.get_count() as usize,
-            }))
-        }
-        Which::GraphConnection(r) => {
-            let r = r?;
-            let transport = r.get_transport()?.to_string()?;
-            Ok(ToolResponse::GraphConnection(GraphConnectionResponse {
-                connection_id: r.get_connection_id()?.to_string()?,
-                from_identity: r.get_from_identity()?.to_string()?,
-                from_port: r.get_from_port()?.to_string()?,
-                to_identity: r.get_to_identity()?.to_string()?,
-                to_port: r.get_to_port()?.to_string()?,
-                transport: if transport.is_empty() { None } else { Some(transport) },
-            }))
-        }
-        Which::GraphTags(r) => {
-            let r = r?;
-            let mut tags = Vec::new();
-            for t in r.get_tags()?.iter() {
-                tags.push(GraphTagInfo {
-                    namespace: t.get_namespace()?.to_string()?,
-                    value: t.get_value()?.to_string()?,
-                });
-            }
-            Ok(ToolResponse::GraphTags(GraphTagsResponse {
-                identity_id: r.get_identity_id()?.to_string()?,
-                tags,
-            }))
-        }
-        Which::GraphContext(r) => {
-            let r = r?;
-            Ok(ToolResponse::GraphContext(GraphContextResponse {
-                context: r.get_context()?.to_string()?,
-                artifact_count: r.get_artifact_count() as usize,
-                identity_count: r.get_identity_count() as usize,
-            }))
-        }
-        Which::GraphQueryResult(r) => {
-            let r = r?;
-            let results_str = r.get_results()?.to_string()?;
-            let results: Vec<serde_json::Value> = serde_json::from_str(&results_str).unwrap_or_default();
-            Ok(ToolResponse::GraphQueryResult(GraphQueryResultResponse {
-                results,
-                count: r.get_count() as usize,
             }))
         }
 
@@ -3314,33 +3031,6 @@ fn capnp_tool_response_to_response(
                 projection_type: r.get_projection_type()?.to_string()?,
                 duration_seconds: if duration > 0.0 { Some(duration) } else { None },
                 sample_rate: if sample_rate > 0 { Some(sample_rate) } else { None },
-            }))
-        }
-
-        Which::GraphBind(r) => {
-            let r = r?;
-            Ok(ToolResponse::GraphBind(GraphBindResponse {
-                identity_id: r.get_identity_id()?.to_string()?,
-                name: r.get_name()?.to_string()?,
-                hints_count: r.get_hints_count() as usize,
-            }))
-        }
-
-        Which::GraphTag(r) => {
-            let r = r?;
-            Ok(ToolResponse::GraphTag(GraphTagResponse {
-                identity_id: r.get_identity_id()?.to_string()?,
-                tag: r.get_tag()?.to_string()?,
-            }))
-        }
-
-        Which::GraphConnect(r) => {
-            let r = r?;
-            Ok(ToolResponse::GraphConnect(GraphConnectResponse {
-                from_identity: r.get_from_identity()?.to_string()?,
-                from_port: r.get_from_port()?.to_string()?,
-                to_identity: r.get_to_identity()?.to_string()?,
-                to_port: r.get_to_port()?.to_string()?,
             }))
         }
 
@@ -3749,6 +3439,20 @@ fn capnp_tool_response_to_response(
                 sources: sources.iter().map(parse_device).collect::<capnp::Result<Vec<_>>>()?,
                 sinks: sinks.iter().map(parse_device).collect::<capnp::Result<Vec<_>>>()?,
             }))
+        }
+
+        // Removed graph/garden query tools (ordinals preserved as Void)
+        Which::RemovedGardenQueryResult(()) |
+        Which::RemovedGraphIdentity(()) |
+        Which::RemovedGraphIdentities(()) |
+        Which::RemovedGraphConnection(()) |
+        Which::RemovedGraphTags(()) |
+        Which::RemovedGraphContext(()) |
+        Which::RemovedGraphQueryResult(()) |
+        Which::RemovedGraphBind(()) |
+        Which::RemovedGraphTag(()) |
+        Which::RemovedGraphConnect(()) => {
+            Err(capnp::Error::failed("Removed graph tool response".into()))
         }
     }
 }
