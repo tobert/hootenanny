@@ -34,7 +34,6 @@ Make it work. Make it clear. Make it sing.
 - `vibeweaver` — Python kernel via PyO3
 - `cas` — Content-addressed storage (BLAKE3)
 - `abc` — ABC notation parser
-- `audio-graph-mcp` — Trustfall query adapter
 - `hooteconf` — Configuration loading
 
 **Key files when adding tools:**
@@ -96,7 +95,8 @@ Include Co-Authored-By for all contributors:
 | `play/pause/stop/seek/tempo` | Transport |
 | `artifact_*` | Storage |
 | `job_*` | Job management |
-| `graph_*` | Trustfall queries |
+| `garden_graph` | Audio processing graph |
+| `time_convert` | Beat/second conversion |
 | `kernel_*` | Python kernel |
 | `config/status/storage_stats` | System |
 | `help` | Documentation |
@@ -154,23 +154,6 @@ If schema changes don't trigger rebuilds:
 cargo clean -p hooteproto && cargo build -p hooteproto
 ```
 
-## Trustfall Queries
-
-All graph queries use `graph_query()` with Trustfall syntax:
-
-```graphql
-# Find MIDI artifacts
-{ Artifact(tag: "type:midi") { id @output creator @output } }
-
-# Traverse lineage
-{ Artifact(id: "abc123") { id parent { id parent { id } } } }
-
-# Find devices
-{ Identity { name hints { value @filter(op: "has_substring", value: ["roland"]) } } }
-```
-
-Queryable types: `Artifact`, `Identity`, `PipeWireNode`, `Region`
-
 ## Timeline Timing
 
 All timeline positions use **beats**, not seconds:
@@ -219,4 +202,3 @@ GET /artifacts           → List (filterable)
 
 - Architecture: `docs/ARCHITECTURE.md`
 - ZeroMQ Guide: [zguide.zeromq.org](https://zguide.zeromq.org) (Chapter 4 for Lazy Pirate)
-- Trustfall: [docs.rs/trustfall](https://docs.rs/trustfall/latest/trustfall/)

@@ -87,7 +87,6 @@
 - PipeWire integration for audio routing
 - Timeline-based playback with transport controls
 - ZMQ server for control messages
-- Audio graph queries via Trustfall
 
 ### baton
 **Generic MCP server library**
@@ -110,12 +109,6 @@
 - Parser for ABC musical notation
 - MIDI conversion
 - Validation
-
-### audio-graph-mcp
-**Trustfall adapter for audio queries**
-
-- Unified query layer over artifacts, devices, connections
-- GraphQL-like queries via Trustfall
 
 ### hooteconf
 **Layered configuration loading**
