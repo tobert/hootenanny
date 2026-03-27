@@ -8,7 +8,6 @@ members = [
     "crates/hootenanny",
     "crates/hooteproto",
     "crates/audio-graph-mcp",
-    "crates/llmchat",
     "crates/midi-analysis",
     "crates/music-understand",
     "crates/vibeweaver",
