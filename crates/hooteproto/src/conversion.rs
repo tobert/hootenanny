@@ -567,6 +567,13 @@ fn request_to_capnp_tool_request(builder: &mut tools_capnp::tool_request::Builde
             m.set_hash(req.hash.as_deref().unwrap_or(""));
         }
         ToolRequest::AudioListDevices => builder.reborrow().set_audio_list_devices(()),
+        ToolRequest::GardenGraph => builder.reborrow().set_garden_graph(()),
+        ToolRequest::TimeConvert(req) => {
+            let mut t = builder.reborrow().init_time_convert();
+            t.set_value(req.value);
+            t.set_from_unit(&req.from_unit);
+            t.set_to_unit(&req.to_unit);
+        }
 
         ToolRequest::ArtifactUpload(req) => {
             let mut a = builder.reborrow().init_artifact_upload();
@@ -1397,6 +1404,15 @@ fn capnp_tool_request_to_request(reader: tools_capnp::tool_request::Reader) -> c
             }))
         }
         tools_capnp::tool_request::AudioListDevices(()) => Ok(ToolRequest::AudioListDevices),
+        tools_capnp::tool_request::GardenGraph(()) => Ok(ToolRequest::GardenGraph),
+        tools_capnp::tool_request::TimeConvert(t) => {
+            let t = t?;
+            Ok(ToolRequest::TimeConvert(TimeConvertRequest {
+                value: t.get_value(),
+                from_unit: t.get_from_unit()?.to_str()?.to_string(),
+                to_unit: t.get_to_unit()?.to_str()?.to_string(),
+            }))
+        }
 
         _ => Err(capnp::Error::failed("Unsupported ToolRequest variant".to_string())),
     }
@@ -2316,6 +2332,19 @@ fn response_to_capnp_tool_response(
                     d.set_nick(dev.nick.as_deref().unwrap_or(""));
                 }
             }
+        }
+
+        // Graph / Time Utilities
+        ToolResponse::GardenGraph(r) => {
+            let mut b = builder.reborrow().init_garden_graph();
+            b.set_nodes(&serde_json::to_string(&r.nodes).unwrap_or_default());
+            b.set_edges(&serde_json::to_string(&r.edges).unwrap_or_default());
+        }
+        ToolResponse::TimeConverted(r) => {
+            let mut b = builder.reborrow().init_time_converted();
+            b.set_value(r.value);
+            b.set_from_unit(&r.from_unit);
+            b.set_to_unit(&r.to_unit);
         }
 
         // MidiPlayStarted and MidiPlayStopped are returned via JSON from garden shell
@@ -3438,6 +3467,24 @@ fn capnp_tool_response_to_response(
             Ok(ToolResponse::AudioDevices(AudioDevicesResponse {
                 sources: sources.iter().map(parse_device).collect::<capnp::Result<Vec<_>>>()?,
                 sinks: sinks.iter().map(parse_device).collect::<capnp::Result<Vec<_>>>()?,
+            }))
+        }
+
+        // Graph / Time Utilities
+        Which::GardenGraph(r) => {
+            let r = r?;
+            let nodes: Vec<crate::garden_snapshot::GraphNode> =
+                serde_json::from_str(r.get_nodes()?.to_str()?).unwrap_or_default();
+            let edges: Vec<crate::garden_snapshot::GraphEdge> =
+                serde_json::from_str(r.get_edges()?.to_str()?).unwrap_or_default();
+            Ok(ToolResponse::GardenGraph(GardenGraphResponse { nodes, edges }))
+        }
+        Which::TimeConverted(r) => {
+            let r = r?;
+            Ok(ToolResponse::TimeConverted(TimeConvertResponse {
+                value: r.get_value(),
+                from_unit: r.get_from_unit()?.to_str()?.to_string(),
+                to_unit: r.get_to_unit()?.to_str()?.to_string(),
             }))
         }
 

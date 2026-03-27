@@ -203,6 +203,16 @@ pub fn list_tools() -> Vec<ToolInfo> {
             description: "Set BPM".to_string(),
             input_schema: manual_schemas::garden_set_tempo_request(),
         },
+        ToolInfo {
+            name: "garden_graph".to_string(),
+            description: "Return the audio processing graph nodes and connections from chaosgarden".to_string(),
+            input_schema: manual_schemas::garden_graph_request(),
+        },
+        ToolInfo {
+            name: "time_convert".to_string(),
+            description: "Convert between beats and seconds using the current tempo map".to_string(),
+            input_schema: manual_schemas::time_convert_request(),
+        },
         // ==========================================================================
         // Audio I/O Tools
         // ==========================================================================

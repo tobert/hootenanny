@@ -434,6 +434,40 @@ pub fn weave_session_request() -> Value {
     })
 }
 
+/// Schema for GardenGraphRequest (no parameters)
+pub fn garden_graph_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+    })
+}
+
+/// Schema for TimeConvertRequest
+pub fn time_convert_request() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "value": {
+                "type": "number",
+                "description": "The value to convert"
+            },
+            "from": {
+                "type": "string",
+                "enum": ["beats", "seconds"],
+                "description": "The unit to convert from"
+            },
+            "to": {
+                "type": "string",
+                "enum": ["beats", "seconds"],
+                "description": "The unit to convert to"
+            }
+        },
+        "required": ["value", "from", "to"],
+        "additionalProperties": false
+    })
+}
+
 /// Schema for WeaveHelpRequest
 pub fn weave_help_request() -> Value {
     json!({

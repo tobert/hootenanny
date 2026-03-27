@@ -314,6 +314,65 @@ impl EventDualityServer {
         }
     }
 
+    /// Return the audio processing graph (nodes + edges) from a GardenSnapshot
+    pub async fn garden_graph_typed(
+        &self,
+    ) -> Result<hooteproto::responses::GardenGraphResponse, ToolError> {
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
+
+        let snapshot = manager
+            .get_snapshot()
+            .await
+            .map_err(|e| ToolError::service("chaosgarden", "snapshot_failed", e.to_string()))?;
+
+        Ok(hooteproto::responses::GardenGraphResponse {
+            nodes: snapshot.nodes,
+            edges: snapshot.edges,
+        })
+    }
+
+    /// Convert between beats and seconds using the current tempo map
+    pub async fn time_convert_typed(
+        &self,
+        value: f64,
+        from_unit: &str,
+        to_unit: &str,
+    ) -> Result<hooteproto::responses::TimeConvertResponse, ToolError> {
+        let manager = self.garden_manager.as_ref().ok_or_else(|| {
+            ToolError::validation("not_connected", "Not connected to chaosgarden")
+        })?;
+
+        let snapshot = manager
+            .get_snapshot()
+            .await
+            .map_err(|e| ToolError::service("chaosgarden", "snapshot_failed", e.to_string()))?;
+
+        let bpm = snapshot.tempo_map.default_tempo;
+        if bpm <= 0.0 {
+            return Err(ToolError::validation("invalid_tempo", "Tempo must be positive"));
+        }
+
+        let converted = match (from_unit, to_unit) {
+            ("beats", "seconds") => value * 60.0 / bpm,
+            ("seconds", "beats") => value * bpm / 60.0,
+            ("beats", "beats") | ("seconds", "seconds") => value,
+            _ => {
+                return Err(ToolError::validation(
+                    "invalid_unit",
+                    format!("Units must be 'beats' or 'seconds', got '{}' and '{}'", from_unit, to_unit),
+                ));
+            }
+        };
+
+        Ok(hooteproto::responses::TimeConvertResponse {
+            value: converted,
+            from_unit: from_unit.to_string(),
+            to_unit: to_unit.to_string(),
+        })
+    }
+
     /// Get unified system status - combines transport, audio, and MIDI status.
     ///
     /// Makes 4 parallel ZMQ requests to chaosgarden and combines the results

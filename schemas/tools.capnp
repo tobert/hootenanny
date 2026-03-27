@@ -155,6 +155,10 @@ struct ToolRequest {
 
     # === Audio Device Discovery ===
     audioListDevices @100 :Void;
+
+    # === Graph / Time Utilities ===
+    gardenGraph @101 :Void;
+    timeConvert @102 :TimeConvert;
   }
 }
 
@@ -567,4 +571,11 @@ struct MidiClassifyVoices {
 struct MidiUnderstand {
   artifactId @0 :Text;
   hash @1 :Text;
+}
+
+# === Time Conversion ===
+struct TimeConvert {
+  value @0 :Float64;
+  fromUnit @1 :Text;
+  toUnit @2 :Text;
 }

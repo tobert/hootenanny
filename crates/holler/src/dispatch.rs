@@ -63,6 +63,15 @@ pub fn json_to_payload(name: &str, args: Value) -> Result<Payload> {
             let p: GardenSetTempoArgs = serde_json::from_value(args).context("Invalid tempo arguments")?;
             Ok(Payload::ToolRequest(ToolRequest::GardenSetTempo(request::GardenSetTempoRequest { bpm: p.bpm })))
         }
+        "garden_graph" => Ok(Payload::ToolRequest(ToolRequest::GardenGraph)),
+        "time_convert" => {
+            let p: TimeConvertArgs = serde_json::from_value(args).context("Invalid time_convert arguments")?;
+            Ok(Payload::ToolRequest(ToolRequest::TimeConvert(request::TimeConvertRequest {
+                value: p.value,
+                from_unit: p.from,
+                to_unit: p.to,
+            })))
+        }
         // === Timeline Tools ===
         "timeline_region_create" => {
             let p: GardenCreateRegionArgs = serde_json::from_value(args).context("Invalid timeline_region_create arguments")?;
@@ -1114,4 +1123,11 @@ struct MidiClassifyVoicesArgs {
 struct MidiUnderstandArgs {
     artifact_id: Option<String>,
     hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TimeConvertArgs {
+    value: f64,
+    from: String,
+    to: String,
 }

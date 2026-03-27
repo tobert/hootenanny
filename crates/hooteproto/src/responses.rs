@@ -136,6 +136,10 @@ pub enum ToolResponse {
     // === Audio Device Discovery ===
     AudioDevices(AudioDevicesResponse),
 
+    // === Graph / Time Utilities ===
+    GardenGraph(GardenGraphResponse),
+    TimeConverted(TimeConvertResponse),
+
     // === RAVE Audio Codec ===
     RaveEncoded(RaveEncodedResponse),
     RaveDecoded(RaveDecodedResponse),
@@ -1157,6 +1161,31 @@ pub struct AudioDevicesResponse {
     pub sources: Vec<AudioDeviceInfo>,
     /// Playback devices (Audio/Sink)
     pub sinks: Vec<AudioDeviceInfo>,
+}
+
+// =============================================================================
+// Graph / Time Utility Responses
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GardenGraphResponse {
+    pub nodes: Vec<crate::garden_snapshot::GraphNode>,
+    pub edges: Vec<crate::garden_snapshot::GraphEdge>,
+}
+
+// PartialEq can't be derived automatically because GraphNode/GraphEdge don't derive it,
+// but ToolResponse requires it, so implement manually via JSON comparison.
+impl PartialEq for GardenGraphResponse {
+    fn eq(&self, other: &Self) -> bool {
+        serde_json::to_string(self).ok() == serde_json::to_string(other).ok()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TimeConvertResponse {
+    pub value: f64,
+    pub from_unit: String,
+    pub to_unit: String,
 }
 
 // =============================================================================

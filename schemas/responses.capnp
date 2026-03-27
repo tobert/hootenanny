@@ -146,6 +146,10 @@ struct ToolResponse {
 
     # Audio Device Discovery
     audioDevices @78 :AudioDevicesResponse;
+
+    # Graph / Time Utilities
+    gardenGraph @79 :GardenGraphResponse;
+    timeConverted @80 :TimeConvertedResponse;
   }
 }
 
@@ -920,4 +924,19 @@ struct AudioDeviceInfo {
 struct AudioDevicesResponse {
   sources @0 :List(AudioDeviceInfo);  # Capture devices
   sinks @1 :List(AudioDeviceInfo);    # Playback devices
+}
+
+# =============================================================================
+# Graph / Time Utilities
+# =============================================================================
+
+struct GardenGraphResponse {
+  nodes @0 :Text;  # JSON serialized
+  edges @1 :Text;  # JSON serialized
+}
+
+struct TimeConvertedResponse {
+  value @0 :Float64;
+  fromUnit @1 :Text;
+  toUnit @2 :Text;
 }

@@ -69,6 +69,28 @@ impl ResourceRegistry {
                 meta: None,
             }
             .no_annotation(),
+            RawResource {
+                uri: "holler://garden/transport".into(),
+                name: "Transport State".into(),
+                title: Some("Transport State".into()),
+                description: Some("Current transport state: playing, position, tempo".into()),
+                mime_type: Some("application/json".into()),
+                size: None,
+                icons: None,
+                meta: None,
+            }
+            .no_annotation(),
+            RawResource {
+                uri: "holler://garden/graph".into(),
+                name: "Audio Graph".into(),
+                title: Some("Audio Processing Graph".into()),
+                description: Some("Audio processing graph nodes and connections from chaosgarden".into()),
+                mime_type: Some("application/json".into()),
+                size: None,
+                icons: None,
+                meta: None,
+            }
+            .no_annotation(),
         ]
     }
 
@@ -108,6 +130,8 @@ impl ResourceRegistry {
             "holler://artifacts/recent" => self.read_recent_artifacts().await,
             "holler://soundfonts" => self.read_soundfonts().await,
             "holler://status" => self.read_status().await,
+            "holler://garden/transport" => self.read_transport().await,
+            "holler://garden/graph" => self.read_graph().await,
             _ if uri.starts_with("holler://artifact/") => {
                 let id = uri
                     .strip_prefix("holler://artifact/")
@@ -160,6 +184,18 @@ impl ResourceRegistry {
     /// Get system status.
     async fn read_status(&self) -> Result<String, ResourceError> {
         let request = ToolRequest::GardenStatus;
+        self.execute_tool(request).await
+    }
+
+    /// Get transport state (playing, position, tempo).
+    async fn read_transport(&self) -> Result<String, ResourceError> {
+        let request = ToolRequest::GardenStatus;
+        self.execute_tool(request).await
+    }
+
+    /// Get audio processing graph from chaosgarden.
+    async fn read_graph(&self) -> Result<String, ResourceError> {
+        let request = ToolRequest::GardenGraph;
         self.execute_tool(request).await
     }
 

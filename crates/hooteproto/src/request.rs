@@ -133,6 +133,10 @@ pub enum ToolRequest {
     GardenGetAudioSnapshot(GardenGetAudioSnapshotRequest),
     /// Capture audio from monitor input to CAS
     AudioCapture(AudioCaptureRequest),
+    /// Return the audio processing graph (nodes + edges) from GardenSnapshot
+    GardenGraph,
+    /// Convert between beats and seconds using the current tempo map
+    TimeConvert(TimeConvertRequest),
 
     // ==========================================================================
     // MIDI I/O (direct ALSA for low latency)
@@ -292,7 +296,7 @@ impl ToolRequest {
             Self::AbcParse(_) | Self::AbcValidate(_) | Self::AbcTranspose(_) => ToolTiming::AsyncShort,
             Self::OrpheusClassify(_) => ToolTiming::AsyncShort,
             Self::SoundfontInspect(_) | Self::SoundfontPresetInspect(_) => ToolTiming::AsyncShort,
-            Self::GardenStatus | Self::GardenGetRegions(_) => ToolTiming::AsyncShort,
+            Self::GardenStatus | Self::GardenGetRegions(_) | Self::GardenGraph | Self::TimeConvert(_) => ToolTiming::AsyncShort,
             Self::JobStatus(_) | Self::JobList(_) => ToolTiming::AsyncShort,
             Self::ConfigGet(_) => ToolTiming::AsyncShort,
             Self::ArtifactGet(_) | Self::ArtifactList(_) | Self::ArtifactCreate(_) => ToolTiming::AsyncShort,
@@ -413,6 +417,8 @@ impl ToolRequest {
             Self::GardenInputStatus => "garden_input_status",
             Self::GardenSetMonitor(_) => "garden_set_monitor",
             Self::GardenGetAudioSnapshot(_) => "garden_get_audio_snapshot",
+            Self::GardenGraph => "garden_graph",
+            Self::TimeConvert(_) => "time_convert",
             Self::AudioListDevices => "audio_list_devices",
             Self::MidiListPorts => "midi_list_ports",
             Self::MidiInputAttach(_) => "midi_input_attach",
@@ -782,6 +788,13 @@ pub struct GardenDeleteRegionRequest {
 pub struct GardenMoveRegionRequest {
     pub region_id: String,
     pub new_position: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TimeConvertRequest {
+    pub value: f64,
+    pub from_unit: String,
+    pub to_unit: String,
 }
 
 // =============================================================================

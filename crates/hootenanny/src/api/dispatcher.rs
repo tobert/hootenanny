@@ -759,6 +759,20 @@ impl TypedDispatcher {
                     Err(e) => ResponseEnvelope::error(e),
                 }
             }
+
+            // === Graph / Time Utilities ===
+            ToolRequest::GardenGraph => {
+                match self.server.garden_graph_typed().await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::GardenGraph(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
+            ToolRequest::TimeConvert(req) => {
+                match self.server.time_convert_typed(req.value, &req.from_unit, &req.to_unit).await {
+                    Ok(resp) => ResponseEnvelope::success(ToolResponse::TimeConverted(resp)),
+                    Err(e) => ResponseEnvelope::error(e),
+                }
+            }
         }
     }
 

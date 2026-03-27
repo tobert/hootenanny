@@ -12,7 +12,7 @@ const CATEGORIES: &[(&str, &[&str])] = &[
     ("abc", &["abc_validate", "abc_to_midi"]),
     ("analysis", &["beats_detect", "audio_analyze", "midi_classify", "midi_info"]),
     ("rendering", &["soundfont_inspect", "midi_render"]),
-    ("playback", &["play", "pause", "stop", "seek", "tempo"]),
+    ("playback", &["play", "pause", "stop", "seek", "tempo", "garden_graph", "time_convert"]),
     ("timeline", &["timeline_region_create", "timeline_region_move", "timeline_region_delete", "timeline_region_list", "timeline_clear"]),
     ("audio", &["audio_output_attach", "audio_output_detach", "audio_output_status", "audio_input_attach", "audio_input_detach", "audio_input_status", "audio_monitor"]),
     ("artifacts", &["artifact_list", "artifact_get", "artifact_upload"]),
